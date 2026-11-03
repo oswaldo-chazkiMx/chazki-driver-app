@@ -7,6 +7,10 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg">
 <title>Chazki Driver</title>
+<script>
+  const isAndroidApp = !!window.Capacitor?.isNativePlatform?.();
+  window.location.replace(isAndroidApp ? "driver-app.html" : "ops.html");
+</script>
 <style>
 :root{--bg:#f3f4f8;--card:#fff;--ink:#14172b;--mut:#6b7090;--line:#e4e6f0;--pri:#4b2fd0;--pri2:#6b4df5;--ok:#12a36b;--warn:#f59e0b;--bad:#e5484d;--r:16px}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}

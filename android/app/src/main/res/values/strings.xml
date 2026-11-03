@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Chazki Driver</string>
+    <string name="title_activity_main">Chazki Driver</string>
+    <string name="package_name">com.chazki.driver</string>
+    <string name="custom_url_scheme">com.chazki.driver</string>
+</resources>
