@@ -24,14 +24,52 @@ const cargaFin=()=>veFin()||ROL==="ih";
 const esCoord=()=>["master","ops","coordinador"].includes(ROL);
 const esOps=()=>["master","ops"].includes(ROL);
 const ROLES_TXT={master:"Cuenta maestra",ops:"Operaciones",coordinador:"Coordinador",ih:"Supervisor",finanzas:"Finanzas"};
+const NAV_INFO={
+  r:["Rutas","◫","Consulta y seguimiento de la operación diaria."],
+  v:["Por validar","◷","Revisa rutas que requieren validación."],
+  a:["Por aprobar","✓","Atiende las solicitudes pendientes de aprobación."],
+  l:["Validadas","✓","Consulta rutas y liquidaciones ya validadas."],
+  c:["Cancelaciones","⊘","Revisa cancelaciones reportadas por los drivers."],
+  i:["Incidencias","!","Consulta incidentes reportados durante las rutas."],
+  f:["Fallidos por causa","↘","Analiza paquetes no entregados por motivo."],
+  b:["Bajas","−","Gestiona solicitudes de baja de conductores."],
+  k:["Cambios de datos","✎","Revisa solicitudes de actualización de perfiles."],
+  t:["Tarifario","$","Consulta y administra tarifas operativas."],
+  d:["Descargas","⇩","Genera reportes y exportaciones."],
+  n:["Padrón","▤","Consulta el padrón de conductores."],
+  p:["Proveedores y drivers","♙","Administra proveedores y sus conductores."],
+  e:["Equipo","♧","Gestiona el acceso del equipo administrativo."]
+};
+function seleccionarTab(b){
+  document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===b));
+  tab=b.dataset.t;
+  const [title,,description]=NAV_INFO[tab]||["Operación","",""];
+  $("page-title").textContent=title;
+  $("page-description").textContent=description;
+  render();
+}
 function aplicarRol(){
-  document.querySelectorAll('.tabs button').forEach(b=>{if(!puede(b.dataset.t))b.remove()});
-  if(puede("e")){const b=document.createElement("button");b.dataset.t="e";b.textContent="Equipo";b.onclick=()=>{document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===b));tab="e";render()};document.querySelector(".tabs").appendChild(b)}
-  const f=document.querySelector(".tabs button");if(f){document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===f));tab=f.dataset.t}
+  document.querySelectorAll(".tabs button").forEach(b=>{
+    if(!puede(b.dataset.t)){b.remove();return}
+    const [label,icon]=NAV_INFO[b.dataset.t]||[b.textContent,"•"];
+    b.innerHTML=`<span class="nav-icon" aria-hidden="true">${icon}</span><span>${label}</span>`;
+  });
+  document.querySelectorAll(".nav-group").forEach(group=>group.classList.toggle("hide",!group.querySelector("button")));
+  document.querySelectorAll(".nav-caption").forEach(caption=>caption.classList.toggle("hide",caption.nextElementSibling.classList.contains("hide")));
+  if(puede("e")){
+    const b=document.createElement("button");b.dataset.t="e";
+    const [label,icon]=NAV_INFO.e;
+    b.innerHTML=`<span class="nav-icon" aria-hidden="true">${icon}</span><span>${label}</span>`;
+    b.onclick=()=>seleccionarTab(b);
+    const group=document.querySelector('[data-nav-group="administracion"]');
+    group.appendChild(b);group.classList.remove("hide");
+    group.previousElementSibling.classList.remove("hide");
+  }
+  const f=document.querySelector(".tabs button");if(f)seleccionarTab(f);
 }
 $("out").onclick=async()=>{await sb.auth.signOut();location.reload()};
 $("lb").onclick=()=>$("lb").classList.add("hide");
-document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===b));tab=b.dataset.t;render()});
+document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>seleccionarTab(b));
 $("go").onclick=load;
 async function boot(){
   const {data:{session}}=await sb.auth.getSession();
