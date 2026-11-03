@@ -55,7 +55,7 @@ td select{padding:6px;border:1px solid var(--line);border-radius:8px;font-size:1
   <div class="bar"><label>Desde <input type="date" id="d1"></label><label>Hasta <input type="date" id="d2"></label>
     <select id="fcli"><option value="">Todos los clientes</option></select><button id="go" style="padding:9px 16px;border:0;border-radius:10px;background:#4b2fd0;color:#fff;cursor:pointer">Actualizar</button></div>
   <div class="kpis" id="kpis"></div>
-  <div class="tabs" style="flex-wrap:wrap"><button class="on" data-t="r">Rutas</button><button data-t="v">Por validar</button><button data-t="a">Por aprobar</button><button data-t="b">Bajas</button><button data-t="k">Cambios de datos</button><button data-t="l">Validadas</button><button data-t="c">Cancelaciones</button><button data-t="i">Incidencias</button><button data-t="f">Fallidos por causa</button><button data-t="p">Proveedores y drivers</button></div>
+  <div class="tabs" style="flex-wrap:wrap"><button class="on" data-t="r">Rutas</button><button data-t="v">Por validar</button><button data-t="a">Por aprobar</button><button data-t="b">Bajas</button><button data-t="k">Cambios de datos</button><button data-t="d">Descargas</button><button data-t="l">Validadas</button><button data-t="c">Cancelaciones</button><button data-t="i">Incidencias</button><button data-t="f">Fallidos por causa</button><button data-t="p">Proveedores y drivers</button></div>
   <div class="card" id="view"></div>
 </main></div>
 <div id="lb" class="hide"><img id="lbimg"></div>
@@ -70,7 +70,7 @@ const fd=m=>m==null?"—":(m<1000?m+" m":(m/1000).toFixed(1)+" km");
 const hh=s=>s?new Date(s).toTimeString().slice(0,5):"—";
 const dd=s=>new Date(s).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
 const dominioOk=e=>/^[^@\s]+@chazki\.com$/i.test((e||"").trim());
-let ROL=null,PEND=[],BAJ=[],CAMB=[];
+let ROL=null,PEND=[],BAJ=[],CAMB=[],DSET=[],DLOG=[];
 $("apw-toggle").onclick=e=>{e.preventDefault();$("apw").classList.toggle("hide")};
 // Google Workspace: la cuenta debe ser de la organización; el dominio se vuelve a exigir en la base de datos
 $("agoogle").onclick=async()=>{
@@ -82,7 +82,7 @@ $("abtn").onclick=async()=>{
   if(!dominioOk(email)){$("amsg").innerHTML='<div class="errbox">Solo personal de Chazki: usa tu correo @chazki.com.</div>';return}
   const r=await sb.auth.signInWithPassword({email,password});
   if(r.error){$("amsg").innerHTML='<div class="errbox">Correo o contraseña incorrectos.</div>';return}boot()};
-const TABS={master:"rvalbkcifpe",ops:"rvalbkcifp",coordinador:"rvalbkcifp",finanzas:"rlcp",ih:"rvabkcif"};
+const TABS={master:"rvalbkcifped",ops:"rvalbkcifpd",coordinador:"rvalbkcifpd",finanzas:"rlcpd",ih:"rvabkcifd"};
 const puede=t=>(TABS[ROL]||"").includes(t);
 const veFin=()=>["master","ops","coordinador","finanzas"].includes(ROL);
 const cargaFin=()=>veFin()||ROL==="ih";
@@ -103,7 +103,7 @@ async function boot(){
   if(!session){$("auth").classList.remove("hide");return}
   const {data:me}=await sb.from("drivers").select("nombre,rol").eq("id",session.user.id).single();
   if(!me||!Object.keys(TABS).includes(me.rol)||!dominioOk(session.user.email)){$("auth").classList.remove("hide");$("amsg").innerHTML='<div class="errbox">Esta cuenta no tiene acceso al panel. Es solo para personal de Chazki con correo @chazki.com.</div>';await sb.auth.signOut();return}
-  ROL=me.rol;aplicarRol();
+  ROL=me.rol;aplicarRol();DSET=(await sb.rpc("datasets_disponibles")).data||[];cargaLog();
   $("auth").classList.add("hide");$("panel").classList.remove("hide");$("who").textContent=me.nombre+" · "+(ROLES_TXT[me.rol]||me.rol);
   const hoy=new Date().toLocaleDateString("en-CA");$("d1").value=hoy;$("d2").value=hoy;
   const {data:cl}=await sb.from("clientes").select("id,nombre").order("nombre");
@@ -135,7 +135,7 @@ function render(){
     (rows.map(({x,i})=>`<tr><td>${dd(x.checkin_at)}</td><td>${x.drivers.nombre}</td><td>${x.cedis.clientes.nombre} · ${x.cedis.nombre}</td><td><span class="pill bad">${i.tipos_incidencia.nombre}</span></td><td>${i.comentario||"—"}</td></tr>`).join("")||`<tr><td colspan="5">Sin incidencias en este periodo.</td></tr>`)+`</table>`}
   if(tab==="f"){const m={};R.forEach(x=>x.ruta_fallos.forEach(f=>{m[f.causas_fallo.nombre]=(m[f.causas_fallo.nombre]||0)+f.cantidad}));const e=Object.entries(m).sort((a,b)=>b[1]-a[1]);
     h=`<table><tr><th>Causa</th><th>Paquetes</th></tr>`+(e.map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join("")||`<tr><td colspan="2">Sin fallidos en este periodo.</td></tr>`)+`</table>`}
-  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();
+  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();
   $("view").innerHTML=h;enlazar();
   document.querySelectorAll("img.th").forEach(i=>i.onclick=()=>{$("lbimg").src=i.dataset.u;$("lb").classList.remove("hide")});
 }
@@ -185,6 +185,25 @@ async function resolverCambio(id,ok){const {error}=await sb.rpc("resolver_cambio
 async function verManif(id){const ru=R.find(x=>x.id===id);const paths=ru.ruta_manifiestos.map(x=>x.foto_path);
   const s=await sb.storage.from("manifiestos").createSignedUrls(paths,3600);const m=$("modal");m.classList.remove("hide");
   m.innerHTML=`<div class="box"><h2 style="margin:0 0 8px">Manifiestos · Ruta ${ru.id_ruta}</h2><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${(s.data||[]).map(x=>`<a href="${x.signedUrl}" target="_blank" rel="noopener"><img src="${x.signedUrl}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px"></a>`).join("")}</div><div style="margin-top:12px"><button class="btn ghost" id="mf-x">Cerrar</button></div></div>`;$("mf-x").onclick=()=>m.classList.add("hide")}
+const NIVEL={master:"Cuenta maestra · acceso completo",ops:"Operaciones · acceso completo",coordinador:"Coordinador · operación y pagos, sin cobro ni utilidad",finanzas:"Finanzas · pagos, liquidaciones y utilidad",ih:"Supervisor · datos operativos, sin importes"};
+const CATALOGO={rutas:["Rutas","Cada ruta con driver, flotillero, cliente, CEDIS, paquetes, efectividad, estatus de validación, manifiestos y extras (maniobras, estadía, otros)."],
+ cancelaciones:["Cancelaciones","Cancelaciones con ubicación, distancia al CEDIS, validación y estatus."],incidencias:["Incidencias","Incidencias reportadas por ruta, con comentario."],fallidos:["Fallidos por causa","Paquetes fallidos por causa y ruta."],
+ drivers:["Drivers y flotilleros","Base de drivers con flotillero y registro fiscal."],liquidaciones_pago:["Liquidaciones (pago)","Pago al proveedor por ruta validada, sin cobro al cliente ni utilidad."],
+ liquidaciones:["Liquidaciones completas","Pago, cobro al cliente, venta, utilidad y margen por ruta validada."],pagos:["Pagos","Pagos generados por driver y flotillero con su estatus."],auditoria:["Bajas y cambios de datos","Solicitudes de baja y de cambio de datos con su estatus."]};
+function vistaDescargas(){
+  const l=(DSET||[]).map(k=>`<div class="item" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 8px;border-bottom:1px solid var(--line)"><div><b>${CATALOGO[k][0]}</b><br><small>${CATALOGO[k][1]}</small></div><button class="btn sm" data-dl="${k}">Descargar CSV</button></div>`).join("");
+  const lg=DLOG.map(x=>`<tr><td>${dd(x.en)} ${hh(x.en)}</td><td>${x.rol}</td><td>${(CATALOGO[x.dataset]||[x.dataset])[0]}</td><td>${x.filas}</td><td>${x.desde} → ${x.hasta}</td></tr>`).join("");
+  return `<h3 style="margin:12px 8px 0">Descarga de datos</h3><div style="padding:0 8px"><span class="pill ok">${NIVEL[ROL]||ROL}</span><br><small>Usa el rango de fechas y el cliente de la barra de arriba. Cada descarga queda registrada.</small></div>${l||'<div style="padding:12px">Tu nivel no tiene descargas.</div>'}
+   ${DLOG.length?`<h3 style="margin:16px 8px 0">Últimas descargas</h3><table><tr><th>Cuándo</th><th>Rol</th><th>Descarga</th><th>Filas</th><th>Periodo</th></tr>${lg}</table>`:""}`}
+const csvCell=v=>{if(v==null)return"";const s=String(v).replace(/"/g,'""');return /[",\n\r]/.test(s)?`"${s}"`:s};
+async function descargar(k,btn){btn.disabled=true;const t=btn.textContent;btn.textContent="Generando…";
+  const {data,error}=await sb.rpc("exportar_dataset",{p_dataset:k,p_desde:$("d1").value,p_hasta:$("d2").value,p_cliente:$("fcli").value?+$("fcli").value:null});
+  btn.disabled=false;btn.textContent=t;if(error){toast(error.message);return}
+  if(!data||!data.length){toast("No hay datos en ese periodo");return}
+  const cols=Object.keys(data[0]);const csv="\ufeff"+[cols.map(csvCell).join(",")].concat(data.map(r=>cols.map(c=>csvCell(r[c])).join(","))).join("\r\n");
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));a.download=`chazki_${k}_${$("d1").value}_${$("d2").value}.csv`;document.body.appendChild(a);a.click();a.remove();
+  toast(`Descargadas ${data.length} filas`);cargaLog()}
+async function cargaLog(){if(!esOps())return;const r=await sb.from("descargas_log").select("*").order("en",{ascending:false}).limit(15);DLOG=r.data||[];if(tab==="d")render()}
 function vistaBajas(){
   const ck=x=>x?"✅":"⏳",puedeS=ROL==="ih",puedeC=["master","ops","coordinador"].includes(ROL);
   const f=BAJ.map(q=>{const d=DRV.find(y=>y.id===q.driver_id),p=PRV.find(y=>y.id===q.proveedor_id);
@@ -231,7 +250,7 @@ function enlazar(){
   document.querySelectorAll("[data-val]").forEach(b=>b.onclick=()=>abrirValidar(+b.dataset.val));
   document.querySelectorAll("[data-anu]").forEach(b=>b.onclick=()=>anular(+b.dataset.anu));
   document.querySelectorAll("[data-gd]").forEach(b=>b.onclick=()=>guardarDriver(b.dataset.gd));
-  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-cpa]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpa,true));document.querySelectorAll("[data-cpr]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpr,false));document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-cap]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.cap,"aprobada"));document.querySelectorAll("[data-crc]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.crc,"rechazada"));document.querySelectorAll("[data-mf]").forEach(b=>b.onclick=()=>verManif(+b.dataset.mf));const eo=$("eq-ok");if(eo)eo.onclick=asignarRol;
+  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-cpa]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpa,true));document.querySelectorAll("[data-cpr]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpr,false));document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-cap]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.cap,"aprobada"));document.querySelectorAll("[data-crc]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.crc,"rechazada"));document.querySelectorAll("[data-dl]").forEach(b=>b.onclick=()=>descargar(b.dataset.dl,b));document.querySelectorAll("[data-mf]").forEach(b=>b.onclick=()=>verManif(+b.dataset.mf));const eo=$("eq-ok");if(eo)eo.onclick=asignarRol;
 }
 async function guardarDriver(id){const rol=document.querySelector(`[data-rol="${id}"]`).value,pv=document.querySelector(`[data-prov="${id}"]`).value;
   const {error}=await sb.from("drivers").update({rol,proveedor_id:pv?+pv:null}).eq("id",id);
