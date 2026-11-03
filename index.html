@@ -272,7 +272,7 @@ async function boot(){
   DRIVER=d.data;CLI=(cl.data||[]);CAUSAS=ca.data||[];INCID=ic.data||[];
   if(!DRIVER){toast("No se encontró tu perfil de driver");return}
   $("hname").textContent=DRIVER.nombre.split(" ")[0];
-  $("opslink").classList.toggle("hide",!["ops","ih"].includes(DRIVER.rol));
+  $("opslink").classList.toggle("hide",!["ops","ih","master","coordinador","finanzas"].includes(DRIVER.rol));
   fillClientes($("cli"));fillClientes($("ccli"));prefillCliente();
   $("incchips").innerHTML=INCID.map(c=>`<span class="chip" data-i="${c.id}">${c.nombre}</span>`).join("");
   renderStepper();
