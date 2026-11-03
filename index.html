@@ -178,6 +178,7 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
 </section>
 
 <section class="tab" id="t-gan">
+  <div id="gkpi-w"><div class="card" id="gkpi"></div></div>
   <div class="seg" id="gseg"><button class="on" data-p="sem">Semana</button><button data-p="mes">Mes</button></div>
   <div class="card">
     <div style="color:var(--mut);font-size:13px" id="glabel">Ganancias de la semana</div>
@@ -456,17 +457,39 @@ async function loadCan(){
 let PAGOS=[],gp="sem";
 async function loadGan(){
   // Un driver que pertenece a un flotillero no ve los pagos: los ve su transportista
-  if(!ACC.puede_ver_ganancias){$("t-gan").innerHTML='<div class="card"><h2>💰 Tus pagos</h2><div class="note" style="font-size:14px;margin-top:0">Los pagos de tus servicios los recibe y consulta tu transportista. Si tienes dudas sobre un pago, habla con él.</div></div><div class="card"><h2>Mis rutas y cancelaciones</h2><div id="gest"></div></div>';loadEstatus();return}
+  if(!ACC.puede_ver_ganancias){$("t-gan").innerHTML='<div class="card"><h2>💰 Tus pagos</h2><div class="note" style="font-size:14px;margin-top:0">Los pagos de tus servicios los recibe y consulta tu transportista. Si tienes dudas sobre un pago, habla con él.</div></div><div class="card"><h2>Mis rutas y cancelaciones</h2><div id="gest"></div></div>';$("t-gan").insertAdjacentHTML("afterbegin",'<div id="gkpi-w"><div class="card" id="gkpi"></div></div>');loadEstatus();return}
   loadEstatus();
   const d=new Date();d.setDate(d.getDate()-62);
   const sel=ACC.es_flotillero?"*,drivers(nombre),rutas(id_ruta)":"*";
   const q=sb.from("pagos").select(sel).gte("fecha",d.toLocaleDateString("en-CA")).order("fecha",{ascending:false});
   const {data}=ACC.es_flotillero?await q:await q.eq("driver_id",ME.id);PAGOS=data||[];drawG()}
+let RUTAS_K=[],CANS_K=[],kp="sem";
+function rangoK(p,prev){const n=new Date();let a,b;
+  if(p==="sem"){a=monday(n);if(prev)a.setDate(a.getDate()-7);b=new Date(a);b.setDate(b.getDate()+7)}
+  else{a=new Date(n.getFullYear(),n.getMonth()-(prev?1:0),1);b=new Date(a.getFullYear(),a.getMonth()+1,1)}return [a,b]}
+function statsK(p,prev){const [a,b]=rangoK(p,prev),ok=x=>{const d=new Date(x);return d>=a&&d<b};
+  const R=RUTAS_K.filter(x=>ok(x.fecha)&&x.estatus!=="en_curso"),C=CANS_K.filter(x=>ok(x.fecha));
+  const asg=R.reduce((s,x)=>s+(x.asignados||0),0),ent=R.reduce((s,x)=>s+(x.entregados||0),0),fal=R.reduce((s,x)=>s+(x.fallidos||0),0);
+  const dias=new Set(R.map(x=>new Date(x.fecha).toDateString())).size;
+  const tt=R.filter(x=>x.checkout).map(x=>new Date(x.checkout)-new Date(x.fecha)).filter(x=>x>0);
+  return {R,C,asg,ent,fal,dias,ef:asg?ent/asg:null,prom:tt.length?tt.reduce((s,x)=>s+x,0)/tt.length:null,apr:R.filter(x=>x.estatus==="aprobada").length,inc:R.filter(x=>x.incidencias).length}}
+function drawKpi(){const box=$("gkpi");if(!box)return;const s=statsK(kp,false),q=statsK(kp,true);
+  const pct=v=>v==null?"—":Math.round(v*100)+"%",hm=ms=>{if(ms==null)return"—";const m=Math.round(ms/60000);return Math.floor(m/60)+" h "+String(m%60).padStart(2,"0")+" min"};
+  const dl=(a,b,pts)=>{if(a==null||b==null)return"";const d=pts?Math.round((a-b)*100):a-b;if(!d)return'<small style="color:var(--mut)">= que el periodo anterior</small>';const up=d>0;return `<small style="color:${up?"#0f7a3d":"#b42318"}">${up?"▲":"▼"} ${Math.abs(d)}${pts?" pts":""} vs. anterior</small>`};
+  const ef=s.ef,col=ef==null?"var(--mut)":ef>=0.9?"#0f7a3d":ef>=0.8?"#946200":"#b42318";
+  const T=(l,v,x="",c="")=>`<div style="background:#f6f7fb;border-radius:12px;padding:10px"><div style="font-size:12px;color:var(--mut)">${l}</div><div style="font-size:22px;font-weight:800;${c?"color:"+c:""}">${v}</div>${x}</div>`;
+  let por="";if(ACC&&ACC.es_flotillero){const m={};s.R.forEach(x=>{const k=x.driver||"—";(m[k]=m[k]||{n:0,a:0,e:0}).n++;m[k].a+=x.asignados||0;m[k].e+=x.entregados||0});
+    por=`<h3 style="margin:14px 0 4px">Por driver</h3>`+(Object.entries(m).map(([k,v])=>`<div class="item"><span>${k}</span><b>${v.n} rutas · ${pct(v.a?v.e/v.a:null)}</b></div>`).join("")||'<div class="note">Sin rutas en este periodo.</div>')}
+  box.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">📊 Desempeño</h2><div class="seg" id="kseg" style="margin:0;width:150px"><button class="${kp==="sem"?"on":""}" data-k="sem">Semana</button><button class="${kp==="mes"?"on":""}" data-k="mes">Mes</button></div></div>
+   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">${T("Efectividad",pct(ef),dl(s.ef,q.ef,true),col)}${T("Rutas",s.R.length,dl(s.R.length,q.R.length,false))}${T("Entregados",s.ent,`<small style="color:var(--mut)">de ${s.asg} asignados</small>`)}${T("Fallidos",s.fal)}${T("Cancelaciones",s.C.length)}${T("Aprobadas",s.apr,`<small style="color:var(--mut)">de ${s.R.length} rutas</small>`)}</div>
+   <div class="item" style="margin-top:8px"><span>Días trabajados</span><b>${s.dias}</b></div><div class="item"><span>Tiempo promedio por ruta</span><b>${hm(s.prom)}</b></div><div class="item"><span>Rutas con incidencias</span><b>${s.inc}</b></div>${por}`;
+  box.querySelectorAll("#kseg button").forEach(b=>b.onclick=()=>{kp=b.dataset.k;drawKpi()})}
 const EST={por_validar:["Por validar","#946200","#fff4d6"],en_revision:["En revisión","#1d4ed8","#e3ecff"],aprobada:["Aprobada","#0f7a3d","#dff5e6"],rechazada:["Rechazada","#b42318","#fde4e1"],en_curso:["En curso","#555b7a","#ececf4"]};
 const pillE=k=>{const e=EST[k]||EST.por_validar;return `<span style="background:${e[2]};color:${e[1]};font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;white-space:nowrap">${e[0]}</span>`};
 async function loadEstatus(){
   const box=$("gest");if(!box)return;
   const [r,c]=await Promise.all([sb.rpc("mis_rutas_estatus"),sb.rpc("mis_cancelaciones_estatus")]);
+  RUTAS_K=r.data||[];CANS_K=c.data||[];drawKpi();
   const fl=ACC.es_flotillero,f=x=>new Date(x).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
   const rows=(r.data||[]).map(x=>`<div class="item"><div><b>Ruta ${x.id_ruta}</b><small>${f(x.fecha)} · ${x.cliente} · ${x.cedis}${fl?" · "+x.driver:""} · ${x.entregados==null?"—":x.entregados}/${x.asignados}</small></div>${pillE(x.estatus)}</div>`).join("");
   const can=(c.data||[]).map(x=>`<div class="item"><div><b>Cancelación${x.id_ruta?" · Ruta "+x.id_ruta:""}</b><small>${f(x.fecha)} · ${x.cliente} · ${x.cedis}${fl?" · "+x.driver:""}</small></div>${pillE(x.estatus)}</div>`).join("");
