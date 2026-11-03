@@ -210,15 +210,20 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
     <div class="note" id="docs-note"></div></div>
   <div class="card"><h2>📋 Historial de servicios</h2><div id="hist"></div></div>
   <div class="card"><h2>✏️ Actualiza tu información</h2>
-    <label>Nombre</label><input id="unom">
     <label>Teléfono</label><input id="utel" inputmode="tel">
-    <label>Placas</label><input id="upl">
-    <label>Marca / modelo</label><input id="umm" placeholder="Ej. Nissan Versa 2021">
+    <button class="btn ghost" id="btel" style="margin-top:8px">Guardar teléfono</button>
+    <h3 style="margin:18px 0 4px">Datos verificados</h3>
+    <div class="note" style="margin-top:0">Para cuidar tu cuenta, tu nombre, vehículo y licencia los autoriza Chazki. Envía una solicitud y te avisamos cuando se apruebe.</div>
+    <div id="cambio-est"></div>
+    <label>Nombre</label><input id="unom" disabled>
+    <label>Placas</label><input id="upl" disabled>
+    <label>Marca / modelo</label><input id="umm" placeholder="Ej. Nissan Versa 2021" disabled>
     <label>Tipo de vehículo</label><div class="chips" id="vtypes"></div>
-    <label>Número de licencia</label><input id="ulic">
-    <label>Tipo de licencia</label><input id="ultip" placeholder="Ej. Tipo A">
-    <label>Vigencia de licencia</label><input id="uvig" type="date">
-    <button class="btn" id="bsave">Guardar cambios</button>
+    <label>Número de licencia</label><input id="ulic" disabled>
+    <label>Tipo de licencia</label><input id="ultip" placeholder="Ej. Tipo A" disabled>
+    <label>Vigencia de licencia</label><input id="uvig" type="date" disabled>
+    <button class="btn" id="bedit" style="margin-top:10px">Solicitar cambio de datos</button>
+    <div id="bform" class="hide"><div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="bsave">Enviar solicitud</button><button class="btn ghost" id="bcancel">Cancelar</button></div></div>
     <div id="saveerr"></div>
   </div>
   <button class="btn ghost" id="blogout">Cerrar sesión</button>
@@ -552,20 +557,29 @@ async function loadPerfil(){
   $("lnum").textContent=(L&&L.numero)||"Sin registrar";$("ltip").textContent=(L&&L.tipo)||"—";
   $("lvig").textContent=L&&L.vigencia?parseF(L.vigencia).toLocaleDateString("es-MX"):"—";
   $("unom").value=DRIVER.nombre;$("utel").value=DRIVER.telefono||"";$("upl").value=V?V.placas:"";$("umm").value=(V&&V.marca_modelo)||"";
-  $("ulic").value=(L&&L.numero)||"";$("ultip").value=(L&&L.tipo)||"";$("uvig").value=(L&&L.vigencia)||"";vt=V?V.tipo:null;drawVt();
+  $("ulic").value=(L&&L.numero)||"";$("ultip").value=(L&&L.tipo)||"";$("uvig").value=(L&&L.vigencia)||"";vt=V?V.tipo:null;drawVt();modoEdicion(false);estadoCambio();
 }
 function drawVt(){$("vtypes").innerHTML=VTIPOS.map(v=>`<span class="chip ${v[1]===vt?"on":""}" data-v="${v[1]}">${v[0]} ${v[1]}</span>`).join("")}
-$("vtypes").onclick=e=>{if(e.target.dataset.v){vt=e.target.dataset.v;drawVt()}};
+$("vtypes").onclick=e=>{if(!editando)return;if(e.target.dataset.v){vt=e.target.dataset.v;drawVt()}};
+let editando=false;
+const CAMPOS={nombre:"Nombre",placas:"Placas",tipo:"Tipo de vehículo",marca_modelo:"Marca / modelo",licencia_numero:"Número de licencia",licencia_tipo:"Tipo de licencia",licencia_vigencia:"Vigencia de licencia"};
+function modoEdicion(on){editando=on;["unom","upl","umm","ulic","ultip","uvig"].forEach(i=>$(i).disabled=!on);$("bform").classList.toggle("hide",!on);$("bedit").classList.toggle("hide",on);drawVt()}
+$("bedit").onclick=()=>modoEdicion(true);
+$("bcancel").onclick=()=>{err("saveerr",null);modoEdicion(false);loadPerfil()};
+$("btel").onclick=async()=>{err("saveerr",null);const {error}=await sb.from("drivers").update({telefono:$("utel").value.trim()||null}).eq("id",ME.id);if(error){err("saveerr",error);return}toast("Teléfono guardado ✔")};
+async function estadoCambio(){
+  const {data}=await sb.from("cambios_perfil").select("*").eq("driver_id",ME.id).order("solicitado_en",{ascending:false}).limit(1);const c=data&&data[0];const box=$("cambio-est");
+  if(!c){box.innerHTML="";$("bedit").disabled=false;return}
+  const f=x=>new Date(x).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
+  const lista=Object.entries(c.datos).map(([k,v])=>`${CAMPOS[k]||k}: <b>${v}</b>`).join("<br>");
+  if(c.estatus==="pendiente"){box.innerHTML=`<div class="note" style="background:#e3ecff;color:#1d4ed8;padding:10px;border-radius:10px;margin-top:10px"><b>Cambio en revisión</b> · ${f(c.solicitado_en)}<br>${lista}</div>`;$("bedit").disabled=true;$("bedit").textContent="Solicitud en revisión"}
+  else{box.innerHTML=c.estatus==="aprobada"?`<div class="note" style="margin-top:10px;color:#0f7a3d">Último cambio aprobado (${f(c.resuelto_en)})</div>`:`<div class="note" style="margin-top:10px;color:#b42318">Último cambio rechazado (${f(c.resuelto_en)})${c.nota?": "+c.nota:""}</div>`;$("bedit").disabled=false;$("bedit").textContent="Solicitar cambio de datos"}}
 $("bsave").onclick=async()=>{
-  err("saveerr",null);$("bsave").disabled=true;let e=null;
-  e=(await sb.from("drivers").update({nombre:$("unom").value.trim()||DRIVER.nombre,telefono:$("utel").value.trim()||null}).eq("id",ME.id)).error;
-  if(!e&&$("upl").value.trim()&&vt){const row={driver_id:ME.id,placas:$("upl").value.trim().toUpperCase(),tipo:vt,marca_modelo:$("umm").value.trim()||null,activo:true};
-    const ex=await sb.from("vehiculos").select("id").eq("driver_id",ME.id).eq("activo",true).maybeSingle();
-    e=(ex.data?await sb.from("vehiculos").update(row).eq("id",ex.data.id):await sb.from("vehiculos").insert(row)).error}
-  if(!e&&($("ulic").value.trim()||$("uvig").value))e=(await sb.from("licencias").upsert({driver_id:ME.id,numero:$("ulic").value.trim()||null,tipo:$("ultip").value.trim()||null,vigencia:$("uvig").value||null})).error;
-  $("bsave").disabled=false;if(e){err("saveerr",e);return}
-  toast("Información guardada ✔");loadPerfil();$("hname").textContent=($("unom").value.trim()||DRIVER.nombre).split(" ")[0];
-};
+  err("saveerr",null);$("bsave").disabled=true;
+  const datos={nombre:$("unom").value.trim(),placas:$("upl").value.trim(),tipo:vt||"",marca_modelo:$("umm").value.trim(),licencia_numero:$("ulic").value.trim(),licencia_tipo:$("ultip").value.trim(),licencia_vigencia:$("uvig").value};
+  const {error}=await sb.rpc("solicitar_cambio_perfil",{p_datos:datos});$("bsave").disabled=false;
+  if(error){err("saveerr",error);return}
+  toast("Solicitud enviada ✔");modoEdicion(false);loadPerfil()};
 async function loadHist(){
   const {data}=await sb.from("rutas").select("id_ruta,checkin_at,entregados,paquetes_asignados,estado,cedis(nombre,clientes(nombre))").eq("driver_id",ME.id).order("checkin_at",{ascending:false}).limit(15);
   $("hist").innerHTML=(data&&data.length)?data.map(h=>{const d=new Date(h.checkin_at);return `<div class="item"><div><b>${h.cedis.clientes.nombre}</b> · ${h.cedis.nombre}<small>${d.toLocaleDateString("es-MX",{weekday:"short",day:"2-digit",month:"short"})} · Ruta ${h.id_ruta}${h.estado==="cerrada"?` · Entregas ${h.entregados} / ${h.paquetes_asignados}`:""}</small></div><span class="pill ${h.estado==="cerrada"?"ok":"w"}">${h.estado==="cerrada"?"Cerrada":"En ruta"}</span></div>`}).join(""):'<div class="note">Aún no tienes servicios registrados.</div>';
