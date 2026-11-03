@@ -55,7 +55,7 @@ td select{padding:6px;border:1px solid var(--line);border-radius:8px;font-size:1
   <div class="bar"><label>Desde <input type="date" id="d1"></label><label>Hasta <input type="date" id="d2"></label>
     <select id="fcli"><option value="">Todos los clientes</option></select><button id="go" style="padding:9px 16px;border:0;border-radius:10px;background:#4b2fd0;color:#fff;cursor:pointer">Actualizar</button></div>
   <div class="kpis" id="kpis"></div>
-  <div class="tabs" style="flex-wrap:wrap"><button class="on" data-t="r">Rutas</button><button data-t="v">Por validar</button><button data-t="a">Por aprobar</button><button data-t="b">Bajas</button><button data-t="k">Cambios de datos</button><button data-t="d">Descargas</button><button data-t="l">Validadas</button><button data-t="c">Cancelaciones</button><button data-t="i">Incidencias</button><button data-t="f">Fallidos por causa</button><button data-t="p">Proveedores y drivers</button></div>
+  <div class="tabs" style="flex-wrap:wrap"><button class="on" data-t="r">Rutas</button><button data-t="v">Por validar</button><button data-t="a">Por aprobar</button><button data-t="b">Bajas</button><button data-t="k">Cambios de datos</button><button data-t="t">Tarifario</button><button data-t="d">Descargas</button><button data-t="l">Validadas</button><button data-t="c">Cancelaciones</button><button data-t="i">Incidencias</button><button data-t="f">Fallidos por causa</button><button data-t="p">Proveedores y drivers</button></div>
   <div class="card" id="view"></div>
 </main></div>
 <div id="lb" class="hide"><img id="lbimg"></div>
@@ -82,7 +82,7 @@ $("abtn").onclick=async()=>{
   if(!dominioOk(email)){$("amsg").innerHTML='<div class="errbox">Solo personal de Chazki: usa tu correo @chazki.com.</div>';return}
   const r=await sb.auth.signInWithPassword({email,password});
   if(r.error){$("amsg").innerHTML='<div class="errbox">Correo o contraseña incorrectos.</div>';return}boot()};
-const TABS={master:"rvalbkcifped",ops:"rvalbkcifpd",coordinador:"rvalbkcifpd",finanzas:"rlcpd",ih:"rvabkcifd"};
+const TABS={master:"rvalbkcifpedt",ops:"rvalbkcifpdt",coordinador:"rvalbkcifpdt",finanzas:"rlcpd",ih:"rvabkcifd"};
 const puede=t=>(TABS[ROL]||"").includes(t);
 const veFin=()=>["master","ops","coordinador","finanzas"].includes(ROL);
 const cargaFin=()=>veFin()||ROL==="ih";
@@ -135,7 +135,7 @@ function render(){
     (rows.map(({x,i})=>`<tr><td>${dd(x.checkin_at)}</td><td>${x.drivers.nombre}</td><td>${x.cedis.clientes.nombre} · ${x.cedis.nombre}</td><td><span class="pill bad">${i.tipos_incidencia.nombre}</span></td><td>${i.comentario||"—"}</td></tr>`).join("")||`<tr><td colspan="5">Sin incidencias en este periodo.</td></tr>`)+`</table>`}
   if(tab==="f"){const m={};R.forEach(x=>x.ruta_fallos.forEach(f=>{m[f.causas_fallo.nombre]=(m[f.causas_fallo.nombre]||0)+f.cantidad}));const e=Object.entries(m).sort((a,b)=>b[1]-a[1]);
     h=`<table><tr><th>Causa</th><th>Paquetes</th></tr>`+(e.map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join("")||`<tr><td colspan="2">Sin fallidos en este periodo.</td></tr>`)+`</table>`}
-  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();
+  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();if(tab==="t")h=vistaTarifario();
   $("view").innerHTML=h;enlazar();
   document.querySelectorAll("img.th").forEach(i=>i.onclick=()=>{$("lbimg").src=i.dataset.u;$("lb").classList.remove("hide")});
 }
@@ -185,6 +185,43 @@ async function resolverCambio(id,ok){const {error}=await sb.rpc("resolver_cambio
 async function verManif(id){const ru=R.find(x=>x.id===id);const paths=ru.ruta_manifiestos.map(x=>x.foto_path);
   const s=await sb.storage.from("manifiestos").createSignedUrls(paths,3600);const m=$("modal");m.classList.remove("hide");
   m.innerHTML=`<div class="box"><h2 style="margin:0 0 8px">Manifiestos · Ruta ${ru.id_ruta}</h2><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${(s.data||[]).map(x=>`<a href="${x.signedUrl}" target="_blank" rel="noopener"><img src="${x.signedUrl}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px"></a>`).join("")}</div><div style="margin-top:12px"><button class="btn ghost" id="mf-x">Cerrar</button></div></div>`;$("mf-x").onclick=()=>m.classList.add("hide")}
+let TF=null,TFL={cuenta:"",q:"",veh:"",esq:"",act:true};
+async function cargaTF(){const {data,error}=await sb.from("tarifas").select("*").order("cuenta").order("ubicacion").order("tipo_unidad").limit(2000);if(error){toast(error.message);return}TF=data||[];render()}
+const uniq=(k)=>[...new Set((TF||[]).map(x=>x[k]).filter(Boolean))].sort();
+function vistaTarifario(){
+  if(!TF){cargaTF();return '<div style="padding:16px">Cargando tarifario…</div>'}
+  const L=TF.filter(x=>(!TFL.cuenta||x.cuenta===TFL.cuenta)&&(!TFL.veh||x.tipo_unidad===TFL.veh)&&(!TFL.esq||x.esquema===TFL.esq)&&(!TFL.act||x.activo)&&(!TFL.q||[x.ubicacion,x.ciudad,x.zona,x.variable,x.conc].join(" ").toUpperCase().includes(TFL.q.toUpperCase())));
+  const op=(arr,v)=>`<option value="">Todos</option>`+arr.map(a=>`<option ${a===v?"selected":""}>${a}</option>`).join("");
+  const sty='style="padding:8px;border:1px solid var(--line);border-radius:10px"';
+  const ed=esOps();
+  const f=`<div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px;align-items:center"><select id="tf-c" ${sty}>${op(["MELI","COPPEL","LIVERPOOL"],TFL.cuenta).replace("Todos","Todos los clientes")}</select><input id="tf-q" placeholder="Buscar ubicación, zona…" value="${TFL.q}" ${sty}><select id="tf-v" ${sty}>${op(uniq("tipo_unidad"),TFL.veh).replace("Todos","Todos los vehículos")}</select><select id="tf-e" ${sty}>${op(uniq("esquema"),TFL.esq).replace("Todos","Todos los esquemas")}</select><label style="font-size:13px"><input type="checkbox" id="tf-a" ${TFL.act?"checked":""}> Solo activas</label>${ed?'<button class="btn" id="tf-n">+ Nueva tarifa</button>':""}</div>`;
+  const rows=L.slice(0,300).map(x=>`<tr><td><b>${x.cuenta}</b>${x.cliente&&x.cliente!==x.cuenta?`<br><small>${x.cliente}</small>`:""}</td><td>${x.ubicacion||"—"}${x.ciudad?`<br><small>${x.ciudad}</small>`:""}</td><td>${x.zona||"—"}${x.variable?` <span class="pill w">${x.variable}</span>`:""}</td><td>${x.tipo_unidad||"—"}</td><td>${x.esquema||"—"}</td><td style="text-align:right"><b>${x.pago_base==null?"—":fm(x.pago_base)}</b></td><td style="text-align:right"><b>${x.tarifa_cliente==null?"—":fm(x.tarifa_cliente)}</b></td><td><small>${x.vigencia_desde}${x.vigencia_hasta?" → "+x.vigencia_hasta:" → abierta"}</small>${x.activo?"":' <span class="pill bad">Inactiva</span>'}</td>${ed?`<td><button class="btn ghost sm" data-te="${x.id}">Editar</button></td>`:""}</tr>`).join("");
+  return f+`<div style="padding:0 8px 6px"><small>${L.length} tarifas${L.length>300?" (se muestran 300; afina el filtro)":""} · ${ed?"Puedes agregar y editar. Los cambios no alteran rutas ya validadas y quedan en bitácora.":"Solo consulta. Los cambios los hacen Operaciones y la cuenta maestra."}</small></div><table><tr><th>Cliente</th><th>Ubicación</th><th>Tipo de ruta</th><th>Vehículo</th><th>Esquema</th><th>Pago</th><th>Cobro</th><th>Vigencia</th>${ed?"<th></th>":""}</tr>${rows||'<tr><td colspan="9">Sin tarifas con ese filtro.</td></tr>'}</table>`}
+function formTarifa(id){
+  const t=id?TF.find(x=>x.id===id):{cuenta:"",ubicacion:"",ciudad:"",tipo_unidad:"",esquema:"",zona:"",variable:"",pago_base:"",tarifa_cliente:"",vigencia_desde:new Date().toLocaleDateString("en-CA"),vigencia_hasta:"",activo:true};
+  const m=$("modal");m.classList.remove("hide");const dl=(i,k)=>`<datalist id="${i}">${uniq(k).map(v=>`<option value="${v}">`).join("")}</datalist>`;
+  m.innerHTML=`<div class="box"><h2 style="margin:0 0 6px">${id?"Editar tarifa":"Nueva tarifa"}</h2>
+   <label>Cliente</label><select id="tf-fc" ${id?"disabled":""}><option value="">Elige…</option>${["MELI","COPPEL","LIVERPOOL"].map(c=>`<option ${t.cuenta===c?"selected":""}>${c}</option>`).join("")}</select>
+   <label>Ubicación / CEDIS</label><input id="tf-fu" value="${t.ubicacion||""}"><label>Ciudad (opcional)</label><input id="tf-fci" value="${t.ciudad||""}">
+   <label>Tipo de ruta (zona)</label><input id="tf-fz" list="dl-z" value="${t.zona||""}" placeholder="LOCAL, FORANEA 1…">${dl("dl-z","zona")}
+   <label>Vehículo</label><input id="tf-fv" list="dl-v" value="${t.tipo_unidad||""}" placeholder="3.5T, LARGE VAN…">${dl("dl-v","tipo_unidad")}
+   <label>Esquema</label><input id="tf-fe" list="dl-e" value="${t.esquema||""}" placeholder="RUTA, PAQUETE…">${dl("dl-e","esquema")}
+   <label>Variable (opcional, ej. PEAK)</label><input id="tf-fva" value="${t.variable||""}">
+   <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label>Pago al driver</label><input id="tf-fp" type="number" step="0.01" value="${t.pago_base??""}"></div><div><label>Cobro al cliente</label><input id="tf-fco" type="number" step="0.01" value="${t.tarifa_cliente??""}"></div>
+   <div><label>Vigencia desde</label><input id="tf-fd" type="date" value="${t.vigencia_desde||""}"></div><div><label>Vigencia hasta</label><input id="tf-fh" type="date" value="${t.vigencia_hasta||""}"></div></div>
+   <label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="tf-fa" ${t.activo?"checked":""}> Tarifa activa</label>
+   <div id="tf-err"></div><div style="display:flex;gap:8px;margin-top:14px"><button class="btn" id="tf-ok">Guardar</button><button class="btn ghost" id="tf-x">Cancelar</button></div></div>`;
+  $("tf-x").onclick=()=>m.classList.add("hide");
+  $("tf-ok").onclick=async()=>{const v=i=>$(i).value.trim();const row={ubicacion:v("tf-fu")||null,ciudad:v("tf-fci")||null,zona:v("tf-fz").toUpperCase()||null,tipo_unidad:v("tf-fv").toUpperCase()||null,esquema:v("tf-fe").toUpperCase()||null,variable:v("tf-fva").toUpperCase()||null,
+     pago_base:v("tf-fp")===""?null:+v("tf-fp"),tarifa_cliente:v("tf-fco")===""?null:+v("tf-fco"),vigencia_desde:v("tf-fd"),vigencia_hasta:v("tf-fh")||null,activo:$("tf-fa").checked};
+    const cuenta=id?t.cuenta:v("tf-fc");const bad=m=>{$("tf-err").innerHTML=`<div class="errbox">${m}</div>`};
+    if(!cuenta)return bad("Elige el cliente");if(!row.esquema)return bad("Indica el esquema");if(!row.tipo_unidad)return bad("Indica el vehículo");if(!row.zona)return bad("Indica el tipo de ruta");
+    if(row.pago_base==null||row.tarifa_cliente==null||row.pago_base<0||row.tarifa_cliente<0)return bad("Captura pago y cobro (no negativos)");if(!row.vigencia_desde)return bad("Indica la vigencia");
+    if(row.vigencia_hasta&&row.vigencia_hasta<row.vigencia_desde)return bad("La vigencia final es anterior a la inicial");
+    row.conc=[row.ubicacion,row.tipo_unidad,row.esquema,row.zona,row.variable].filter(Boolean).join("");
+    const q=id?sb.from("tarifas").update(row).eq("id",id):sb.from("tarifas").insert({...row,cuenta,cliente:cuenta,fuente:"Panel"});
+    $("tf-ok").disabled=true;const {error}=await q;if(error){$("tf-ok").disabled=false;return bad(error.message)}
+    m.classList.add("hide");TF=null;TAR=null;toast(id?"Tarifa actualizada":"Tarifa agregada");cargaTF()}}
 const NIVEL={master:"Cuenta maestra · acceso completo",ops:"Operaciones · acceso completo",coordinador:"Coordinador · operación y pagos, sin cobro ni utilidad",finanzas:"Finanzas · pagos, liquidaciones y utilidad",ih:"Supervisor · datos operativos, sin importes"};
 const CATALOGO={rutas:["Rutas","Cada ruta con driver, flotillero, cliente, CEDIS, paquetes, efectividad, estatus de validación, manifiestos y extras (maniobras, estadía, otros)."],
  cancelaciones:["Cancelaciones","Cancelaciones con ubicación, distancia al CEDIS, validación y estatus."],incidencias:["Incidencias","Incidencias reportadas por ruta, con comentario."],fallidos:["Fallidos por causa","Paquetes fallidos por causa y ruta."],
@@ -250,7 +287,10 @@ function enlazar(){
   document.querySelectorAll("[data-val]").forEach(b=>b.onclick=()=>abrirValidar(+b.dataset.val));
   document.querySelectorAll("[data-anu]").forEach(b=>b.onclick=()=>anular(+b.dataset.anu));
   document.querySelectorAll("[data-gd]").forEach(b=>b.onclick=()=>guardarDriver(b.dataset.gd));
-  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-cpa]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpa,true));document.querySelectorAll("[data-cpr]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpr,false));document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-cap]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.cap,"aprobada"));document.querySelectorAll("[data-crc]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.crc,"rechazada"));document.querySelectorAll("[data-dl]").forEach(b=>b.onclick=()=>descargar(b.dataset.dl,b));document.querySelectorAll("[data-mf]").forEach(b=>b.onclick=()=>verManif(+b.dataset.mf));const eo=$("eq-ok");if(eo)eo.onclick=asignarRol;
+  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-cpa]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpa,true));document.querySelectorAll("[data-cpr]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpr,false));document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-cap]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.cap,"aprobada"));document.querySelectorAll("[data-crc]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.crc,"rechazada"));const tfc=$("tf-c");if(tfc){tfc.onchange=()=>{TFL.cuenta=tfc.value;render()};$("tf-v").onchange=e=>{TFL.veh=e.target.value;render()};$("tf-e").onchange=e=>{TFL.esq=e.target.value;render()};$("tf-a").onchange=e=>{TFL.act=e.target.checked;render()};
+   $("tf-q").onchange=e=>{TFL.q=e.target.value;render()};const n=$("tf-n");if(n)n.onclick=()=>formTarifa(null)}
+  document.querySelectorAll("[data-te]").forEach(b=>b.onclick=()=>formTarifa(+b.dataset.te));
+  document.querySelectorAll("[data-dl]").forEach(b=>b.onclick=()=>descargar(b.dataset.dl,b));document.querySelectorAll("[data-mf]").forEach(b=>b.onclick=()=>verManif(+b.dataset.mf));const eo=$("eq-ok");if(eo)eo.onclick=asignarRol;
 }
 async function guardarDriver(id){const rol=document.querySelector(`[data-rol="${id}"]`).value,pv=document.querySelector(`[data-prov="${id}"]`).value;
   const {error}=await sb.from("drivers").update({rol,proveedor_id:pv?+pv:null}).eq("id",id);
