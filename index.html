@@ -104,6 +104,7 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
     <h2>1 · Check-in · ¿Dónde cargas hoy?</h2>
     <label>Cliente</label><select id="cli"></select><div class="note" id="cli-hint" style="margin-top:4px"></div>
     <label>CEDIS</label><select id="cedis"></select>
+    <button class="btn ghost" type="button" id="det1" style="margin-top:8px">📍 Detectar mi ubicación</button><div id="detbox1"></div>
     <div class="grid2">
       <div><label>Paquetes asignados</label><input id="pk" type="number" inputmode="numeric" min="1" placeholder="0"></div>
       <div><label>ID de ruta</label><input id="rid" placeholder="Ej. R-48213"></div>
@@ -146,6 +147,12 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
   <div class="card lock" id="s4">
     <h2>4 · Check-out · Fin de ruta</h2>
     <div class="note">Se habilita al terminar los pasos anteriores.</div>
+    <div id="extras" class="hide">
+      <h3>Maniobras, estadía y otros</h3>
+      <label>Maniobras</label><textarea id="x-man" rows="2" placeholder="Describe si hubo maniobras (opcional)"></textarea>
+      <label>Estadía</label><textarea id="x-est" rows="2" placeholder="Tiempo y motivo de estadía (opcional)"></textarea>
+      <label>Otros</label><textarea id="x-otr" rows="2" placeholder="Cualquier otro concepto (opcional)"></textarea>
+    </div>
     <button class="btn ok" id="bout" disabled>Check OUT · Finalizar ruta</button>
     <div id="outerr"></div>
   </div>
@@ -158,6 +165,7 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
     <div class="note" style="margin:0 0 4px">Úsalo cuando llegas y el cliente cancela el servicio. Se guarda foto con marca de agua, ubicación, fecha y hora.</div>
     <label>Cliente</label><select id="ccli"></select>
     <label>CEDIS / punto</label><select id="ccedis"></select>
+    <button class="btn ghost" type="button" id="det2" style="margin-top:8px">📍 Detectar mi ubicación</button><div id="detbox2"></div>
     <label>ID de ruta (opcional)</label><input id="crid" placeholder="Ej. R-48213">
     <input type="file" id="cfile" accept="image/*" capture="environment" class="hide">
     <button class="btn bad" id="bcam">📷 Tomar foto de evidencia</button>
@@ -296,6 +304,20 @@ function prefillCliente(){
 function fillClientes(sel){sel.innerHTML='<option value="">Selecciona cliente…</option>'+CLI.map(c=>`<option value="${c.id}">${c.nombre}</option>`).join("")}
 function fillCedis(sel,cid){const c=CLI.find(x=>String(x.id)===String(cid));const l=c?c.cedis.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)):[];
   sel.innerHTML='<option value="">Selecciona CEDIS…</option>'+l.map(e=>`<option value="${e.id}">${e.nombre}</option>`).join("");if(l.length===1)sel.selectedIndex=1}
+function detectar(n){
+  const box=$("detbox"+n),btn=$("det"+n),cs=n===1?"cli":"ccli",es=n===1?"cedis":"ccedis";
+  if(!navigator.geolocation){box.innerHTML='<div class="note">Tu dispositivo no permite detectar la ubicación. Elige el CEDIS manualmente.</div>';return}
+  btn.disabled=true;box.innerHTML='<div class="note">Detectando ubicación…</div>';
+  navigator.geolocation.getCurrentPosition(pos=>{
+    btn.disabled=false;const {latitude:la,longitude:lo}=pos.coords;let best=null;
+    CLI.forEach(c=>c.cedis.forEach(e=>{if(e.lat==null||e.lng==null)return;const d=distM(la,lo,+e.lat,+e.lng);if(!best||d<best.d)best={d,c,e}}));
+    if(!best||best.d>3000){box.innerHTML='<div class="note">No detecté un CEDIS cerca de ti. Elígelo manualmente.</div>';return}
+    box.innerHTML=`<div class="okbox" style="margin-top:8px">Detecté <b>${best.c.nombre} · ${best.e.nombre}</b> (a ${best.d>=1000?(best.d/1000).toFixed(1)+" km":best.d+" m"}).<br>¿Es correcto?<div style="display:flex;gap:8px;margin-top:8px"><button class="btn sm" type="button" id="det-si${n}">Sí, es correcto</button><button class="btn ghost sm" type="button" id="det-no${n}">No, lo elijo yo</button></div></div>`;
+    $("det-si"+n).onclick=()=>{$(cs).value=String(best.c.id);$(cs).dispatchEvent(new Event("change"));$(es).value=String(best.e.id);$(es).dispatchEvent(new Event("change"));$(es).dispatchEvent(new Event("input"));box.innerHTML=`<div class="note">✔ ${best.c.nombre} · ${best.e.nombre}</div>`};
+    $("det-no"+n).onclick=()=>{box.innerHTML='<div class="note">Elige el cliente y el CEDIS manualmente.</div>'};
+  },()=>{btn.disabled=false;box.innerHTML='<div class="note">No pude obtener tu ubicación (revisa el permiso). Elige el CEDIS manualmente.</div>'},{enableHighAccuracy:true,timeout:12000,maximumAge:30000});
+}
+$("det1").onclick=()=>detectar(1);$("det2").onclick=()=>detectar(2);
 const cedObj=(cid,eid)=>{const c=CLI.find(x=>String(x.id)===String(cid));return c?c.cedis.find(y=>String(y.id)===String(eid)):null};
 function distM(a,b,c,d){const R=6371000,r=x=>x*Math.PI/180,h=Math.sin(r(c-a)/2)**2+Math.cos(r(a))*Math.cos(r(c))*Math.sin(r(d-b)/2)**2;return Math.round(2*R*Math.asin(Math.sqrt(h)))}
 const fmtDist=m=>m<1000?m+" m":(m/1000).toFixed(1)+" km";
@@ -364,7 +386,9 @@ $("inc-no").onclick=()=>{S.inc=false;$("inclist").classList.add("hide");mark();e
 $("inc-si").onclick=()=>{S.inc=true;$("inclist").classList.remove("hide");mark();enableOut()};
 function mark(){$("inc-no").className="btn "+(S.inc===false?"ok":"ghost");$("inc-si").className="btn "+(S.inc===true?"bad":"ghost")}
 $("incchips").onclick=e=>{const i=e.target.dataset.i;if(i===undefined)return;S.incSel.has(i)?S.incSel.delete(i):S.incSel.add(i);e.target.classList.toggle("on");enableOut()};
-function enableOut(){const ok=S.inc===false||(S.inc===true&&S.incSel.size>0);if(S.stage>=2)setStage(ok?3:2);$("bout").disabled=!(ok&&S.stage>=3)}
+const CLI_EXTRAS=["FULLER","PRIVALIA","SODEXO","SMURFIT","TTAIO"];
+const llevaExtras=()=>S.route&&CLI_EXTRAS.includes(String(S.route.cli||"").toUpperCase().replace(/[^A-Z0-9]/g,""));
+function enableOut(){$("extras").classList.toggle("hide",!llevaExtras());const ok=S.inc===false||(S.inc===true&&S.incSel.size>0);if(S.stage>=2)setStage(ok?3:2);$("bout").disabled=!(ok&&S.stage>=3)}
 $("bout").onclick=async()=>{
   $("bout").disabled=true;err("outerr",null);const r=S.route,res=S.result;
   const fl=Object.entries(S.fallos).filter(([,q])=>q>0).map(([c,q])=>({ruta_id:r.dbId,causa_id:+c,cantidad:q}));
@@ -372,7 +396,7 @@ $("bout").onclick=async()=>{
   let e1=null;
   if(fl.length)e1=(await sb.from("ruta_fallos").upsert(fl)).error;
   if(!e1&&ic.length)e1=(await sb.from("ruta_incidencias").upsert(ic)).error;
-  if(!e1)e1=(await sb.from("rutas").update({estado:"cerrada",checkout_at:new Date().toISOString(),entregados:res.ent,fallidos:res.fal,hubo_incidencias:!!S.inc}).eq("id",r.dbId)).error;
+  if(!e1)e1=(await sb.from("rutas").update({estado:"cerrada",checkout_at:new Date().toISOString(),entregados:res.ent,fallidos:res.fal,hubo_incidencias:!!S.inc,...(llevaExtras()?{maniobras:$("x-man").value.trim()||null,estadia:$("x-est").value.trim()||null,otros:$("x-otr").value.trim()||null}:{})}).eq("id",r.dbId)).error;
   if(e1){err("outerr",e1);$("bout").disabled=false;return}
   const t=new Date(),incs=ic.map(x=>(INCID.find(i=>i.id===x.incidencia_id)||{}).nombre);
   ["s2","s3","s4","sresume"].forEach(x=>$(x).classList.add("hide"));$("sdone").classList.remove("hide");
