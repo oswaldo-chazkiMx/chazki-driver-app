@@ -187,6 +187,7 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
   <div class="card"><h2>Desglose</h2><div id="gdes"></div></div>
   <div class="card hide" id="gflota"><h2>Por driver (periodo elegido)</h2><div id="gflo"></div></div>
   <div class="card"><h2>Últimos pagos</h2><div id="gpag"></div></div>
+  <div class="card"><h2>Mis rutas y cancelaciones</h2><div id="gest"></div></div>
 </section>
 
 <section class="tab" id="t-per">
@@ -455,11 +456,21 @@ async function loadCan(){
 let PAGOS=[],gp="sem";
 async function loadGan(){
   // Un driver que pertenece a un flotillero no ve los pagos: los ve su transportista
-  if(!ACC.puede_ver_ganancias){$("t-gan").innerHTML='<div class="card"><h2>💰 Tus pagos</h2><div class="note" style="font-size:14px;margin-top:0">Los pagos de tus servicios los recibe y consulta tu transportista. Si tienes dudas sobre un pago, habla con él.</div></div>';return}
+  if(!ACC.puede_ver_ganancias){$("t-gan").innerHTML='<div class="card"><h2>💰 Tus pagos</h2><div class="note" style="font-size:14px;margin-top:0">Los pagos de tus servicios los recibe y consulta tu transportista. Si tienes dudas sobre un pago, habla con él.</div></div><div class="card"><h2>Mis rutas y cancelaciones</h2><div id="gest"></div></div>';loadEstatus();return}
+  loadEstatus();
   const d=new Date();d.setDate(d.getDate()-62);
   const sel=ACC.es_flotillero?"*,drivers(nombre),rutas(id_ruta)":"*";
   const q=sb.from("pagos").select(sel).gte("fecha",d.toLocaleDateString("en-CA")).order("fecha",{ascending:false});
   const {data}=ACC.es_flotillero?await q:await q.eq("driver_id",ME.id);PAGOS=data||[];drawG()}
+const EST={por_validar:["Por validar","#946200","#fff4d6"],en_revision:["En revisión","#1d4ed8","#e3ecff"],aprobada:["Aprobada","#0f7a3d","#dff5e6"],rechazada:["Rechazada","#b42318","#fde4e1"],en_curso:["En curso","#555b7a","#ececf4"]};
+const pillE=k=>{const e=EST[k]||EST.por_validar;return `<span style="background:${e[2]};color:${e[1]};font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;white-space:nowrap">${e[0]}</span>`};
+async function loadEstatus(){
+  const box=$("gest");if(!box)return;
+  const [r,c]=await Promise.all([sb.rpc("mis_rutas_estatus"),sb.rpc("mis_cancelaciones_estatus")]);
+  const fl=ACC.es_flotillero,f=x=>new Date(x).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
+  const rows=(r.data||[]).map(x=>`<div class="item"><div><b>Ruta ${x.id_ruta}</b><small>${f(x.fecha)} · ${x.cliente} · ${x.cedis}${fl?" · "+x.driver:""} · ${x.entregados==null?"—":x.entregados}/${x.asignados}</small></div>${pillE(x.estatus)}</div>`).join("");
+  const can=(c.data||[]).map(x=>`<div class="item"><div><b>Cancelación${x.id_ruta?" · Ruta "+x.id_ruta:""}</b><small>${f(x.fecha)} · ${x.cliente} · ${x.cedis}${fl?" · "+x.driver:""}</small></div>${pillE(x.estatus)}</div>`).join("");
+  box.innerHTML=`<h3 style="margin:4px 0">Rutas</h3>${rows||'<div class="note">Aún no tienes rutas.</div>'}<h3 style="margin:14px 0 4px">Cancelaciones</h3>${can||'<div class="note">Aún no tienes cancelaciones.</div>'}`}
 const parseF=s=>{const [y,m,d]=s.split("-");return new Date(+y,m-1,+d)};
 const monday=d=>{const x=new Date(d);x.setHours(0,0,0,0);x.setDate(x.getDate()-((x.getDay()+6)%7));return x};
 function drawG(){
