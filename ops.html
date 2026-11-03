@@ -39,10 +39,15 @@ td select{padding:6px;border:1px solid var(--line);border-radius:8px;font-size:1
 </head>
 <body>
 <div id="auth" class="hide">
-  <h2 style="margin:0 0 4px">Panel de Operaciones</h2><div style="color:#6b7090;font-size:13px">Chazki Driver</div>
-  <label style="font-size:12px;color:#6b7090;display:block;margin-top:12px">Correo</label><input id="aemail" type="email">
-  <label style="font-size:12px;color:#6b7090">Contraseña</label><input id="apass" type="password">
-  <button id="abtn">Entrar</button><div id="amsg"></div>
+  <h2 style="margin:0 0 4px">Panel de Operaciones</h2><div style="color:#6b7090;font-size:13px">Acceso solo para personal de Chazki, con tu cuenta de Google Workspace (@chazki.com)</div>
+  <button id="agoogle" style="margin-top:16px;background:#fff;color:#1a1d23;border:1px solid #d0d5dd">Entrar con Google</button>
+  <div style="text-align:center;margin-top:12px"><a href="#" id="apw-toggle" style="font-size:12px;color:#6b7090">Usar correo y contraseña</a></div>
+  <div id="apw" class="hide">
+    <label style="font-size:12px;color:#6b7090;display:block;margin-top:8px">Correo @chazki.com</label><input id="aemail" type="email" placeholder="nombre@chazki.com">
+    <label style="font-size:12px;color:#6b7090">Contraseña</label><input id="apass" type="password">
+    <button id="abtn">Entrar</button>
+  </div>
+  <div id="amsg"></div>
 </div>
 <div id="panel" class="hide">
 <header><h1>Chazki Driver · Operaciones</h1><div><span id="who" style="font-size:13px;margin-right:10px"></span><a href="index.html">App driver</a> <button id="out">Salir</button></div></header>
@@ -64,8 +69,22 @@ let R=[],C=[],tab="r",photos={},LIQ={},DRV=[],PRV=[],TAR=null;
 const fd=m=>m==null?"—":(m<1000?m+" m":(m/1000).toFixed(1)+" km");
 const hh=s=>s?new Date(s).toTimeString().slice(0,5):"—";
 const dd=s=>new Date(s).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
-$("abtn").onclick=async()=>{const r=await sb.auth.signInWithPassword({email:$("aemail").value.trim(),password:$("apass").value});
+const dominioOk=e=>/^[^@\s]+@chazki\.com$/i.test((e||"").trim());
+let ROL=null;
+$("apw-toggle").onclick=e=>{e.preventDefault();$("apw").classList.toggle("hide")};
+// Google Workspace: la cuenta debe ser de la organización; el dominio se vuelve a exigir en la base de datos
+$("agoogle").onclick=async()=>{
+  $("amsg").innerHTML="";
+  const {error}=await sb.auth.signInWithOAuth({provider:"google",options:{redirectTo:location.origin+location.pathname,queryParams:{hd:"chazki.com",prompt:"select_account"}}});
+  if(error)$("amsg").innerHTML=`<div class="errbox">No se pudo iniciar con Google: ${error.message}</div>`};
+$("abtn").onclick=async()=>{
+  const email=$("aemail").value.trim(),password=$("apass").value;
+  if(!dominioOk(email)){$("amsg").innerHTML='<div class="errbox">Solo personal de Chazki: usa tu correo @chazki.com.</div>';return}
+  const r=await sb.auth.signInWithPassword({email,password});
   if(r.error){$("amsg").innerHTML='<div class="errbox">Correo o contraseña incorrectos.</div>';return}boot()};
+function aplicarRol(){
+  if(ROL!=="ops")document.querySelectorAll('.tabs button[data-t=v],.tabs button[data-t=l],.tabs button[data-t=p]').forEach(b=>b.remove());
+}
 $("out").onclick=async()=>{await sb.auth.signOut();location.reload()};
 $("lb").onclick=()=>$("lb").classList.add("hide");
 document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===b));tab=b.dataset.t;render()});
@@ -74,7 +93,8 @@ async function boot(){
   const {data:{session}}=await sb.auth.getSession();
   if(!session){$("auth").classList.remove("hide");return}
   const {data:me}=await sb.from("drivers").select("nombre,rol").eq("id",session.user.id).single();
-  if(!me||me.rol!=="ops"){$("auth").classList.remove("hide");$("amsg").innerHTML='<div class="errbox">Esta cuenta no tiene acceso al panel de Operaciones.</div>';await sb.auth.signOut();return}
+  if(!me||!["ops","ih"].includes(me.rol)||!dominioOk(session.user.email)){$("auth").classList.remove("hide");$("amsg").innerHTML='<div class="errbox">Esta cuenta no tiene acceso al panel. Es solo para personal de Chazki con correo @chazki.com.</div>';await sb.auth.signOut();return}
+  ROL=me.rol;aplicarRol();
   $("auth").classList.add("hide");$("panel").classList.remove("hide");$("who").textContent=me.nombre;
   const hoy=new Date().toLocaleDateString("en-CA");$("d1").value=hoy;$("d2").value=hoy;
   const {data:cl}=await sb.from("clientes").select("id,nombre").order("nombre");
@@ -96,7 +116,7 @@ async function load(){
 function render(){
   const cer=R.filter(x=>x.estado==="cerrada"),asg=R.reduce((s,x)=>s+x.paquetes_asignados,0),ent=cer.reduce((s,x)=>s+x.entregados,0),fal=cer.reduce((s,x)=>s+x.fallidos,0);
   const incs=R.reduce((s,x)=>s+x.ruta_incidencias.length,0);
-  $("kpis").innerHTML=[["Rutas",R.length],["En ruta",R.filter(x=>x.estado==="en_ruta").length],["Paquetes asignados",asg],["Entregados",ent],["Fallidos",fal],["Efectividad",(ent+fal)?Math.round(ent/(ent+fal)*100)+"%":"—"],["Cancelaciones",C.length],["Canc. a revisar",C.filter(x=>x.ubicacion_validada==="fuera"||x.ubicacion_validada==="sin_ubicacion").length],["Incidencias",incs],["Por validar",porValidar().length],["Pago validado",fm(sumLiq("pago_driver"))]].map(([k,v])=>`<div class="kpi"><small>${k}</small><b>${v}</b></div>`).join("");
+  $("kpis").innerHTML=[["Rutas",R.length],["En ruta",R.filter(x=>x.estado==="en_ruta").length],["Paquetes asignados",asg],["Entregados",ent],["Fallidos",fal],["Efectividad",(ent+fal)?Math.round(ent/(ent+fal)*100)+"%":"—"],["Cancelaciones",C.length],["Canc. a revisar",C.filter(x=>x.ubicacion_validada==="fuera"||x.ubicacion_validada==="sin_ubicacion").length],["Incidencias",incs]].concat(ROL==="ops"?[["Por validar",porValidar().length],["Pago validado",fm(sumLiq("pago_driver"))]]:[]).map(([k,v])=>`<div class="kpi"><small>${k}</small><b>${v}</b></div>`).join("");
   let h="";
   if(tab==="r")h=`<table><tr><th>Fecha</th><th>Driver</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Zonas</th><th>Llegada</th><th>Asig.</th><th>Entreg.</th><th>Fall.</th><th>Estado</th></tr>`+
     (R.map(x=>`<tr><td>${dd(x.checkin_at)}</td><td>${x.drivers.nombre}<br><small>${x.drivers.codigo||""}</small></td><td><b>${x.cedis.clientes.nombre}</b>${x.drivers.cliente_default_id&&x.drivers.cliente_default_id!==x.cedis.cliente_id?` <span class="pill w">Otra cuenta</span>`:""}<br>${x.cedis.nombre}</td><td>${x.id_ruta}</td><td>${x.zonas.join(", ")}</td><td>${hh(x.hora_llegada_cedis)}</td><td>${x.paquetes_asignados}</td><td>${x.entregados??"—"}</td><td>${x.fallidos??"—"}</td><td><span class="pill ${x.estado==="cerrada"?"ok":"w"}">${x.estado==="cerrada"?"Cerrada "+hh(x.checkout_at):"En ruta"}</span></td></tr>`).join("")||`<tr><td colspan="10">Sin rutas en este periodo.</td></tr>`)+`</table>`;
@@ -119,7 +139,7 @@ const sumLiq=k=>Object.values(LIQ).reduce((s,x)=>s+Number(x[k]||0),0);
 const porValidar=()=>R.filter(x=>x.estado==="cerrada"&&!LIQ[x.id]&&cuentaDe(x.cedis.clientes.nombre));
 function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),3200)}
 async function cargaExtra(){
-  LIQ={};const ids=R.map(x=>x.id);
+  LIQ={};if(ROL!=="ops"){DRV=[];PRV=[];return}const ids=R.map(x=>x.id);
   const [l,d,p]=await Promise.all([
     ids.length?sb.from("liquidaciones").select("*").in("ruta_id",ids):{data:[]},
     sb.from("drivers").select("id,nombre,codigo,rol,estatus,proveedor_id").order("nombre"),
