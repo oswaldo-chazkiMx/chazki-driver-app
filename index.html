@@ -102,7 +102,7 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
   <div class="stepper" id="stepper"></div>
   <div class="card" id="s1">
     <h2>1 · Check-in · ¿Dónde cargas hoy?</h2>
-    <label>Cliente</label><select id="cli"></select>
+    <label>Cliente</label><select id="cli"></select><div class="note" id="cli-hint" style="margin-top:4px"></div>
     <label>CEDIS</label><select id="cedis"></select>
     <div class="grid2">
       <div><label>Paquetes asignados</label><input id="pk" type="number" inputmode="numeric" min="1" placeholder="0"></div>
@@ -273,7 +273,7 @@ async function boot(){
   if(!DRIVER){toast("No se encontró tu perfil de driver");return}
   $("hname").textContent=DRIVER.nombre.split(" ")[0];
   $("opslink").classList.toggle("hide",DRIVER.rol!=="ops");
-  fillClientes($("cli"));fillClientes($("ccli"));
+  fillClientes($("cli"));fillClientes($("ccli"));prefillCliente();
   $("incchips").innerHTML=INCID.map(c=>`<span class="chip" data-i="${c.id}">${c.nombre}</span>`).join("");
   renderStepper();
   const ac=await sb.rpc("mi_acceso_ganancias");if(ac.data)ACC=ac.data;
@@ -286,6 +286,13 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("on",t.id==="t-"+b.dataset.t));window.scrollTo(0,0)});
 
 // ---------- Cliente / CEDIS ----------
+// El cliente de la base de fleet solo se precarga: el driver puede elegir cualquier otro
+function prefillCliente(){
+  const id=DRIVER&&DRIVER.cliente_default_id;if(!id||!CLI.some(c=>c.id===id))return;
+  ["cli","ccli"].forEach(sid=>{const sel=$(sid);sel.value=String(id);fillCedis($(sid==="cli"?"cedis":"ccedis"),id)});
+  const n=cliName(id);$("cli-hint").textContent=`Tu cliente habitual es ${n}. Puedes elegir otro si hoy trabajas en otra cuenta.`;
+  checkIn();checkCan();
+}
 function fillClientes(sel){sel.innerHTML='<option value="">Selecciona cliente…</option>'+CLI.map(c=>`<option value="${c.id}">${c.nombre}</option>`).join("")}
 function fillCedis(sel,cid){const c=CLI.find(x=>String(x.id)===String(cid));const l=c?c.cedis.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)):[];
   sel.innerHTML='<option value="">Selecciona CEDIS…</option>'+l.map(e=>`<option value="${e.id}">${e.nombre}</option>`).join("");if(l.length===1)sel.selectedIndex=1}
