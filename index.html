@@ -62,6 +62,12 @@ button.btn.ok{background:var(--ok)}button.btn.bad{background:var(--bad)}button.b
 canvas{width:100%;border-radius:12px;margin-top:10px;display:block}
 .toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#14172b;color:#fff;padding:11px 18px;border-radius:99px;font-size:13px;z-index:20;opacity:0;transition:.25s;pointer-events:none;max-width:90%;text-align:center}
 .toast.show{opacity:1}
+.doc{display:flex;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.doc:last-child{border:0}
+.doc .ic{width:44px;height:44px;border-radius:12px;background:#eceefb;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
+.doc .info{flex:1;min-width:0}.doc .info b{display:block;font-size:14px}.doc .info small{display:block;color:var(--mut);font-size:12px;margin-top:2px}
+.doc .act{display:flex;flex-direction:column;gap:6px}.doc .act button{border:0;border-radius:10px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;background:#eceefb;color:var(--pri)}.doc .act button:disabled{opacity:.45;cursor:not-allowed}
+.alerta{border-radius:12px;padding:10px 12px;font-size:13px;margin-bottom:8px}.alerta.w{background:#fff7e0;border:1px solid #f6df9b;color:#7a5a00}.alerta.bad{background:#fde3e4;border:1px solid #f4b5b8;color:#8f1d22}
+nav button{position:relative}nav button.alerta-dot::after{content:"";position:absolute;top:7px;left:calc(50% + 8px);width:9px;height:9px;border-radius:50%;background:var(--bad);border:2px solid #fff}
 .hide{display:none!important}
 #auth{position:fixed;inset:0;background:linear-gradient(135deg,var(--pri),var(--pri2));z-index:50;display:flex;align-items:center;justify-content:center;padding:20px}
 #auth .box{background:#fff;border-radius:22px;padding:24px;width:100%;max-width:380px}
@@ -186,6 +192,11 @@ canvas{width:100%;border-radius:12px;margin-top:10px;display:block}
   <div class="card"><h2>🪪 Licencia</h2>
     <div class="kv"><span>Número</span><b id="lnum">—</b></div><div class="kv"><span>Tipo</span><b id="ltip">—</b></div>
     <div class="kv"><span>Vigencia</span><b id="lvig">—</b></div></div>
+  <div class="card" id="docs-card"><h2>📄 Mis documentos</h2>
+    <div id="docs-banner"></div><div id="docs-list"></div>
+    <input type="file" id="docfile" accept="image/*,application/pdf" class="hide">
+    <button class="btn ghost" id="docs-demo" style="margin-top:10px;font-size:14px;padding:12px">Ver ejemplo del diseño</button>
+    <div class="note" id="docs-note"></div></div>
   <div class="card"><h2>📋 Historial de servicios</h2><div id="hist"></div></div>
   <div class="card"><h2>✏️ Actualiza tu información</h2>
     <label>Nombre</label><input id="unom">
@@ -464,6 +475,41 @@ async function loadHist(){
   const {data}=await sb.from("rutas").select("id_ruta,checkin_at,entregados,paquetes_asignados,estado,cedis(nombre,clientes(nombre))").eq("driver_id",ME.id).order("checkin_at",{ascending:false}).limit(15);
   $("hist").innerHTML=(data&&data.length)?data.map(h=>{const d=new Date(h.checkin_at);return `<div class="item"><div><b>${h.cedis.clientes.nombre}</b> · ${h.cedis.nombre}<small>${d.toLocaleDateString("es-MX",{weekday:"short",day:"2-digit",month:"short"})} · Ruta ${h.id_ruta}${h.estado==="cerrada"?` · Entregas ${h.entregados} / ${h.paquetes_asignados}`:""}</small></div><span class="pill ${h.estado==="cerrada"?"ok":"w"}">${h.estado==="cerrada"?"Cerrada":"En ruta"}</span></div>`}).join(""):'<div class="note">Aún no tienes servicios registrados.</div>';
 }
+
+// ---------- Mis documentos (diseño; aún sin conexión a datos) ----------
+const DOC_TIPOS=[{k:"seguro",n:"Seguro del vehículo",ic:"🛡️",campo:"Póliza"},{k:"licencia",n:"Licencia de conducir",ic:"🪪",campo:"Número"},{k:"tarjeta",n:"Tarjeta de circulación",ic:"🚗",campo:"Folio"},{k:"ine",n:"INE",ic:"🆔",campo:"Clave de elector"}];
+let DOCS={},DOCS_DEMO=false,docTarget=null;
+const enDias=n=>{const d=new Date();d.setDate(d.getDate()+n);return d.toLocaleDateString("en-CA")};
+function docsEjemplo(){return {seguro:{numero:"•••• 4821",vence:enDias(12)},licencia:{numero:"•••• 7302",vence:enDias(730)},tarjeta:{numero:"•••• 1159",vence:enDias(-5)},ine:{numero:"•••• 8846",vence:enDias(1900)}}}
+function estadoDoc(d){
+  if(!d)return {txt:"Sin registrar",cls:"w",dias:null};
+  if(d.revision)return {txt:"En revisión",cls:"w",dias:null};
+  const dias=Math.round((parseF(d.vence)-new Date(new Date().toLocaleDateString("en-CA")+"T00:00:00"))/864e5);
+  if(dias<0)return {txt:`Vencido hace ${-dias} ${-dias===1?"día":"días"}`,cls:"bad",dias};
+  if(dias<=30)return {txt:`Vence en ${dias} ${dias===1?"día":"días"}`,cls:"w",dias};
+  return {txt:"Vigente",cls:"ok",dias};
+}
+function drawDocs(){
+  const alertas=[];
+  $("docs-list").innerHTML=DOC_TIPOS.map(t=>{const d=DOCS[t.k],e=estadoDoc(d);
+    if(d&&e.cls==="bad")alertas.push({cls:"bad",m:`${t.n}: ${e.txt.toLowerCase()}. Sube el documento actualizado.`});
+    else if(d&&e.dias!==null&&e.dias<=30)alertas.push({cls:"w",m:`${t.n}: ${e.txt.toLowerCase()}. Ve preparando el nuevo.`});
+    const vence=d&&d.vence?parseF(d.vence).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"}):"";
+    return `<div class="doc"><div class="ic">${t.ic}</div><div class="info"><b>${t.n}</b>
+      <small>${d?`${t.campo} ${d.numero}${vence?" · vence "+vence:""}`:"Aún no hay un documento registrado"}</small>
+      <span class="pill ${e.cls}" style="margin-top:6px">${e.txt}</span></div>
+      <div class="act">${d?`<button data-docver="${t.k}">Ver</button>`:""}<button data-docsub="${t.k}" ${DOCS_DEMO?"":"disabled"}>${d?"Actualizar":"Subir"}</button></div></div>`}).join("");
+  $("docs-banner").innerHTML=alertas.map(a=>`<div class="alerta ${a.cls}">${a.cls==="bad"?"⛔":"⚠️"} ${a.m}</div>`).join("");
+  document.querySelector("nav button[data-t=per]").classList.toggle("alerta-dot",alertas.length>0);
+  $("docs-demo").textContent=DOCS_DEMO?"Quitar el ejemplo":"Ver ejemplo del diseño";
+  $("docs-note").textContent=DOCS_DEMO?"Vista de ejemplo: los datos no son tuyos y no se guardan.":"Esta sección aún no está conectada. Cuando lo esté, aquí consultarás tu seguro, licencia, tarjeta de circulación e INE, recibirás avisos antes de que venzan y podrás subir el documento nuevo.";
+  document.querySelectorAll("[data-docsub]").forEach(b=>b.onclick=()=>{docTarget=b.dataset.docsub;$("docfile").click()});
+  document.querySelectorAll("[data-docver]").forEach(b=>b.onclick=()=>toast("En el app real se abrirá la imagen del documento"));
+}
+$("docs-demo").onclick=()=>{DOCS_DEMO=!DOCS_DEMO;DOCS=DOCS_DEMO?docsEjemplo():{};drawDocs()};
+$("docfile").onchange=e=>{const f=e.target.files[0];e.target.value="";if(!f||!docTarget||!DOCS_DEMO)return;
+  const base=DOCS[docTarget]||{numero:"•••• ----"};DOCS[docTarget]={...base,revision:true};drawDocs();toast("Documento enviado a revisión (ejemplo): "+f.name)};
+drawDocs();
 
 sb.auth.onAuthStateChange(ev=>{if(ev==="SIGNED_OUT")location.reload()});
 if("serviceWorker" in navigator&&location.protocol.startsWith("http"))navigator.serviceWorker.register("sw.js").catch(()=>{});
