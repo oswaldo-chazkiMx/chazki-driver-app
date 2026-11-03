@@ -254,7 +254,7 @@ async function boot(){
   $("auth").classList.add("hide");ME=session.user;
   const [d,cl,ca,ic]=await Promise.all([
     sb.from("drivers").select("*").eq("id",ME.id).single(),
-    sb.from("clientes").select("id,nombre,cedis(id,nombre)").eq("activo",true).order("nombre"),
+    sb.from("clientes").select("id,nombre,cedis(id,nombre,lat,lng,radio_m)").eq("activo",true).order("nombre"),
     sb.from("causas_fallo").select("*").order("orden"),
     sb.from("tipos_incidencia").select("*").order("orden")]);
   DRIVER=d.data;CLI=(cl.data||[]);CAUSAS=ca.data||[];INCID=ic.data||[];
@@ -276,11 +276,15 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
 function fillClientes(sel){sel.innerHTML='<option value="">Selecciona cliente…</option>'+CLI.map(c=>`<option value="${c.id}">${c.nombre}</option>`).join("")}
 function fillCedis(sel,cid){const c=CLI.find(x=>String(x.id)===String(cid));const l=c?c.cedis.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)):[];
   sel.innerHTML='<option value="">Selecciona CEDIS…</option>'+l.map(e=>`<option value="${e.id}">${e.nombre}</option>`).join("");if(l.length===1)sel.selectedIndex=1}
+const cedObj=(cid,eid)=>{const c=CLI.find(x=>String(x.id)===String(cid));return c?c.cedis.find(y=>String(y.id)===String(eid)):null};
+function distM(a,b,c,d){const R=6371000,r=x=>x*Math.PI/180,h=Math.sin(r(c-a)/2)**2+Math.cos(r(a))*Math.cos(r(c))*Math.sin(r(d-b)/2)**2;return Math.round(2*R*Math.asin(Math.sqrt(h)))}
+const fmtDist=m=>m<1000?m+" m":(m/1000).toFixed(1)+" km";
 const cliName=id=>(CLI.find(x=>String(x.id)===String(id))||{}).nombre||"";
 const cedName=(cid,eid)=>{const c=CLI.find(x=>String(x.id)===String(cid));const e=c&&c.cedis.find(y=>String(y.id)===String(eid));return e?e.nombre:""};
 $("cli").onchange=()=>{fillCedis($("cedis"),$("cli").value);checkIn()};
-$("ccli").onchange=()=>{fillCedis($("ccedis"),$("ccli").value);checkCan()};
-$("ccedis").onchange=checkCan;
+function resetFoto(){if(canBlob){canBlob=null;$("cv").classList.add("hide");$("cmeta").innerHTML='<span style="color:var(--bad)">Cambiaste el CEDIS: vuelve a tomar la foto para validar tu ubicación.</span>'}}
+$("ccli").onchange=()=>{fillCedis($("ccedis"),$("ccli").value);resetFoto();checkCan()};
+$("ccedis").onchange=()=>{resetFoto();checkCan()};
 
 // ---------- Ruta ----------
 function renderStepper(){const n=["Check-in","Fin de ruta","Incidencias","Check-out"];
@@ -363,7 +367,7 @@ $("bout").onclick=async()=>{
 // ---------- Cancelación ----------
 let canBlob=null,canMeta=null;
 $("bcam").onclick=()=>$("cfile").click();
-$("cfile").onchange=e=>{const f=e.target.files[0];if(!f)return;const img=new Image();img.onload=()=>stamp(img);img.src=URL.createObjectURL(f)};
+$("cfile").onchange=e=>{const f=e.target.files[0];if(!f)return;const img=new Image();img.onload=()=>stamp(img);img.src=URL.createObjectURL(f);e.target.value=""};
 function getLoc(){return new Promise(res=>{if(!navigator.geolocation)return res(null);const t=setTimeout(()=>res(null),8000);
   try{navigator.geolocation.getCurrentPosition(p=>{clearTimeout(t);res({lat:p.coords.latitude,lng:p.coords.longitude})},()=>{clearTimeout(t);res(null)},{timeout:7000,enableHighAccuracy:true})}catch(e){clearTimeout(t);res(null)}})}
 async function stamp(img){
@@ -373,15 +377,20 @@ async function stamp(img){
   const d=new Date(),iw=img.naturalWidth||img.width,ih=img.naturalHeight||img.height,w=Math.min(1000,iw),h=Math.round(ih*w/iw);
   const cv=$("cv");cv.width=w;cv.height=h;const x=cv.getContext("2d");x.drawImage(img,0,0,w,h);
   const cli=cliName($("ccli").value)||"—",ced=cedName($("ccli").value,$("ccedis").value)||"—";
+  const co=cedObj($("ccli").value,$("ccedis").value);let val={estado:"sin_coordenadas",dist:null};
+  if(co&&co.lat!=null&&co.lng!=null){const dm=distM(loc.lat,loc.lng,co.lat,co.lng);val={estado:dm<=co.radio_m?"dentro":"fuera",dist:dm,radio:co.radio_m}}
   const dia=d.toLocaleDateString("es-MX",{weekday:"long"}),fecha=d.toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"}),hora=d.toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
-  const lines=["CANCELADO POR EL CLIENTE",`${cli} · ${ced}`,`${dia} ${fecha} · ${hora}`,`GPS: ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}`,`Driver: ${DRIVER.nombre} · ${DRIVER.codigo||""}`];
+  const lines=["CANCELADO POR EL CLIENTE",`${cli} · ${ced}`,`${dia} ${fecha} · ${hora}`,`GPS: ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}`,val.estado==="sin_coordenadas"?"Ubicación del CEDIS: sin validar":`A ${fmtDist(val.dist)} del CEDIS · ${val.estado==="dentro"?"DENTRO":"FUERA"} del radio`,`Driver: ${DRIVER.nombre} · ${DRIVER.codigo||""}`];
   const fs=Math.max(14,Math.round(w/34)),pad=fs*.7,bh=lines.length*fs*1.35+pad*2;
   x.fillStyle="rgba(0,0,0,.62)";x.fillRect(0,h-bh,w,bh);x.textAlign="left";
   lines.forEach((l,i)=>{x.font=(i===0?"bold ":"")+fs+"px sans-serif";x.fillStyle=i===0?"#ffb4b6":"#fff";x.fillText(l,pad,h-bh+pad+fs*1.1+i*fs*1.35)});
   x.save();x.translate(w/2,h/2);x.rotate(-.4);x.font="bold "+Math.round(w/9)+"px sans-serif";x.fillStyle="rgba(255,255,255,.18)";x.textAlign="center";x.fillText("CHAZKI",0,0);x.restore();
   cv.classList.remove("hide");
-  canBlob=await new Promise(r=>cv.toBlob(r,"image/jpeg",.78));canMeta={loc,d};
-  $("cmeta").innerHTML=`📍 ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)} · ${dia} ${fecha} ${hora}`;checkCan();
+  canBlob=await new Promise(r=>cv.toBlob(r,"image/jpeg",.78));canMeta={loc,d,val};
+  const vm=val.estado==="dentro"?`<span style="color:var(--ok)">✔ Estás a ${fmtDist(val.dist)} del CEDIS: ubicación validada</span>`:
+    val.estado==="fuera"?`<span style="color:var(--bad)">⚠ Estás a ${fmtDist(val.dist)} del CEDIS (máximo ${fmtDist(val.radio)}). Si el CEDIS es otro, cámbialo y toma la foto de nuevo. Si lo registras así, Operaciones lo revisará.</span>`:
+    `<span style="color:var(--mut)">Este CEDIS aún no tiene ubicación registrada; no se puede validar.</span>`;
+  $("cmeta").innerHTML=`📍 ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)} · ${dia} ${fecha} ${hora}<br>${vm}`;checkCan();
 }
 function checkCan(){$("bcan").disabled=!(canBlob&&$("ccli").value&&$("ccedis").value)}
 $("bcan").onclick=async()=>{
@@ -395,7 +404,7 @@ $("bcan").onclick=async()=>{
 };
 async function loadCan(){
   const {data}=await sb.from("cancelaciones").select("*,cedis(nombre,clientes(nombre))").eq("driver_id",ME.id).order("capturado_at",{ascending:false}).limit(10);
-  $("canlist").innerHTML=(data&&data.length)?data.map(r=>{const d=new Date(r.capturado_at);return `<div class="item"><div><b>${r.cedis.clientes.nombre}</b> · ${r.cedis.nombre}<small>${d.toLocaleDateString("es-MX",{weekday:"long",day:"2-digit",month:"2-digit"})} · ${d.toTimeString().slice(0,5)}${r.id_ruta?" · Ruta "+r.id_ruta:""}</small></div><span class="pill bad">Cancelado</span></div>`}).join(""):'<div class="note">Aún no hay cancelaciones.</div>';
+  $("canlist").innerHTML=(data&&data.length)?data.map(r=>{const d=new Date(r.capturado_at);return `<div class="item"><div><b>${r.cedis.clientes.nombre}</b> · ${r.cedis.nombre}<small>${d.toLocaleDateString("es-MX",{weekday:"long",day:"2-digit",month:"2-digit"})} · ${d.toTimeString().slice(0,5)}${r.id_ruta?" · Ruta "+r.id_ruta:""}</small></div>${r.ubicacion_validada==="fuera"?'<span class="pill w">Ubicación a revisar</span>':'<span class="pill bad">Cancelado</span>'}</div>`}).join(""):'<div class="note">Aún no hay cancelaciones.</div>';
 }
 
 // ---------- Ganancias ----------
