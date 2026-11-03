@@ -72,16 +72,17 @@ $("lb").onclick=()=>$("lb").classList.add("hide");
 document.querySelectorAll(".role-nav button").forEach(b=>b.onclick=()=>seleccionarTab(b));
 $("go").onclick=load;
 async function boot(){
+  $("loading").classList.remove("hide");
   const {data:{session}}=await sb.auth.getSession();
-  if(!session){$("auth").classList.remove("hide");return}
+  if(!session){$("auth").classList.remove("hide");$("loading").classList.add("hide");return}
   const {data:me}=await sb.from("drivers").select("nombre,rol").eq("id",session.user.id).single();
-  if(!me||!Object.keys(TABS).includes(me.rol)||!dominioOk(session.user.email)){$("auth").classList.remove("hide");$("amsg").innerHTML='<div class="errbox">Esta cuenta no tiene acceso al panel. Es solo para personal de Chazki con correo @chazki.com.</div>';await sb.auth.signOut();return}
+  if(!me||!Object.keys(TABS).includes(me.rol)||!dominioOk(session.user.email)){$("auth").classList.remove("hide");$("amsg").innerHTML='<div class="errbox">Esta cuenta no tiene acceso al panel. Es solo para personal de Chazki con correo @chazki.com.</div>';await sb.auth.signOut();$("loading").classList.add("hide");return}
   ROL=me.rol;aplicarRol();suscribirAvisos(session.user.id);DSET=(await sb.rpc("datasets_disponibles")).data||[];cargaLog();
   $("auth").classList.add("hide");$("panel").classList.remove("hide");$("who").textContent=me.nombre+" · "+(ROLES_TXT[me.rol]||me.rol);
   const hoy=new Date().toLocaleDateString("en-CA");$("d1").value=hoy;$("d2").value=hoy;
   const {data:cl}=await sb.from("clientes").select("id,nombre").order("nombre");
   $("fcli").innerHTML='<option value="">Todos los clientes</option>'+(cl||[]).map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join("");
-  load();
+  try{await load()}finally{$("loading").classList.add("hide")}
 }
 async function load(){
   const a=new Date($("d1").value+"T00:00:00").toISOString(),b=new Date($("d2").value+"T23:59:59").toISOString();

@@ -43,6 +43,15 @@ img.th{width:56px;height:56px;object-fit:cover;border-radius:8px;cursor:pointer}
 #auth button{width:100%;padding:12px;border:0;border-radius:12px;background:var(--pri);color:#fff;font-weight:700;font-size:15px;cursor:pointer}
 .errbox{background:#fde3e4;color:#8f1d22;border-radius:10px;padding:9px;font-size:13px;margin-top:10px}
 .hide{display:none!important}
+#loading{position:fixed;inset:0;background:linear-gradient(145deg,#3923ad,#674ee8);z-index:60;display:flex;align-items:center;justify-content:center;color:#fff;text-align:center;padding:24px}
+#loading .welcome{display:flex;flex-direction:column;align-items:center;gap:12px}
+#loading .logo{width:88px;height:88px;border-radius:22px;box-shadow:0 12px 30px #20106b55}
+#loading .country{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;letter-spacing:.04em;color:#ffffffd9}
+#loading .flag{font-size:20px;line-height:1}
+#loading h1{font-size:26px;letter-spacing:-.03em;margin:4px 0 0}
+#loading p{margin:0;color:#ffffffc9;font-size:14px}
+#loading .spinner{width:24px;height:24px;border:2px solid #ffffff55;border-top-color:#fff;border-radius:50%;animation:loading-spin .8s linear infinite;margin-top:8px}
+@keyframes loading-spin{to{transform:rotate(360deg)}}
 #modal{position:fixed;inset:0;background:rgba(20,23,43,.55);z-index:20;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:24px 12px}
 #modal .box{background:#fff;border-radius:16px;padding:18px;width:100%;max-width:660px}
 #modal label{display:block;font-size:12px;color:var(--mut);margin:10px 0 4px}
@@ -58,6 +67,15 @@ td select{padding:6px;border:1px solid var(--line);border-radius:8px;font-size:1
 </style>
 </head>
 <body>
+<div id="loading" role="status" aria-live="polite">
+  <div class="welcome">
+    <img class="logo" src="icon.svg" alt="Logo de Chazki">
+    <div class="country"><span class="flag" aria-hidden="true">🇲🇽</span><span>MÉXICO</span></div>
+    <h1>Bienvenido</h1>
+    <p>Panel de Operaciones</p>
+    <span class="spinner" aria-hidden="true"></span>
+  </div>
+</div>
 <div id="auth" class="hide">
   <h2 style="margin:0 0 4px">Panel de Operaciones</h2><div style="color:#6b7090;font-size:13px">Acceso solo para personal de Chazki, con tu cuenta de Google Workspace (@chazki.com)</div>
   <button id="agoogle" style="margin-top:16px;background:#fff;color:#1a1d23;border:1px solid #d0d5dd">Entrar con Google</button>
