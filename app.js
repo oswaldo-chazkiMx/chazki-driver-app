@@ -26,7 +26,7 @@ $("abtn").onclick=async()=>{
     if(!r.error&&!r.data.session){$("abtn").disabled=false;$("amsg").innerHTML='<div class="okbox">Cuenta creada. Revisa tu correo y confirma tu cuenta; después inicia sesión.</div>';authMode(false);return}
   }else r=await sb.auth.signInWithPassword({email,password});
   $("abtn").disabled=false;
-  if(r.error){$("amsg").innerHTML=`<div class="errbox">${esc(r.error.message==="Invalid login credentials"?"Correo o contraseña incorrectos.":r.error.message)}</div>`;return}
+  if(r.error){$("amsg").innerHTML=`<div class="errbox">${esc(r.error.message==="Invalid login credentials"?"Correo o contraseña incorrectos.":/Database error saving new user/i.test(r.error.message)?"Tu correo no está en la base de fleet de Chazki. Pide a tu supervisor que te dé de alta y vuelve a intentarlo.":r.error.message)}</div>`;return}
   boot();
 };
 $("blogout").onclick=async()=>{await sb.auth.signOut();location.reload()};

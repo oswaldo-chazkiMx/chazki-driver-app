@@ -17,7 +17,7 @@ $("abtn").onclick=async()=>{
   if(!dominioOk(email)){$("amsg").innerHTML='<div class="errbox">Solo personal de Chazki: usa tu correo @chazki.com.</div>';return}
   const r=await sb.auth.signInWithPassword({email,password});
   if(r.error){$("amsg").innerHTML='<div class="errbox">Correo o contraseña incorrectos.</div>';return}boot()};
-const TABS={master:"rvalbkcifpedt",ops:"rvalbkcifpdt",coordinador:"rvalbkcifpdt",finanzas:"rlcpd",ih:"rvabkcifd"};
+const TABS={master:"rvalbkcifpedtn",ops:"rvalbkcifpdtn",coordinador:"rvalbkcifpdt",finanzas:"rlcpd",ih:"rvabkcifd"};
 const puede=t=>(TABS[ROL]||"").includes(t);
 const veFin=()=>["master","ops","coordinador","finanzas"].includes(ROL);
 const cargaFin=()=>veFin()||ROL==="ih";
@@ -70,7 +70,7 @@ function render(){
     (rows.map(({x,i})=>`<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${esc(x.cedis.clientes.nombre)} · ${esc(x.cedis.nombre)}</td><td><span class="pill bad">${esc(i.tipos_incidencia.nombre)}</span></td><td>${esc(i.comentario||"—")}</td></tr>`).join("")||`<tr><td colspan="5">Sin incidencias en este periodo.</td></tr>`)+`</table>`}
   if(tab==="f"){const m={};R.forEach(x=>x.ruta_fallos.forEach(f=>{m[f.causas_fallo.nombre]=(m[f.causas_fallo.nombre]||0)+f.cantidad}));const e=Object.entries(m).sort((a,b)=>b[1]-a[1]);
     h=`<table><tr><th>Causa</th><th>Paquetes</th></tr>`+(e.map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join("")||`<tr><td colspan="2">Sin fallidos en este periodo.</td></tr>`)+`</table>`}
-  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();if(tab==="t")h=vistaTarifario();
+  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();if(tab==="t")h=vistaTarifario();if(tab==="n")h=vistaPadron();
   $("view").innerHTML=h;enlazar();
   document.querySelectorAll("img.th").forEach(i=>i.onclick=()=>{$("lbimg").src=i.dataset.u;$("lb").classList.remove("hide")});
 }
@@ -271,6 +271,30 @@ function formTarifa(id){
     $("tf-ok").disabled=true;const {error}=await q;if(error){$("tf-ok").disabled=false;return bad(error.message)}
     if(!id&&RTD.length){for(const r of RTD){const x={...r};x.tipo_unidad=r._lu?row.tipo_unidad:null;x.esquema=r._le?row.esquema:null;delete x._lu;delete x._le;const g=await guardarRegla(x,cuenta,null);if(g.error){toast("Tarifa creada, pero una regla falló: "+g.error.message)}}}
     m.classList.add("hide");TF=null;TAR=null;toast(id?"Tarifa actualizada":"Tarifa agregada");cargaTF()}}
+let PAD={res:null,q:"",cnt:null,msg:""};
+function parseCSV(t){const rows=[];let r=[],c="",q=false;t=t.replace(/^\ufeff/,"");
+  for(let i=0;i<t.length;i++){const ch=t[i];if(q){if(ch==='"'){if(t[i+1]==='"'){c+='"';i++}else q=false}else c+=ch}
+    else if(ch==='"')q=true;else if(ch===","){r.push(c);c=""}else if(ch==="\n"||ch==="\r"){if(ch==="\r"&&t[i+1]==="\n")i++;r.push(c);c="";rows.push(r);r=[]}else c+=ch}
+  if(c!==""||r.length){r.push(c);rows.push(r)}return rows}
+const norm=s=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
+function mapearPadron(rows){let h=rows.findIndex(r=>r.some(c=>/correo|e-?mail/.test(norm(c))));if(h<0)return {error:"No encontré una columna de correo en el archivo."};
+  const H=rows[h].map(norm),col=(re)=>H.findIndex(x=>re.test(x));
+  const ix={email:col(/correo|e-?mail/),nombre:col(/chofer|operador|^nombre/),proveedor:col(/proveedor|transportista/),telefono:col(/tel/),registro:col(/regist|regimen|fiscal|factura/),estatus:col(/estatus|status/),cliente:col(/cliente/),ciudad:col(/ciudad|plaza/),unidad:col(/unidad|vehiculo/)};
+  const out=rows.slice(h+1).map(r=>{const o={};for(const k in ix)o[k]=ix[k]>=0?(r[ix[k]]||"").trim():"";return o}).filter(o=>/@/.test(o.email));
+  return {rows:out,cols:Object.keys(ix).filter(k=>ix[k]>=0)}}
+async function padronStats(){const r=await sb.from("padron_fleet").select("estatus").limit(20000);const a=r.data||[];PAD.cnt={total:a.length,activos:a.filter(x=>String(x.estatus).toUpperCase()==="ACTIVO").length};render()}
+async function padronBuscar(q){const s=q.trim();if(!s){PAD.res=null;render();return}const r=await sb.from("padron_fleet").select("*").or(`email.ilike.%${s}%,nombre.ilike.%${s}%,proveedor_nombre.ilike.%${s}%`).order("nombre").limit(50);PAD.res=r.data||[];render()}
+function vistaPadron(){
+  if(!PAD.cnt){padronStats();return '<div style="padding:16px">Cargando padrón…</div>'}
+  const sty='style="padding:9px;border:1px solid var(--line);border-radius:10px"';
+  const res=PAD.res?`<table><tr><th>Correo</th><th>Nombre</th><th>Proveedor</th><th>Cliente</th><th>Estatus</th><th></th></tr>${PAD.res.map(x=>`<tr><td>${esc(x.email)}</td><td>${esc(x.nombre||"—")}</td><td>${esc(x.proveedor_nombre||"—")}</td><td>${esc(x.cliente||"—")}</td><td><span class="pill ${String(x.estatus).toUpperCase()==="ACTIVO"?"ok":"bad"}">${esc(x.estatus)}</span></td><td><button class="btn ghost sm" data-pe="${esc(x.email)}" data-pv="${String(x.estatus).toUpperCase()==="ACTIVO"?"BAJA":"ACTIVO"}">${String(x.estatus).toUpperCase()==="ACTIVO"?"Dar de baja":"Reactivar"}</button></td></tr>`).join("")||'<tr><td colspan="6">Sin resultados.</td></tr>'}</table>`:"";
+  return `<h3 style="margin:12px 8px 0">Padrón de fleet</h3><div style="padding:0 8px"><span class="pill ok">${PAD.cnt.activos} activos</span> <span class="pill w">${PAD.cnt.total-PAD.cnt.activos} en baja</span> <small>Solo los correos de este padrón pueden crear cuenta de driver. Una baja desactiva la cuenta.</small></div>
+   <div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px;align-items:center"><input type="file" id="pd-f" accept=".csv,text/csv" ${sty}><button class="btn" id="pd-go" disabled>Cargar archivo</button></div>
+   <div id="pd-msg" style="padding:0 8px 6px"><small>${esc(PAD.msg||"Sube el CSV exportado de la hoja de la base de drivers. Detecto las columnas por su nombre (correo, chofer, proveedor, teléfono, registro fiscal, estatus, cliente, ciudad, unidad).")}</small></div>
+   <h3 style="margin:12px 8px 0">Alta individual</h3><div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px"><input id="pd-e" type="email" placeholder="correo del driver" ${sty}><input id="pd-n" placeholder="Nombre" ${sty}><input id="pd-p" placeholder="Proveedor / flotillero" ${sty}><button class="btn" id="pd-a">Agregar</button></div>
+   <h3 style="margin:12px 8px 0">Buscar</h3><div style="padding:8px"><input id="pd-q" placeholder="Correo, nombre o proveedor" value="${esc(PAD.q)}" ${sty} style="width:100%"></div>${res}`}
+let PADROWS=null;
+async function padronEnviar(rows){let tot={nuevos:0,actualizados:0,omitidos:0};for(let i=0;i<rows.length;i+=500){const {data,error}=await sb.rpc("padron_cargar",{p_rows:rows.slice(i,i+500)});if(error)throw error;for(const k in tot)tot[k]+=data[k]||0}return tot}
 const NIVEL={master:"Cuenta maestra · acceso completo",ops:"Operaciones · acceso completo",coordinador:"Coordinador · operación y pagos, sin cobro ni utilidad",finanzas:"Finanzas · pagos, liquidaciones y utilidad",ih:"Supervisor · datos operativos, sin importes"};
 const CATALOGO={rutas:["Rutas","Cada ruta con driver, flotillero, cliente, CEDIS, paquetes, efectividad, estatus de validación, manifiestos y extras (maniobras, estadía, otros)."],
  cancelaciones:["Cancelaciones","Cancelaciones con ubicación, distancia al CEDIS, validación y estatus."],incidencias:["Incidencias","Incidencias reportadas por ruta, con comentario."],fallidos:["Fallidos por causa","Paquetes fallidos por causa y ruta."],
@@ -336,7 +360,13 @@ function enlazar(){
   document.querySelectorAll("[data-val]").forEach(b=>b.onclick=()=>abrirValidar(+b.dataset.val));
   document.querySelectorAll("[data-anu]").forEach(b=>b.onclick=()=>anular(+b.dataset.anu));
   document.querySelectorAll("[data-gd]").forEach(b=>b.onclick=()=>guardarDriver(b.dataset.gd));
-  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-cpa]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpa,true));document.querySelectorAll("[data-cpr]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpr,false));document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-rev]").forEach(b=>b.onclick=()=>revisarCan(+b.dataset.rev));document.querySelectorAll("[data-tfv]").forEach(b=>b.onclick=()=>{TFV=b.dataset.tfv;render()});
+  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-cpa]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpa,true));document.querySelectorAll("[data-cpr]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpr,false));document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-rev]").forEach(b=>b.onclick=()=>revisarCan(+b.dataset.rev));const pdf=$("pd-f");if(pdf){pdf.onchange=async e=>{const f=e.target.files[0];if(!f)return;const m=mapearPadron(parseCSV(await f.text()));
+    if(m.error){PAD.msg=m.error;PADROWS=null;render();return}PADROWS=m.rows;PAD.msg=`${m.rows.length} filas con correo. Columnas detectadas: ${m.cols.join(", ")}.`;$("pd-msg").innerHTML=`<small>${esc(PAD.msg)}</small>`;$("pd-go").disabled=!m.rows.length}
+  $("pd-go").onclick=async()=>{if(!PADROWS)return;$("pd-go").disabled=true;try{const t=await padronEnviar(PADROWS);PAD.msg=`Listo: ${t.nuevos} nuevos, ${t.actualizados} actualizados, ${t.omitidos} omitidos.`;PADROWS=null;PAD.cnt=null;toast("Padrón actualizado");render()}catch(x){PAD.msg="Error: "+(x.message||x);render()}};
+  $("pd-a").onclick=async()=>{const e=$("pd-e").value.trim();if(!e){toast("Escribe el correo");return}try{const t=await padronEnviar([{email:e,nombre:$("pd-n").value,proveedor:$("pd-p").value,estatus:"ACTIVO"}]);toast(t.omitidos?"Correo no válido":"Driver agregado al padrón");PAD.cnt=null;render()}catch(x){toast(x.message)}};
+  $("pd-q").onchange=e=>{PAD.q=e.target.value;padronBuscar(PAD.q)};
+  document.querySelectorAll("[data-pe]").forEach(b=>b.onclick=async()=>{const {error}=await sb.rpc("padron_cargar",{p_rows:[{email:b.dataset.pe,estatus:b.dataset.pv}]});if(error){toast(error.message);return}toast(b.dataset.pv==="BAJA"?"Driver dado de baja":"Driver reactivado");PAD.cnt=null;padronBuscar(PAD.q)})}
+  document.querySelectorAll("[data-tfv]").forEach(b=>b.onclick=()=>{TFV=b.dataset.tfv;render()});
   document.querySelectorAll("[data-re]").forEach(b=>b.onclick=()=>formRegla(+b.dataset.re));
   const rgn=$("rg-n");if(rgn)rgn.onclick=()=>formRegla(null);const rfc=$("rg-fc");if(rfc){rfc.onchange=()=>{RGF.cuenta=rfc.value;render()};$("rg-ft").onchange=e=>{RGF.tipo=e.target.value;render()}}
   const tfc=$("tf-c");if(tfc){tfc.onchange=()=>{TFL.cuenta=tfc.value;render()};$("tf-v").onchange=e=>{TFL.veh=e.target.value;render()};$("tf-e").onchange=e=>{TFL.esq=e.target.value;render()};$("tf-a").onchange=e=>{TFL.act=e.target.checked;render()};
