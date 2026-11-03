@@ -109,6 +109,7 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
       <div><label>Paquetes asignados</label><input id="pk" type="number" inputmode="numeric" min="1" placeholder="0"></div>
       <div><label>ID de ruta</label><input id="rid" placeholder="Ej. R-48213"></div>
     </div>
+    <div id="unidad-w" class="hide"><label>Tipo de unidad de la ruta</label><select id="unidad"><option value="">Selecciona…</option><option value="3.5T">3.5 T (BT)</option><option value="OTRA">Otra unidad</option></select></div>
     <label>Zona(s) que visitarás</label>
     <input id="zinp" placeholder="Escribe una zona y presiona Enter">
     <div class="chips" id="zchips" style="margin-top:8px"></div>
@@ -147,6 +148,14 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
   <div class="card lock" id="s4">
     <h2>4 · Check-out · Fin de ruta</h2>
     <div class="note">Se habilita al terminar los pasos anteriores.</div>
+    <div id="manif" class="hide">
+      <h3>Manifiestos (obligatorio)</h3>
+      <div class="note" style="margin-top:0">Sube las fotos de tus manifiestos antes del check out. Mínimo 1, máximo 10.</div>
+      <div id="manif-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px"></div>
+      <input type="file" id="manif-file" accept="image/*" multiple class="hide">
+      <button class="btn ghost" type="button" id="manif-add" style="margin-top:8px">📷 Agregar fotos</button>
+      <div id="manif-err"></div>
+    </div>
     <div id="extras" class="hide">
       <h3>Maniobras, estadía y otros</h3>
       <label>Maniobras</label><textarea id="x-man" rows="2" placeholder="Describe si hubo maniobras (opcional)"></textarea>
@@ -208,7 +217,6 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
     <input type="file" id="docfile" accept="image/*,application/pdf" class="hide">
     <button class="btn ghost" id="docs-demo" style="margin-top:10px;font-size:14px;padding:12px">Ver ejemplo del diseño</button>
     <div class="note" id="docs-note"></div></div>
-  <div class="card"><h2>📋 Historial de servicios</h2><div id="hist"></div></div>
   <div class="card"><h2>✏️ Actualiza tu información</h2>
     <label>Teléfono</label><input id="utel" inputmode="tel">
     <button class="btn ghost" id="btel" style="margin-top:8px">Guardar teléfono</button>
@@ -294,7 +302,7 @@ async function boot(){
   $("incchips").innerHTML=INCID.map(c=>`<span class="chip" data-i="${c.id}">${c.nombre}</span>`).join("");
   renderStepper();
   const ac=await sb.rpc("mi_acceso_ganancias");if(ac.data)ACC=ac.data;
-  await Promise.all([loadPerfil(),loadHist(),loadGan(),loadCan(),resumeRoute()]);
+  await Promise.all([loadPerfil(),loadGan(),loadCan(),resumeRoute()]);
   if(ACC.es_flotillero){$("navdr").classList.remove("hide");loadDrivers()}
 }
 
@@ -353,7 +361,7 @@ function setStage(n){
 async function resumeRoute(){
   const {data}=await sb.from("rutas").select("*,cedis(id,nombre,cliente_id)").eq("driver_id",ME.id).eq("estado","en_ruta").order("checkin_at",{ascending:false}).limit(1);
   if(!data||!data.length)return;const r=data[0];
-  S.route={dbId:r.id,cli:cliName(r.cedis.cliente_id),cliId:r.cedis.cliente_id,cedis:r.cedis.nombre,cedisId:r.cedis.id,pk:r.paquetes_asignados,rid:r.id_ruta,zonas:r.zonas,
+  S.route={unidad:r.tipo_unidad,dbId:r.id,cli:cliName(r.cedis.cliente_id),cliId:r.cedis.cliente_id,cedis:r.cedis.nombre,cedisId:r.cedis.id,pk:r.paquetes_asignados,rid:r.id_ruta,zonas:r.zonas,
     hora:new Date(r.hora_llegada_cedis).toTimeString().slice(0,5),checkin:new Date(r.checkin_at)};
   prefillCan();setStage(1);updFin();
 }
@@ -365,15 +373,18 @@ function addZona(){const v=$("zinp").value.trim();if(v&&!S.zonas.includes(v))S.z
 $("zchips").onclick=e=>{const i=e.target.dataset.i;if(i!==undefined){S.zonas.splice(+i,1);addZona()}};
 $("bnow").onclick=()=>{$("hora").value=new Date().toTimeString().slice(0,5);checkIn()};
 ["pk","rid","hora","cedis"].forEach(id=>$(id).addEventListener("input",checkIn));
-function checkIn(){const ok=$("cli").value&&$("cedis").value&&+$("pk").value>0&&$("rid").value.trim()&&S.zonas.length&&$("hora").value;
+const esCoppel=()=>/^COPPEL/i.test(cliName($("cli").value)||"");
+function syncUnidad(){const on=esCoppel();$("unidad-w").classList.toggle("hide",!on);if(on&&!$("unidad").value&&/BT/i.test(cliName($("cli").value)))$("unidad").value="3.5T";if(!on)$("unidad").value=""}
+$("unidad").onchange=()=>checkIn();
+function checkIn(){syncUnidad();const ok=$("cli").value&&$("cedis").value&&(!esCoppel()||$("unidad").value)&&+$("pk").value>0&&$("rid").value.trim()&&S.zonas.length&&$("hora").value;
   $("bin").disabled=!ok;$("inhint").textContent=ok?"Todo listo. Presiona Check IN para iniciar tu ruta.":"Completa todos los campos para habilitar el check-in."}
 $("bin").onclick=async()=>{
   $("bin").disabled=true;err("inerr",null);
   const hoy=new Date().toLocaleDateString("en-CA");
   const llegada=new Date(`${hoy}T${$("hora").value}`).toISOString();
-  const {data,error}=await sb.from("rutas").insert({driver_id:ME.id,cedis_id:+$("cedis").value,id_ruta:$("rid").value.trim(),paquetes_asignados:+$("pk").value,zonas:S.zonas,hora_llegada_cedis:llegada}).select().single();
+  const {data,error}=await sb.from("rutas").insert({driver_id:ME.id,cedis_id:+$("cedis").value,id_ruta:$("rid").value.trim(),paquetes_asignados:+$("pk").value,zonas:S.zonas,hora_llegada_cedis:llegada,tipo_unidad:esCoppel()?$("unidad").value:null}).select().single();
   if(error){err("inerr",error);$("bin").disabled=false;return}
-  S.route={dbId:data.id,cli:cliName($("cli").value),cliId:$("cli").value,cedis:cedName($("cli").value,$("cedis").value),cedisId:$("cedis").value,pk:data.paquetes_asignados,rid:data.id_ruta,zonas:[...S.zonas],hora:$("hora").value,checkin:new Date(data.checkin_at)};
+  S.route={dbId:data.id,cli:cliName($("cli").value),cliId:$("cli").value,cedis:cedName($("cli").value,$("cedis").value),cedisId:$("cedis").value,pk:data.paquetes_asignados,rid:data.id_ruta,zonas:[...S.zonas],hora:$("hora").value,checkin:new Date(data.checkin_at),unidad:data.tipo_unidad};
   prefillCan();setStage(1);toast("Check-in registrado · ¡Buena ruta!");$("ent").value="";$("fal").value="";updFin();
 };
 
@@ -398,7 +409,22 @@ function mark(){$("inc-no").className="btn "+(S.inc===false?"ok":"ghost");$("inc
 $("incchips").onclick=e=>{const i=e.target.dataset.i;if(i===undefined)return;S.incSel.has(i)?S.incSel.delete(i):S.incSel.add(i);e.target.classList.toggle("on");enableOut()};
 const CLI_EXTRAS=["FULLER","PRIVALIA","SODEXO","SMURFIT","TTAIO"];
 const llevaExtras=()=>S.route&&CLI_EXTRAS.includes(String(S.route.cli||"").toUpperCase().replace(/[^A-Z0-9]/g,""));
-function enableOut(){$("extras").classList.toggle("hide",!llevaExtras());const ok=S.inc===false||(S.inc===true&&S.incSel.size>0);if(S.stage>=2)setStage(ok?3:2);$("bout").disabled=!(ok&&S.stage>=3)}
+const requiereManif=()=>S.route&&S.route.unidad==="3.5T"&&/^COPPEL/i.test(S.route.cli||"");
+let MANIF=[],manifCargado=false;
+async function loadManif(){manifCargado=true;const {data}=await sb.from("ruta_manifiestos").select("id,foto_path").eq("ruta_id",S.route.dbId).order("id");
+  const paths=(data||[]).map(x=>x.foto_path);const u=paths.length?(await sb.storage.from("manifiestos").createSignedUrls(paths,3600)).data||[]:[];
+  MANIF=(data||[]).map(x=>({...x,url:(u.find(y=>y.path===x.foto_path)||{}).signedUrl}));drawManif();enableOut()}
+function drawManif(){$("manif-grid").innerHTML=MANIF.map(m=>`<div style="position:relative"><img src="${m.url||""}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px"><button type="button" data-mx="${m.id}" style="position:absolute;top:4px;right:4px;border:0;border-radius:99px;width:24px;height:24px;background:#000a;color:#fff">✕</button></div>`).join("");
+  $("manif-add").textContent=`📷 Agregar fotos (${MANIF.length}/10)`;$("manif-add").disabled=MANIF.length>=10;
+  $("manif-grid").querySelectorAll("[data-mx]").forEach(b=>b.onclick=async()=>{const m=MANIF.find(x=>x.id==b.dataset.mx);await sb.storage.from("manifiestos").remove([m.foto_path]);await sb.from("ruta_manifiestos").delete().eq("id",m.id);await loadManif()})}
+async function comprimir(file){const bmp=await createImageBitmap(file);const k=Math.min(1,1600/Math.max(bmp.width,bmp.height));const c=document.createElement("canvas");c.width=Math.round(bmp.width*k);c.height=Math.round(bmp.height*k);c.getContext("2d").drawImage(bmp,0,0,c.width,c.height);return new Promise(r=>c.toBlob(r,"image/jpeg",0.8))}
+$("manif-add").onclick=()=>$("manif-file").click();
+$("manif-file").onchange=async e=>{err("manif-err",null);const fs=[...e.target.files].slice(0,10-MANIF.length);e.target.value="";if(!fs.length)return;$("manif-add").disabled=true;
+  for(const [i,f] of fs.entries()){try{const blob=await comprimir(f);const path=`${ME.id}/${S.route.dbId}/${Date.now()}-${i}.jpg`;
+    const up=await sb.storage.from("manifiestos").upload(path,blob,{contentType:"image/jpeg"});if(up.error)throw up.error;
+    const ins=await sb.from("ruta_manifiestos").insert({ruta_id:S.route.dbId,foto_path:path});if(ins.error)throw ins.error}catch(x){err("manif-err",x);break}}
+  await loadManif()};
+function enableOut(){const rm=!!requiereManif();$("manif").classList.toggle("hide",!rm);if(rm&&!manifCargado&&S.route)loadManif();$("extras").classList.toggle("hide",!llevaExtras());const ok=(S.inc===false||(S.inc===true&&S.incSel.size>0))&&(!rm||MANIF.length>0);if(S.stage>=2)setStage((S.inc===false||(S.inc===true&&S.incSel.size>0))?3:2);$("bout").disabled=!(ok&&S.stage>=3)}
 $("bout").onclick=async()=>{
   $("bout").disabled=true;err("outerr",null);const r=S.route,res=S.result;
   const fl=Object.entries(S.fallos).filter(([,q])=>q>0).map(([c,q])=>({ruta_id:r.dbId,causa_id:+c,cantidad:q}));
@@ -415,7 +441,7 @@ $("bout").onclick=async()=>{
   <div class="kv"><span>Efectividad</span><b>${Math.round(res.ent/r.pk*100)}%</b></div>
   <div class="kv"><span>Incidencias</span><b>${incs.length?incs.join(", "):"Ninguna"}</b></div>
   <div class="kv"><span>Check-out</span><b>${t.toTimeString().slice(0,5)}</b></div><button class="btn" id="bnew">Iniciar nueva ruta</button>`;
-  $("hstate").className="pill w";$("hstate").textContent="Ruta cerrada";$("bnew").onclick=()=>location.reload();loadHist();
+  $("hstate").className="pill w";$("hstate").textContent="Ruta cerrada";$("bnew").onclick=()=>location.reload();
 };
 
 // ---------- Cancelación ----------
@@ -580,10 +606,6 @@ $("bsave").onclick=async()=>{
   const {error}=await sb.rpc("solicitar_cambio_perfil",{p_datos:datos});$("bsave").disabled=false;
   if(error){err("saveerr",error);return}
   toast("Solicitud enviada ✔");modoEdicion(false);loadPerfil()};
-async function loadHist(){
-  const {data}=await sb.from("rutas").select("id_ruta,checkin_at,entregados,paquetes_asignados,estado,cedis(nombre,clientes(nombre))").eq("driver_id",ME.id).order("checkin_at",{ascending:false}).limit(15);
-  $("hist").innerHTML=(data&&data.length)?data.map(h=>{const d=new Date(h.checkin_at);return `<div class="item"><div><b>${h.cedis.clientes.nombre}</b> · ${h.cedis.nombre}<small>${d.toLocaleDateString("es-MX",{weekday:"short",day:"2-digit",month:"short"})} · Ruta ${h.id_ruta}${h.estado==="cerrada"?` · Entregas ${h.entregados} / ${h.paquetes_asignados}`:""}</small></div><span class="pill ${h.estado==="cerrada"?"ok":"w"}">${h.estado==="cerrada"?"Cerrada":"En ruta"}</span></div>`}).join(""):'<div class="note">Aún no tienes servicios registrados.</div>';
-}
 
 // ---------- Mis documentos (diseño; aún sin conexión a datos) ----------
 const DOC_TIPOS=[{k:"seguro",n:"Seguro del vehículo",ic:"🛡️",campo:"Póliza"},{k:"licencia",n:"Licencia de conducir",ic:"🪪",campo:"Número"},{k:"tarjeta",n:"Tarjeta de circulación",ic:"🚗",campo:"Folio"},{k:"ine",n:"INE",ic:"🆔",campo:"Clave de elector"}];
