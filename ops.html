@@ -70,7 +70,7 @@ const fd=m=>m==null?"—":(m<1000?m+" m":(m/1000).toFixed(1)+" km");
 const hh=s=>s?new Date(s).toTimeString().slice(0,5):"—";
 const dd=s=>new Date(s).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
 const dominioOk=e=>/^[^@\s]+@chazki\.com$/i.test((e||"").trim());
-let ROL=null;
+let ROL=null,PEND=[];
 $("apw-toggle").onclick=e=>{e.preventDefault();$("apw").classList.toggle("hide")};
 // Google Workspace: la cuenta debe ser de la organización; el dominio se vuelve a exigir en la base de datos
 $("agoogle").onclick=async()=>{
@@ -82,9 +82,11 @@ $("abtn").onclick=async()=>{
   if(!dominioOk(email)){$("amsg").innerHTML='<div class="errbox">Solo personal de Chazki: usa tu correo @chazki.com.</div>';return}
   const r=await sb.auth.signInWithPassword({email,password});
   if(r.error){$("amsg").innerHTML='<div class="errbox">Correo o contraseña incorrectos.</div>';return}boot()};
-const TABS={master:"rvlcifpe",ops:"rvlcifp",coordinador:"rvlcifp",finanzas:"rlcp",ih:"rcif"};
+const TABS={master:"rvalcifpe",ops:"rvalcifp",coordinador:"rvalcifp",finanzas:"rlcp",ih:"rvacif"};
 const puede=t=>(TABS[ROL]||"").includes(t);
 const veFin=()=>["master","ops","coordinador","finanzas"].includes(ROL);
+const cargaFin=()=>veFin()||ROL==="ih";
+const esCoord=()=>["master","ops","coordinador"].includes(ROL);
 const esOps=()=>["master","ops"].includes(ROL);
 const ROLES_TXT={master:"Cuenta maestra",ops:"Operaciones",coordinador:"Coordinador",ih:"Supervisor",finanzas:"Finanzas"};
 function aplicarRol(){
@@ -133,7 +135,7 @@ function render(){
     (rows.map(({x,i})=>`<tr><td>${dd(x.checkin_at)}</td><td>${x.drivers.nombre}</td><td>${x.cedis.clientes.nombre} · ${x.cedis.nombre}</td><td><span class="pill bad">${i.tipos_incidencia.nombre}</span></td><td>${i.comentario||"—"}</td></tr>`).join("")||`<tr><td colspan="5">Sin incidencias en este periodo.</td></tr>`)+`</table>`}
   if(tab==="f"){const m={};R.forEach(x=>x.ruta_fallos.forEach(f=>{m[f.causas_fallo.nombre]=(m[f.causas_fallo.nombre]||0)+f.cantidad}));const e=Object.entries(m).sort((a,b)=>b[1]-a[1]);
     h=`<table><tr><th>Causa</th><th>Paquetes</th></tr>`+(e.map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join("")||`<tr><td colspan="2">Sin fallidos en este periodo.</td></tr>`)+`</table>`}
-  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();
+  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();
   $("view").innerHTML=h;enlazar();
   document.querySelectorAll("img.th").forEach(i=>i.onclick=()=>{$("lbimg").src=i.dataset.u;$("lb").classList.remove("hide")});
 }
@@ -143,14 +145,16 @@ const pc=n=>n==null?"—":(Number(n)*100).toFixed(1)+"%";
 const nz=s=>(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9 ]/g," ").trim();
 const cuentaDe=c=>c==="MERCADO LIBRE"?"MELI":(c==="COPPEL"||c==="COPPEL BT")?"COPPEL":c==="LIVERPOOL"?"LIVERPOOL":null;
 const sumLiq=k=>Object.values(LIQ).reduce((s,x)=>s+Number(x[k]||0),0);
-const porValidar=()=>R.filter(x=>x.estado==="cerrada"&&!LIQ[x.id]&&cuentaDe(x.cedis.clientes.nombre));
+const porValidar=()=>R.filter(x=>x.estado==="cerrada"&&!LIQ[x.id]&&!PEND.some(q=>q.ruta_id===x.id)&&cuentaDe(x.cedis.clientes.nombre));
 function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),3200)}
 async function cargaExtra(){
-  LIQ={};if(!veFin()){DRV=[];PRV=[];return}const ids=R.map(x=>x.id);
-  const [l,d,p]=await Promise.all([
+  LIQ={};PEND=[];if(!cargaFin()){DRV=[];PRV=[];return}const ids=R.map(x=>x.id);
+  const [l,d,p,pe]=await Promise.all([
     ids.length?sb.from("liquidaciones").select("*").in("ruta_id",ids):{data:[]},
     sb.from("drivers").select("id,nombre,codigo,rol,estatus,proveedor_id").order("nombre"),
-    sb.from("proveedores").select("*").order("nombre")]);
+    sb.from("proveedores").select("*").order("nombre"),
+    sb.from("validaciones_pendientes").select("*,rutas(id_ruta,entregados,paquetes_asignados,drivers(nombre),cedis(nombre,clientes(nombre)))").eq("estatus","pendiente").order("solicitado_en")]);
+  PEND=pe.data||[];
   (l.data||[]).forEach(x=>LIQ[x.ruta_id]=x);DRV=d.data||[];PRV=p.data||[];
   window.INV=ROL==="master"?((await sb.from("staff_invitados").select("*").order("creado_en",{ascending:false})).data||[]):[];
 }
@@ -161,6 +165,11 @@ function vistaPorValidar(){const l=porValidar();
 function vistaValidadas(){const l=Object.values(LIQ);
   return `<table><tr><th>Fecha</th><th>Driver</th><th>Proveedor</th><th>Cuenta · esquema</th><th>Efectiv.</th><th>Costo</th><th>Retención</th><th>IVA</th><th>Pago al proveedor</th><th>Venta</th><th>Utilidad</th><th>Registro</th><th></th></tr>`+
   (l.map(x=>{const ru=R.find(y=>y.id===x.ruta_id),p=PRV.find(y=>y.id===x.proveedor_id);return `<tr><td>${ru?dd(ru.checkin_at):""}</td><td>${ru?ru.drivers.nombre:""}</td><td>${p?p.nombre:"—"}</td><td>${x.cuenta}<br><small>${x.esquema||""}</small></td><td>${pc(x.efectividad)}</td><td>${fm(x.costo_total)}</td><td>${fm(x.retencion)}</td><td>${fm(x.iva)}</td><td><b>${fm(x.pago_driver)}</b></td><td>${fm(x.venta_total)}</td><td>${fm(x.utilidad)}<br><small>${pc(x.margen)}</small></td><td>${x.registro_fiscal}</td><td><button class="btn ghost sm" data-anu="${x.ruta_id}">Anular</button></td></tr>`}).join("")||`<tr><td colspan="13">No hay rutas validadas en este periodo.</td></tr>`)+`</table>`}
+function vistaAprobar(){
+  const f=PEND.map(q=>{const r=q.rutas||{};return `<tr><td>${r.id_ruta||q.ruta_id}</td><td>${r.drivers?r.drivers.nombre:""}</td><td>${r.cedis?r.cedis.clientes.nombre+" · "+r.cedis.nombre:""}</td><td>${r.entregados}/${r.paquetes_asignados}</td><td>No aplicar penalización al pago<br><small>${q.motivo}</small></td><td>${esCoord()?`<button class="btn sm" data-ap="${q.id}">Aprobar</button> <button class="btn ghost sm" data-rc="${q.id}">Rechazar</button>`:'<span class="pill w">En espera</span>'}</td></tr>`}).join("");
+  return `<h3 style="margin:12px 8px 0">Excepciones por aprobar</h3><table><tr><th>Ruta</th><th>Driver</th><th>Cliente · CEDIS</th><th>Entreg.</th><th>Solicitud</th><th></th></tr>${f||'<tr><td colspan="6">Nada pendiente.</td></tr>'}</table>`}
+async function resolverVal(id,ok){const {error}=await sb.rpc("resolver_validacion",{p_id:id,p_aprobar:ok,p_nota:null});
+  if(error){toast(error.message);return}await cargaExtra();render();toast(ok?"Aprobada: ruta validada y pago generado":"Solicitud rechazada")}
 function vistaEquipo(){
   const st='style="padding:9px;border:1px solid var(--line);border-radius:10px"';
   const eq=DRV.filter(d=>["master","ops","coordinador","ih","finanzas"].includes(d.rol)).map(d=>`<tr><td>${d.nombre}</td><td>${ROLES_TXT[d.rol]}</td><td>${d.estatus}</td></tr>`).join("");
@@ -194,7 +203,7 @@ function enlazar(){
   document.querySelectorAll("[data-val]").forEach(b=>b.onclick=()=>abrirValidar(+b.dataset.val));
   document.querySelectorAll("[data-anu]").forEach(b=>b.onclick=()=>anular(+b.dataset.anu));
   document.querySelectorAll("[data-gd]").forEach(b=>b.onclick=()=>guardarDriver(b.dataset.gd));
-  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;const eo=$("eq-ok");if(eo)eo.onclick=asignarRol;
+  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));const eo=$("eq-ok");if(eo)eo.onclick=asignarRol;
 }
 async function guardarDriver(id){const rol=document.querySelector(`[data-rol="${id}"]`).value,pv=document.querySelector(`[data-prov="${id}"]`).value;
   const {error}=await sb.from("drivers").update({rol,proveedor_id:pv?+pv:null}).eq("id",id);
@@ -235,26 +244,34 @@ function tablaRes(j){
 async function abrirValidar(id){
   const ru=R.find(x=>x.id===id);await cargarTarifas();
   const p=provDe(ru.driver_id),cuenta=cuentaDe(ru.cedis.clientes.nombre),m=$("modal");m.classList.remove("hide");
-  const pintar=()=>{const {l,nota}=sugeridas(ru,$("m-todas").checked);
+  const pintar=()=>{let {l,nota}=sugeridas(ru,$("m-todas").checked);
+    const z=$("m-zona").value;if(z)l=l.filter(t=>{const u=(t.zona||"").toUpperCase();return z==="LOCAL"?u.startsWith("LOCAL"):new RegExp("FORANE[AO] "+z+"( |$)").test(u)});
+    if(z&&!l.length)nota=(nota?nota+" · ":"")+"No hay tarifa cargada para ese tipo de ruta";
     $("m-tar").innerHTML=l.map(t=>`<option value="${t.id}">${[t.ubicacion,t.tipo_unidad,t.esquema,t.zona,t.variable==="PEAK"?"PEAK":""].filter(Boolean).join(" · ")} — pago ${fm(t.pago_base)} / cobro ${fm(t.tarifa_cliente)}</option>`).join("");
     $("m-nota-t").textContent=nota;reset()};
   const reset=()=>{$("m-prev").innerHTML="";$("m-ok").disabled=true};
   m.innerHTML=`<div class="box"><h2 style="margin:0 0 4px">Validar ruta ${ru.id_ruta}</h2>
     <div style="color:var(--mut);font-size:13px">${ru.drivers.nombre} · ${ru.cedis.clientes.nombre} · ${ru.cedis.nombre} · ${ru.entregados} entregados de ${ru.paquetes_asignados}</div>
+    <label>Tipo de ruta</label><select id="m-zona"><option value="">Todas</option><option value="LOCAL">Local</option><option value="1">Foránea 1</option><option value="2">Foránea 2</option><option value="3">Foránea 3</option><option value="4">Foránea 4</option></select>
     <label>Tarifa aplicable</label><select id="m-tar"></select>
     <div style="font-size:12px;color:var(--mut);margin-top:4px"><label style="display:inline;margin:0"><input type="checkbox" id="m-todas"> Ver todas las tarifas de la cuenta</label> <span id="m-nota-t" style="color:#946200"></span></div>
     <label>Registro fiscal del proveedor ${p?`(${p.nombre})`:"(sin proveedor asignado)"}</label>
     <select id="m-reg"><option value="">Elige…</option><option ${p&&p.tipo_registro==="FACTURA"?"selected":""}>FACTURA</option><option ${p&&p.tipo_registro==="SIN FACTURA"?"selected":""}>SIN FACTURA</option></select>
-    ${cuenta==="MELI"?`<label style="display:flex;gap:8px;align-items:flex-start;color:var(--ink)"><input type="checkbox" id="m-ex" style="margin-top:2px"> El supervisor validó que la efectividad menor a 90% no fue imputable al driver (se paga la ruta)</label>`:'<input type="checkbox" id="m-ex" class="hide">'}
+    <label>Flotillero / proveedor de esta ruta</label>
+    <select id="m-prov"><option value="">${p?p.nombre+" (el de la base)":"Sin proveedor"}</option>${PRV.filter(x=>!p||x.id!==p.id).map(x=>`<option value="${x.id}">${x.nombre}</option>`).join("")}</select>
+    <label id="m-pd-l" style="display:none;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="m-pd"> Cambiarlo también en el perfil del driver</label>
+    <label style="display:flex;gap:8px;align-items:flex-start;color:var(--ink)"><input type="checkbox" id="m-ex" style="margin-top:2px"> No aplicar la penalización al pago del driver${esCoord()?"":" (requiere aprobación del coordinador; escribe el motivo en la nota)"}</label>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label>Ajuste al pago (+ o −)</label><input type="number" id="m-ap" value="0" step="0.01"></div><div><label>Ajuste al cobro (+ o −)</label><input type="number" id="m-ac" value="0" step="0.01"></div></div>
     <label>Nota (opcional)</label><textarea id="m-nota" rows="2"></textarea>
     <div id="m-prev" style="margin-top:12px"></div>
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button class="btn ghost" id="m-calc">Calcular</button><button class="btn" id="m-ok" disabled>Validar y generar pago</button><button class="btn ghost" id="m-x">Cancelar</button></div></div>`;
   pintar();
   $("m-todas").onchange=pintar;
-  ["m-tar","m-reg","m-ex","m-ap","m-ac"].forEach(i=>$(i).addEventListener("input",reset));
+  $("m-zona").onchange=pintar;$("m-prov").onchange=()=>{$("m-pd-l").style.display=$("m-prov").value?"flex":"none"};
+  ["m-tar","m-reg","m-ex","m-ap","m-ac","m-prov","m-pd"].forEach(i=>$(i).addEventListener("input",reset));
   $("m-x").onclick=()=>m.classList.add("hide");
   const args=()=>({p_ruta_id:id,p_tarifa_id:+$("m-tar").value,p_registro:$("m-reg").value,p_excepcion:$("m-ex").checked,p_ajuste_pago:+$("m-ap").value||0,p_ajuste_cobro:+$("m-ac").value||0});
+  const extra=()=>({p_proveedor_id:$("m-prov").value?+$("m-prov").value:null,p_actualizar_driver:$("m-pd").checked});
   $("m-calc").onclick=async()=>{
     if(!$("m-tar").value){$("m-prev").innerHTML='<div class="errbox">Elige una tarifa.</div>';return}
     const r=await sb.rpc("calcular_liquidacion",args());
@@ -262,9 +279,9 @@ async function abrirValidar(id){
     $("m-prev").innerHTML=tablaRes(r.data);$("m-ok").disabled=false};
   $("m-ok").onclick=async()=>{
     $("m-ok").disabled=true;
-    const r=await sb.rpc("validar_ruta",{...args(),p_nota:$("m-nota").value.trim()||null});
+    const r=await sb.rpc("validar_ruta",{...args(),...extra(),p_nota:$("m-nota").value.trim()||null});
     if(r.error){$("m-prev").innerHTML+=`<div class="errbox">${r.error.message}</div>`;return}
-    m.classList.add("hide");await cargaExtra();render();toast("Ruta validada y pago generado")};
+    m.classList.add("hide");await cargaExtra();render();toast(r.data===0?"Enviada al coordinador para aprobación":"Ruta validada y pago generado")};
 }
 boot();
 </script>
