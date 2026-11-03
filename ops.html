@@ -9,9 +9,11 @@
 :root{--bg:#f3f5f9;--ink:#182230;--mut:#718096;--line:#e5eaf1;--pri:#4b2fd0;--pri2:#674ee8;--ok:#12845b;--bad:#d9434b;--nav:#111827;--navmut:#a7b0c0}
 *{box-sizing:border-box}body{margin:0;height:100vh;overflow:hidden;background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--ink);display:flex;flex-direction:column}
 header{height:72px;background:#fff;color:var(--ink);padding:0 28px;display:flex;justify-content:space-between;align-items:center;gap:16px;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
-header .brand{display:flex;align-items:center;gap:12px;min-width:250px}
-header .brandmark{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,var(--pri),var(--pri2));color:#fff;display:grid;place-items:center;font-size:18px;font-weight:800;box-shadow:0 5px 12px #4b2fd033}
+header .brand{display:flex;align-items:center;gap:14px;min-width:300px}
+header .brandmark{display:block;width:150px;height:auto;max-height:42px;object-fit:contain}
 header h1{margin:0;font-size:16px;letter-spacing:-.02em}header .subtitle{display:block;color:var(--mut);font-size:11px;margin-top:3px}
+header .welcome-title{display:flex;align-items:center;gap:7px}
+header .country-flag{font-size:16px;line-height:1}
 header .head-actions{display:flex;align-items:center;gap:10px}
 header .role{font-size:12px;color:#5541bd;background:#f1efff;padding:7px 11px;border-radius:99px;font-weight:700}
 header button{color:#445064;background:#f3f5f9;border:1px solid var(--line);padding:8px 13px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer}
@@ -38,14 +40,18 @@ header #bell{font-size:16px;padding:7px 11px;position:relative}
 table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--mut);font-weight:600;font-size:12px}
 tr:last-child td{border:0}.pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700}.ok{background:#dcf5ea;color:#0b7a50}.w{background:#fdf0d4;color:#946200}.bad{background:#fde3e4;color:#b3262b}
 img.th{width:56px;height:56px;object-fit:cover;border-radius:8px;cursor:pointer}
-#auth{max-width:380px;margin:12vh auto;background:#fff;border-radius:18px;padding:26px;box-shadow:0 8px 30px rgba(20,23,43,.1)}
+#auth{width:calc(100% - 32px);max-width:420px;margin:auto;background:#fff;border-radius:18px;padding:28px;box-shadow:0 8px 30px rgba(20,23,43,.1)}
+#auth .welcome-brand{text-align:center;margin-bottom:20px}
+#auth .welcome-logo{display:block;width:min(270px,100%);height:auto;margin:0 auto 15px;object-fit:contain}
+#auth .welcome-heading{display:flex;justify-content:center;align-items:center;gap:8px;margin:0 0 5px;font-size:25px;letter-spacing:-.03em}
+#auth .welcome-country{color:var(--mut);font-size:13px;font-weight:600}
 #auth input{width:100%;padding:11px;border:1px solid var(--line);border-radius:10px;margin:6px 0 10px;font-size:15px}
 #auth button{width:100%;padding:12px;border:0;border-radius:12px;background:var(--pri);color:#fff;font-weight:700;font-size:15px;cursor:pointer}
 .errbox{background:#fde3e4;color:#8f1d22;border-radius:10px;padding:9px;font-size:13px;margin-top:10px}
 .hide{display:none!important}
 #loading{position:fixed;inset:0;background:linear-gradient(145deg,#3923ad,#674ee8);z-index:60;display:flex;align-items:center;justify-content:center;color:#fff;text-align:center;padding:24px}
 #loading .welcome{display:flex;flex-direction:column;align-items:center;gap:12px}
-#loading .logo{width:88px;height:88px;border-radius:22px;box-shadow:0 12px 30px #20106b55}
+#loading .logo{display:block;width:min(300px,82vw);height:auto;max-height:76px;object-fit:contain}
 #loading .country{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;letter-spacing:.04em;color:#ffffffd9}
 #loading .flag{font-size:20px;line-height:1}
 #loading h1{font-size:26px;letter-spacing:-.03em;margin:4px 0 0}
@@ -63,13 +69,13 @@ td select{padding:6px;border:1px solid var(--line);border-radius:8px;font-size:1
 #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#14172b;color:#fff;padding:11px 18px;border-radius:99px;font-size:13px;z-index:40;opacity:0;transition:.25s;pointer-events:none;max-width:90%}#toast.show{opacity:1}
 #lb{position:fixed;inset:0;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;z-index:9}#lb img{max-width:92vw;max-height:92vh;border-radius:10px}
 @media(max-width:850px){header{padding:0 18px}.workspace{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}.sidebar{padding:10px 12px;height:auto;overflow:visible}.nav-caption{display:none}.role-nav{display:block}.nav-group{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin-bottom:8px}.role-nav button{font-size:12px;padding:9px 8px;justify-content:center}.nav-icon{width:auto}.content{padding:20px 16px 32px}}
-@media(max-width:560px){header{height:auto;min-height:68px;padding:10px 14px;align-items:flex-start;flex-basis:auto}header .brand{min-width:0}header .brandmark{width:34px;height:34px}header h1{font-size:14px}header .subtitle{display:none}header .role{display:none}header .head-actions{gap:6px}header button{padding:7px 9px}.sidebar{padding:9px}.nav-group{grid-template-columns:repeat(2,minmax(0,1fr))}.content{padding:16px 12px 28px}.page-heading{margin-bottom:13px}.page-heading h2{font-size:19px}.content .bar{gap:8px;padding:10px}.bar label{font-size:12px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.kpi{padding:11px}.kpi b{font-size:22px}}
+@media(max-width:560px){header{height:auto;min-height:68px;padding:10px 14px;align-items:center;flex-basis:auto}header .brand{min-width:0;gap:8px}header .brandmark{width:100px;max-height:30px}header h1{font-size:13px}header .subtitle{display:none}header .role{display:none}header .head-actions{gap:6px}header button{padding:7px 9px}.sidebar{padding:9px}.nav-group{grid-template-columns:repeat(2,minmax(0,1fr))}.content{padding:16px 12px 28px}.page-heading{margin-bottom:13px}.page-heading h2{font-size:19px}.content .bar{gap:8px;padding:10px}.bar label{font-size:12px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.kpi{padding:11px}.kpi b{font-size:22px}}
 </style>
 </head>
 <body>
 <div id="loading" role="status" aria-live="polite">
   <div class="welcome">
-    <img class="logo" src="icon.svg" alt="Logo de Chazki">
+    <img class="logo" src="chazki-logo.webp" alt="Logo de Chazki">
     <div class="country"><span class="flag" aria-hidden="true">🇲🇽</span><span>MÉXICO</span></div>
     <h1>Bienvenido</h1>
     <p>Panel de Operaciones</p>
@@ -77,7 +83,12 @@ td select{padding:6px;border:1px solid var(--line);border-radius:8px;font-size:1
   </div>
 </div>
 <div id="auth" class="hide">
-  <h2 style="margin:0 0 4px">Panel de Operaciones</h2><div style="color:#6b7090;font-size:13px">Acceso solo para personal de Chazki, con tu cuenta de Google Workspace (@chazki.com)</div>
+  <div class="welcome-brand">
+    <img class="welcome-logo" src="chazki-logo.webp" alt="Logo de Chazki">
+    <h1 class="welcome-heading">Bienvenido <span class="country-flag" aria-label="México">🇲🇽</span></h1>
+    <div class="welcome-country">Panel de Operaciones · México</div>
+  </div>
+  <div style="color:#6b7090;font-size:13px">Acceso solo para personal de Chazki, con tu cuenta de Google Workspace (@chazki.com)</div>
   <button id="agoogle" style="margin-top:16px;background:#fff;color:#1a1d23;border:1px solid #d0d5dd">Entrar con Google</button>
   <div style="text-align:center;margin-top:12px"><a href="#" id="apw-toggle" style="font-size:12px;color:#6b7090">Usar correo y contraseña</a></div>
   <div id="apw" class="hide">
@@ -88,7 +99,7 @@ td select{padding:6px;border:1px solid var(--line);border-radius:8px;font-size:1
   <div id="amsg"></div>
 </div>
 <div id="panel" class="hide">
-<header><div class="brand"><div class="brandmark">C</div><div><h1>Chazki Driver</h1><span class="subtitle">Centro de operaciones</span></div></div><div class="head-actions"><span id="who" class="role"></span><button id="bell" type="button" aria-label="Avisos">🔔<span id="bellc" class="hide">0</span></button><button id="out">Salir</button></div></header>
+<header><div class="brand"><img class="brandmark" src="chazki-logo.webp" alt="Chazki"><div><h1 class="welcome-title">Bienvenido <span class="country-flag" aria-label="México">🇲🇽</span></h1><span class="subtitle">Centro de operaciones · México</span></div></div><div class="head-actions"><span id="who" class="role"></span><button id="bell" type="button" aria-label="Avisos">🔔<span id="bellc" class="hide">0</span></button><button id="out">Salir</button></div></header>
 <div class="workspace">
 <aside class="sidebar" aria-label="Navegación principal">
   <nav class="role-nav" aria-label="Secciones operativas">
