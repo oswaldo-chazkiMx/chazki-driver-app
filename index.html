@@ -191,6 +191,7 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
   <div class="card"><h2>Mis rutas y cancelaciones</h2><div id="gest"></div></div>
 </section>
 
+<section class="tab" id="t-dr"><div id="drbox"></div></section>
 <section class="tab" id="t-per">
   <div class="card prof">
     <div class="avatar">🧑‍✈️</div>
@@ -228,6 +229,7 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
   <button class="on" data-t="dia"><span class="ic">🗺️</span>Inicia tu día</button>
   <button data-t="can"><span class="ic">🚫</span>Cancelación</button>
   <button data-t="gan"><span class="ic">💰</span>Ganancias</button>
+  <button data-t="dr" id="navdr" class="hide"><span class="ic">🚚</span>Mis drivers</button>
   <button data-t="per"><span class="ic">👤</span>Perfil</button>
 </nav>
 <div class="toast" id="toast"></div>
@@ -288,6 +290,7 @@ async function boot(){
   renderStepper();
   const ac=await sb.rpc("mi_acceso_ganancias");if(ac.data)ACC=ac.data;
   await Promise.all([loadPerfil(),loadHist(),loadGan(),loadCan(),resumeRoute()]);
+  if(ACC.es_flotillero){$("navdr").classList.remove("hide");loadDrivers()}
 }
 
 // ---------- Navegación ----------
@@ -484,6 +487,33 @@ function drawKpi(){const box=$("gkpi");if(!box)return;const s=statsK(kp,false),q
    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">${T("Efectividad",pct(ef),dl(s.ef,q.ef,true),col)}${T("Rutas",s.R.length,dl(s.R.length,q.R.length,false))}${T("Entregados",s.ent,`<small style="color:var(--mut)">de ${s.asg} asignados</small>`)}${T("Fallidos",s.fal)}${T("Cancelaciones",s.C.length)}${T("Aprobadas",s.apr,`<small style="color:var(--mut)">de ${s.R.length} rutas</small>`)}</div>
    <div class="item" style="margin-top:8px"><span>Días trabajados</span><b>${s.dias}</b></div><div class="item"><span>Tiempo promedio por ruta</span><b>${hm(s.prom)}</b></div><div class="item"><span>Rutas con incidencias</span><b>${s.inc}</b></div>${por}`;
   box.querySelectorAll("#kseg button").forEach(b=>b.onclick=()=>{kp=b.dataset.k;drawKpi()})}
+let DRVS=[],BAJAS=[],dp="sem",dopen={},dform=null;
+async function loadDrivers(){
+  const [d,r,c,b]=await Promise.all([sb.from("drivers").select("id,nombre,codigo,estatus,telefono").neq("id",ME.id).order("nombre"),sb.rpc("mis_rutas_estatus"),sb.rpc("mis_cancelaciones_estatus"),sb.from("bajas_solicitudes").select("*").order("solicitado_en",{ascending:false})]);
+  DRVS=d.data||[];RUTAS_K=r.data||RUTAS_K;CANS_K=c.data||CANS_K;BAJAS=b.data||[];drawDrivers()}
+function drawDrivers(){
+  const box=$("drbox");if(!box)return;const pct=v=>v==null?"—":Math.round(v*100)+"%";
+  const [a,z]=rangoK(dp,false),ok=x=>{const t=new Date(x);return t>=a&&t<z};
+  const f=x=>new Date(x).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
+  const cards=DRVS.map(d=>{
+    const R=RUTAS_K.filter(x=>x.driver_id===d.id),Rp=R.filter(x=>ok(x.fecha)&&x.estatus!=="en_curso"),C=CANS_K.filter(x=>x.driver===d.nombre&&ok(x.fecha));
+    const asg=Rp.reduce((s,x)=>s+(x.asignados||0),0),ent=Rp.reduce((s,x)=>s+(x.entregados||0),0),fal=Rp.reduce((s,x)=>s+(x.fallidos||0),0);
+    const bj=BAJAS.find(x=>x.driver_id===d.id),pend=bj&&bj.estatus==="pendiente",rech=bj&&bj.estatus==="rechazada";
+    const ck=(v)=>v?"✅":"⏳";
+    const estado=pend?`<div class="note" style="margin-top:8px;background:#e3ecff;color:#1d4ed8;padding:8px;border-radius:10px"><b>Baja solicitada</b> · ${f(bj.solicitado_en)}<br>Supervisor ${ck(bj.aprob_supervisor)} · Coordinador ${ck(bj.aprob_coord)}</div>`:(rech?`<div class="note" style="margin-top:8px;color:#b42318">Última solicitud de baja: rechazada (${f(bj.resuelto_en)})</div>`:"");
+    const lista=dopen[d.id]?(R.slice(0,8).map(x=>`<div class="item"><div><b>Ruta ${x.id_ruta}</b><small>${f(x.fecha)} · ${x.cliente} · ${x.entregados==null?"—":x.entregados}/${x.asignados}</small></div>${pillE(x.estatus)}</div>`).join("")||'<div class="note">Sin rutas recientes.</div>'):"";
+    const form=dform===d.id?`<div style="margin-top:10px"><label>Motivo de la baja</label><textarea id="bj-m" rows="2" placeholder="Por qué termina la relación"></textarea><div id="bj-e" class="note" style="color:#b42318"></div><div style="display:flex;gap:8px;margin-top:8px"><button class="btn" data-bjok="${d.id}">Enviar solicitud</button><button class="btn ghost" data-bjx="1">Cancelar</button></div><div class="note" style="margin-top:6px">Requiere autorización del supervisor y del coordinador de Chazki.</div></div>`:"";
+    return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h2 style="margin:0">${d.nombre}</h2><small style="color:var(--mut)">${d.codigo||""}${d.telefono?" · "+d.telefono:""}</small></div>${pillE(d.estatus==="activo"?"aprobada":"rechazada").replace(/Aprobada/,"Activo").replace(/Rechazada/,"Inactivo")}</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px;text-align:center"><div><b style="font-size:18px">${Rp.length}</b><br><small>Rutas</small></div><div><b style="font-size:18px">${pct(asg?ent/asg:null)}</b><br><small>Efect.</small></div><div><b style="font-size:18px">${fal}</b><br><small>Fallidos</small></div><div><b style="font-size:18px">${C.length}</b><br><small>Cancel.</small></div></div>
+      <div style="display:flex;gap:8px;margin-top:10px"><button class="btn ghost" data-dv="${d.id}">${dopen[d.id]?"Ocultar rutas":"Ver rutas"}</button>${pend?"":`<button class="btn ghost" data-bj="${d.id}" style="color:#b42318">Solicitar baja</button>`}</div>${estado}${lista}${form}</div>`}).join("");
+  box.innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">🚚 Mis drivers (${DRVS.length})</h2><div class="seg" id="dseg" style="margin:0;width:150px"><button class="${dp==="sem"?"on":""}" data-p="sem">Semana</button><button class="${dp==="mes"?"on":""}" data-p="mes">Mes</button></div></div></div>${cards||'<div class="card"><div class="note">Aún no tienes drivers en tu flotilla.</div></div>'}`;
+  box.querySelectorAll("#dseg button").forEach(b=>b.onclick=()=>{dp=b.dataset.p;drawDrivers()});
+  box.querySelectorAll("[data-dv]").forEach(b=>b.onclick=()=>{dopen[b.dataset.dv]=!dopen[b.dataset.dv];drawDrivers()});
+  box.querySelectorAll("[data-bj]").forEach(b=>b.onclick=()=>{dform=b.dataset.bj;drawDrivers()});
+  box.querySelectorAll("[data-bjx]").forEach(b=>b.onclick=()=>{dform=null;drawDrivers()});
+  box.querySelectorAll("[data-bjok]").forEach(b=>b.onclick=async()=>{const m=$("bj-m").value.trim();if(!m){$("bj-e").textContent="Escribe el motivo";return}
+    b.disabled=true;const {error}=await sb.rpc("solicitar_baja_driver",{p_driver_id:b.dataset.bjok,p_motivo:m});if(error){$("bj-e").textContent=error.message;b.disabled=false;return}
+    dform=null;await loadDrivers()})}
 const EST={por_validar:["Por validar","#946200","#fff4d6"],en_revision:["En revisión","#1d4ed8","#e3ecff"],aprobada:["Aprobada","#0f7a3d","#dff5e6"],rechazada:["Rechazada","#b42318","#fde4e1"],en_curso:["En curso","#555b7a","#ececf4"]};
 const pillE=k=>{const e=EST[k]||EST.por_validar;return `<span style="background:${e[2]};color:${e[1]};font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;white-space:nowrap">${e[0]}</span>`};
 async function loadEstatus(){

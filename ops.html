@@ -55,7 +55,7 @@ td select{padding:6px;border:1px solid var(--line);border-radius:8px;font-size:1
   <div class="bar"><label>Desde <input type="date" id="d1"></label><label>Hasta <input type="date" id="d2"></label>
     <select id="fcli"><option value="">Todos los clientes</option></select><button id="go" style="padding:9px 16px;border:0;border-radius:10px;background:#4b2fd0;color:#fff;cursor:pointer">Actualizar</button></div>
   <div class="kpis" id="kpis"></div>
-  <div class="tabs" style="flex-wrap:wrap"><button class="on" data-t="r">Rutas</button><button data-t="v">Por validar</button><button data-t="a">Por aprobar</button><button data-t="l">Validadas</button><button data-t="c">Cancelaciones</button><button data-t="i">Incidencias</button><button data-t="f">Fallidos por causa</button><button data-t="p">Proveedores y drivers</button></div>
+  <div class="tabs" style="flex-wrap:wrap"><button class="on" data-t="r">Rutas</button><button data-t="v">Por validar</button><button data-t="a">Por aprobar</button><button data-t="b">Bajas</button><button data-t="l">Validadas</button><button data-t="c">Cancelaciones</button><button data-t="i">Incidencias</button><button data-t="f">Fallidos por causa</button><button data-t="p">Proveedores y drivers</button></div>
   <div class="card" id="view"></div>
 </main></div>
 <div id="lb" class="hide"><img id="lbimg"></div>
@@ -70,7 +70,7 @@ const fd=m=>m==null?"—":(m<1000?m+" m":(m/1000).toFixed(1)+" km");
 const hh=s=>s?new Date(s).toTimeString().slice(0,5):"—";
 const dd=s=>new Date(s).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
 const dominioOk=e=>/^[^@\s]+@chazki\.com$/i.test((e||"").trim());
-let ROL=null,PEND=[];
+let ROL=null,PEND=[],BAJ=[];
 $("apw-toggle").onclick=e=>{e.preventDefault();$("apw").classList.toggle("hide")};
 // Google Workspace: la cuenta debe ser de la organización; el dominio se vuelve a exigir en la base de datos
 $("agoogle").onclick=async()=>{
@@ -82,7 +82,7 @@ $("abtn").onclick=async()=>{
   if(!dominioOk(email)){$("amsg").innerHTML='<div class="errbox">Solo personal de Chazki: usa tu correo @chazki.com.</div>';return}
   const r=await sb.auth.signInWithPassword({email,password});
   if(r.error){$("amsg").innerHTML='<div class="errbox">Correo o contraseña incorrectos.</div>';return}boot()};
-const TABS={master:"rvalcifpe",ops:"rvalcifp",coordinador:"rvalcifp",finanzas:"rlcp",ih:"rvacif"};
+const TABS={master:"rvalbcifpe",ops:"rvalbcifp",coordinador:"rvalbcifp",finanzas:"rlcp",ih:"rvabcif"};
 const puede=t=>(TABS[ROL]||"").includes(t);
 const veFin=()=>["master","ops","coordinador","finanzas"].includes(ROL);
 const cargaFin=()=>veFin()||ROL==="ih";
@@ -135,7 +135,7 @@ function render(){
     (rows.map(({x,i})=>`<tr><td>${dd(x.checkin_at)}</td><td>${x.drivers.nombre}</td><td>${x.cedis.clientes.nombre} · ${x.cedis.nombre}</td><td><span class="pill bad">${i.tipos_incidencia.nombre}</span></td><td>${i.comentario||"—"}</td></tr>`).join("")||`<tr><td colspan="5">Sin incidencias en este periodo.</td></tr>`)+`</table>`}
   if(tab==="f"){const m={};R.forEach(x=>x.ruta_fallos.forEach(f=>{m[f.causas_fallo.nombre]=(m[f.causas_fallo.nombre]||0)+f.cantidad}));const e=Object.entries(m).sort((a,b)=>b[1]-a[1]);
     h=`<table><tr><th>Causa</th><th>Paquetes</th></tr>`+(e.map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join("")||`<tr><td colspan="2">Sin fallidos en este periodo.</td></tr>`)+`</table>`}
-  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();
+  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();
   $("view").innerHTML=h;enlazar();
   document.querySelectorAll("img.th").forEach(i=>i.onclick=()=>{$("lbimg").src=i.dataset.u;$("lb").classList.remove("hide")});
 }
@@ -148,12 +148,14 @@ const sumLiq=k=>Object.values(LIQ).reduce((s,x)=>s+Number(x[k]||0),0);
 const porValidar=()=>R.filter(x=>x.estado==="cerrada"&&!LIQ[x.id]&&!PEND.some(q=>q.ruta_id===x.id)&&cuentaDe(x.cedis.clientes.nombre));
 function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),3200)}
 async function cargaExtra(){
-  LIQ={};PEND=[];if(!cargaFin()){DRV=[];PRV=[];return}const ids=R.map(x=>x.id);
-  const [l,d,p,pe]=await Promise.all([
+  LIQ={};PEND=[];BAJ=[];if(!cargaFin()){DRV=[];PRV=[];return}const ids=R.map(x=>x.id);
+  const [l,d,p,pe,bj]=await Promise.all([
     ids.length?sb.from("liquidaciones").select("*").in("ruta_id",ids):{data:[]},
     sb.from("drivers").select("id,nombre,codigo,rol,estatus,proveedor_id").order("nombre"),
     sb.from("proveedores").select("*").order("nombre"),
-    sb.from("validaciones_pendientes").select("*,rutas(id_ruta,entregados,paquetes_asignados,drivers(nombre),cedis(nombre,clientes(nombre)))").eq("estatus","pendiente").order("solicitado_en")]);
+    sb.from("validaciones_pendientes").select("*,rutas(id_ruta,entregados,paquetes_asignados,drivers(nombre),cedis(nombre,clientes(nombre)))").eq("estatus","pendiente").order("solicitado_en"),
+    sb.from("bajas_solicitudes").select("*").order("solicitado_en",{ascending:false}).limit(50)]);
+  BAJ=bj.data||[];
   PEND=pe.data||[];
   (l.data||[]).forEach(x=>LIQ[x.ruta_id]=x);DRV=d.data||[];PRV=p.data||[];
   window.INV=ROL==="master"?((await sb.from("staff_invitados").select("*").order("creado_en",{ascending:false})).data||[]):[];
@@ -171,6 +173,14 @@ function estCan(x){const e=ESTC[x.estatus]||ESTC.por_validar;const pill=`<span c
   return pill+`<br><button class="btn sm" data-cap="${x.id}">Aprobar</button> <button class="btn ghost sm" data-crc="${x.id}">Rechazar</button>`}
 async function resolverCan(id,estatus){const {error}=await sb.from("cancelaciones").update({estatus}).eq("id",id);
   if(error){toast(error.message);return}const c=C.find(x=>x.id===id);if(c)c.estatus=estatus;render();toast(estatus==="aprobada"?"Cancelación aprobada":"Cancelación rechazada")}
+function vistaBajas(){
+  const ck=x=>x?"✅":"⏳",puedeS=ROL==="ih",puedeC=["master","ops","coordinador"].includes(ROL);
+  const f=BAJ.map(q=>{const d=DRV.find(y=>y.id===q.driver_id),p=PRV.find(y=>y.id===q.proveedor_id);
+    const mia=q.estatus==="pendiente"&&((puedeS&&!q.aprob_supervisor)||(puedeC&&!q.aprob_coord));
+    return `<tr><td>${d?d.nombre:q.driver_id}</td><td>${p?p.nombre:"—"}</td><td>${q.motivo}<br><small>${dd(q.solicitado_en)}</small></td><td>Supervisor ${ck(q.aprob_supervisor)}<br>Coordinador ${ck(q.aprob_coord)}</td><td>${q.estatus==="pendiente"?"<span class='pill w'>Pendiente</span>":q.estatus==="aprobada"?"<span class='pill ok'>Aprobada</span>":"<span class='pill bad'>Rechazada</span>"}</td><td>${mia?`<button class="btn sm" data-bja="${q.id}">Autorizar</button> <button class="btn ghost sm" data-bjr="${q.id}">Rechazar</button>`:""}</td></tr>`}).join("");
+  return `<h3 style="margin:12px 8px 0">Solicitudes de baja de drivers</h3><small style="padding:0 8px">La baja desvincula al driver del flotillero y requiere la autorización del supervisor y del coordinador.</small><table><tr><th>Driver</th><th>Flotillero</th><th>Motivo</th><th>Autorizaciones</th><th>Estatus</th><th></th></tr>${f||'<tr><td colspan="6">Sin solicitudes.</td></tr>'}</table>`}
+async function resolverBaja(id,ok){const {data,error}=await sb.rpc("resolver_baja",{p_id:id,p_aprobar:ok,p_nota:null});
+  if(error){toast(error.message);return}await cargaExtra();render();toast(ok?"Autorización registrada ("+data+")":"Solicitud rechazada")}
 function vistaAprobar(){
   const f=PEND.map(q=>{const r=q.rutas||{};return `<tr><td>${r.id_ruta||q.ruta_id}</td><td>${r.drivers?r.drivers.nombre:""}</td><td>${r.cedis?r.cedis.clientes.nombre+" · "+r.cedis.nombre:""}</td><td>${r.entregados}/${r.paquetes_asignados}</td><td>No aplicar penalización al pago<br><small>${q.motivo}</small></td><td>${esCoord()?`<button class="btn sm" data-ap="${q.id}">Aprobar</button> <button class="btn ghost sm" data-rc="${q.id}">Rechazar</button>`:'<span class="pill w">En espera</span>'}</td></tr>`}).join("");
   return `<h3 style="margin:12px 8px 0">Excepciones por aprobar</h3><table><tr><th>Ruta</th><th>Driver</th><th>Cliente · CEDIS</th><th>Entreg.</th><th>Solicitud</th><th></th></tr>${f||'<tr><td colspan="6">Nada pendiente.</td></tr>'}</table>`}
@@ -209,7 +219,7 @@ function enlazar(){
   document.querySelectorAll("[data-val]").forEach(b=>b.onclick=()=>abrirValidar(+b.dataset.val));
   document.querySelectorAll("[data-anu]").forEach(b=>b.onclick=()=>anular(+b.dataset.anu));
   document.querySelectorAll("[data-gd]").forEach(b=>b.onclick=()=>guardarDriver(b.dataset.gd));
-  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-cap]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.cap,"aprobada"));document.querySelectorAll("[data-crc]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.crc,"rechazada"));const eo=$("eq-ok");if(eo)eo.onclick=asignarRol;
+  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-cap]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.cap,"aprobada"));document.querySelectorAll("[data-crc]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.crc,"rechazada"));const eo=$("eq-ok");if(eo)eo.onclick=asignarRol;
 }
 async function guardarDriver(id){const rol=document.querySelector(`[data-rol="${id}"]`).value,pv=document.querySelector(`[data-prov="${id}"]`).value;
   const {error}=await sb.from("drivers").update({rol,proveedor_id:pv?+pv:null}).eq("id",id);
