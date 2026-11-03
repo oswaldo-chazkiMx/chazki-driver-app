@@ -40,6 +40,9 @@ button.btn.ok{background:var(--ok)}button.btn.bad{background:var(--bad)}button.b
 .stepper i{display:block;height:5px;border-radius:9px;background:var(--line);margin-bottom:4px}
 .stepper .done i{background:var(--ok)}.stepper .cur i{background:var(--pri)}.stepper .cur{color:var(--pri);font-weight:700}
 .lock{opacity:.45;pointer-events:none}
+#sheet{position:fixed;inset:0;background:#0009;z-index:60;display:flex;align-items:flex-end}#sheet.hide{display:none}
+.sheetbox{background:#fff;width:100%;max-height:88vh;overflow:auto;border-radius:22px 22px 0 0;padding:18px 16px 28px}
+#bell{position:relative;background:rgba(255,255,255,.2);border:0;border-radius:99px;font-size:16px;padding:5px 10px;color:#fff;cursor:pointer;margin-right:6px}#bellc{position:absolute;top:-4px;right:-4px;background:#e5484d;color:#fff;border-radius:99px;font-size:10px;font-weight:700;min-width:16px;height:16px;line-height:16px;text-align:center}#bellc.hide{display:none}
 .pill{display:inline-block;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:700}
 .pill.ok{background:#dcf5ea;color:#0b7a50}.pill.bad{background:#fde3e4;color:#b3262b}.pill.w{background:#fdf0d4;color:#946200}
 .item{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--line);font-size:14px;gap:10px}
@@ -93,7 +96,7 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
 
 <div id="app">
 <header>
-  <div class="row"><div><h1>Chazki Driver</h1><small id="hdate"></small></div><a id="opslink" class="hide" href="ops.html" style="color:#fff;font-size:12px;background:rgba(255,255,255,.2);padding:5px 10px;border-radius:99px;text-decoration:none">Panel Ops</a></div>
+  <div class="row"><div><h1>Chazki Driver</h1><small id="hdate"></small></div><div style="display:flex;align-items:center"><button id="bell" type="button" aria-label="Avisos">🔔<span id="bellc" class="hide">0</span></button><a id="opslink" class="hide" href="ops.html" style="color:#fff;font-size:12px;background:rgba(255,255,255,.2);padding:5px 10px;border-radius:99px;text-decoration:none">Panel Ops</a></div></div>
   <div style="margin-top:12px;font-size:14px">Hola, <b id="hname">—</b> 👋 <span id="hstate" class="pill w" style="margin-left:6px">Sin ruta activa</span></div>
 </header>
 
@@ -238,6 +241,7 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
 </section>
 </main>
 
+<div id="sheet" class="hide"></div>
 <nav>
   <button class="on" data-t="dia"><span class="ic">🗺️</span>Inicia tu día</button>
   <button data-t="can"><span class="ic">🚫</span>Cancelación</button>
@@ -303,6 +307,7 @@ async function boot(){
   renderStepper();
   const ac=await sb.rpc("mi_acceso_ganancias");if(ac.data)ACC=ac.data;
   await Promise.all([loadPerfil(),loadGan(),loadCan(),resumeRoute()]);
+  suscribirAvisos();
   if(ACC.es_flotillero){$("navdr").classList.remove("hide");loadDrivers()}
 }
 
@@ -482,10 +487,43 @@ $("bcan").onclick=async()=>{
   if(error){err("canerr",error);$("bcan").disabled=false;return}
   toast("Cancelación registrada y enviada a Operaciones");canBlob=null;$("cv").classList.add("hide");$("cmeta").textContent="";checkCan();loadCan();
 };
-async function loadCan(){
-  const {data}=await sb.from("cancelaciones").select("*,cedis(nombre,clientes(nombre))").eq("driver_id",ME.id).order("capturado_at",{ascending:false}).limit(10);
-  $("canlist").innerHTML=(data&&data.length)?data.map(r=>{const d=new Date(r.capturado_at);return `<div class="item"><div><b>${r.cedis.clientes.nombre}</b> · ${r.cedis.nombre}<small>${d.toLocaleDateString("es-MX",{weekday:"long",day:"2-digit",month:"2-digit"})} · ${d.toTimeString().slice(0,5)}${r.id_ruta?" · Ruta "+r.id_ruta:""}</small></div>${(r.ubicacion_validada==="fuera"||r.ubicacion_validada==="sin_ubicacion")?'<span class="pill w">Ubicación a revisar</span>':'<span class="pill bad">Cancelado</span>'}</div>`}).join(""):'<div class="note">Aún no hay cancelaciones.</div>';
-}
+let CAN2=[],NOT=[];
+const cuentaReg=v=>{const ms=new Date(v)-Date.now();if(ms<=0)return null;const m=Math.floor(ms/60000);return `${Math.floor(m/60)} h ${String(m%60).padStart(2,"0")} min`};
+const estC=x=>((x.estatus==="aclaracion"||x.estatus==="rechazada")&&x.plazo_vence&&new Date(x.plazo_vence)<Date.now())?"vencida":x.estatus;
+async function loadCan(){const {data}=await sb.rpc("mis_cancelaciones_estatus");CAN2=data||[];drawCan()}
+function drawCan(){const L=CAN2.filter(x=>x.es_mia).slice(0,10);
+  $("canlist").innerHTML=L.length?L.map(r=>{const d=new Date(r.fecha),k=estC(r),esp=(r.estatus==="aclaracion"||r.estatus==="rechazada")&&k!==("vencida"),q=r.plazo_vence?cuentaReg(r.plazo_vence):null;
+    const caja=esp?`<div class="note" style="margin-top:8px;background:#fff4d6;color:#7a4b00;padding:10px;border-radius:10px"><b>${r.estatus==="aclaracion"?"Chazki te pide una aclaración":"Chazki rechazó tu cancelación"}</b><br>${r.ultimo_mensaje||""}<br><b>⏱ Te quedan ${q}</b> para ${r.estatus==="aclaracion"?"responder":"apelar"}.<br><button class="btn sm" type="button" data-resp="${r.id}" style="margin-top:8px">${r.estatus==="aclaracion"?"Responder":"Apelar"}</button></div>`:(k==="vencida"?`<div class="note" style="margin-top:6px;color:#b42318">El plazo de 12 horas venció${r.estatus==="rechazada"?"; la decisión queda firme.":" sin respuesta."}</div>`:"");
+    return `<div class="item" style="display:block"><div style="display:flex;justify-content:space-between;gap:8px"><div><b>${r.cliente}</b> · ${r.cedis}<small>${d.toLocaleDateString("es-MX",{weekday:"long",day:"2-digit",month:"2-digit"})} · ${d.toTimeString().slice(0,5)}${r.id_ruta?" · Ruta "+r.id_ruta:""}</small></div>${pillE(k)}</div>${caja}</div>`}).join(""):'<div class="note">Aún no hay cancelaciones.</div>';
+  document.querySelectorAll("[data-resp]").forEach(b=>b.onclick=()=>abrirRespuesta(+b.dataset.resp))}
+setInterval(()=>{if(CAN2.length)drawCan()},30000);
+function abrirSheet(h){$("sheet").innerHTML=`<div class="sheetbox">${h}</div>`;$("sheet").classList.remove("hide");$("sheet").onclick=e=>{if(e.target.id==="sheet")$("sheet").classList.add("hide")}}
+function abrirRespuesta(id){const r=CAN2.find(x=>x.id===id);if(!r)return;const apela=r.estatus==="rechazada";
+  abrirSheet(`<h2 style="margin:0 0 6px">${apela?"Apelar rechazo":"Responder aclaración"}</h2><div class="note" style="margin-top:0"><b>Mensaje de Chazki:</b><br>${r.ultimo_mensaje||""}</div><div class="note">⏱ Te quedan ${cuentaReg(r.plazo_vence)||"0 min"}</div>
+   <label>${apela?"Explica por qué la cancelación debe aprobarse":"Tu aclaración"}</label><textarea id="rs-t" rows="4"></textarea>
+   <label>Foto de apoyo (opcional)</label><input type="file" id="rs-f" accept="image/*"><div id="rs-e"></div>
+   <div style="display:flex;gap:8px;margin-top:12px"><button class="btn" id="rs-ok">Enviar</button><button class="btn ghost" id="rs-x">Cancelar</button></div>`);
+  $("rs-x").onclick=()=>$("sheet").classList.add("hide");
+  $("rs-ok").onclick=async()=>{const t=$("rs-t").value.trim();if(!t){$("rs-e").innerHTML='<div class="errbox">Escribe tu respuesta</div>';return}
+    $("rs-ok").disabled=true;let path=null;const f=$("rs-f").files[0];
+    try{if(f){const blob=await comprimir(f);path=`${ME.id}/aclaracion-${id}-${Date.now()}.jpg`;const up=await sb.storage.from("cancelaciones").upload(path,blob,{contentType:"image/jpeg"});if(up.error)throw up.error}
+      const {error}=await sb.rpc("responder_cancelacion",{p_id:id,p_texto:t,p_foto_path:path});if(error)throw error}
+    catch(e){$("rs-ok").disabled=false;$("rs-e").innerHTML=`<div class="errbox">${e.message||e}</div>`;return}
+    $("sheet").classList.add("hide");toast(apela?"Apelación enviada ✔":"Aclaración enviada ✔");await loadCan();loadEstatus()}}
+// ---------- Avisos ----------
+async function loadNotifs(){const {data}=await sb.from("notificaciones").select("*").order("creada_en",{ascending:false}).limit(30);NOT=data||[];drawBell()}
+function drawBell(){const n=NOT.filter(x=>!x.leida_en).length;$("bellc").textContent=n>9?"9+":n;$("bellc").classList.toggle("hide",!n)}
+function abrirAvisos(){const f=x=>new Date(x).toLocaleString("es-MX",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"});
+  const perm=("Notification" in window&&Notification.permission==="default")?'<button class="btn ghost sm" id="nt-perm" type="button" style="margin-bottom:8px">Activar avisos del navegador</button>':"";
+  abrirSheet(`<h2 style="margin:0 0 8px">🔔 Avisos</h2>${perm}${NOT.length?NOT.map(n=>`<div class="item" data-nt="${n.id}" style="display:block;${n.leida_en?"opacity:.6":"background:#f3f0ff;border-radius:10px;padding:10px"}"><b>${n.titulo}</b>${n.cuerpo?`<small style="display:block">${n.cuerpo}</small>`:""}<small style="display:block;color:var(--mut)">${f(n.creada_en)}${n.vence_en&&new Date(n.vence_en)>Date.now()?" · vence en "+cuentaReg(n.vence_en):""}</small></div>`).join(""):'<div class="note">Sin avisos.</div>'}`);
+  const pr=$("nt-perm");if(pr)pr.onclick=async()=>{await Notification.requestPermission();abrirAvisos()};
+  document.querySelectorAll("[data-nt]").forEach(el=>el.onclick=()=>{const n=NOT.find(x=>x.id==el.dataset.nt);$("sheet").classList.add("hide");if(n&&n.ref_tipo==="cancelacion")document.querySelector("nav button[data-t=can]").click();if(n&&n.ref_tipo==="cambio_perfil")document.querySelector("nav button[data-t=per]").click()});
+  sb.rpc("marcar_notificaciones_leidas",{p_ids:null}).then(()=>{NOT.forEach(n=>n.leida_en=n.leida_en||new Date().toISOString());drawBell()})}
+$("bell").onclick=abrirAvisos;
+function suscribirAvisos(){loadNotifs();setInterval(loadNotifs,60000);
+  sb.channel("avisos-"+ME.id).on("postgres_changes",{event:"INSERT",schema:"public",table:"notificaciones",filter:"usuario=eq."+ME.id},p=>{NOT.unshift(p.new);drawBell();toast("🔔 "+p.new.titulo);
+    if("Notification" in window&&Notification.permission==="granted")try{new Notification(p.new.titulo,{body:p.new.cuerpo||""})}catch(e){}
+    if(p.new.tipo&&p.new.tipo.startsWith("cancelacion"))loadCan().then(loadEstatus)}).subscribe()}
 
 // ---------- Ganancias ----------
 let PAGOS=[],gp="sem";
@@ -545,7 +583,7 @@ function drawDrivers(){
   box.querySelectorAll("[data-bjok]").forEach(b=>b.onclick=async()=>{const m=$("bj-m").value.trim();if(!m){$("bj-e").textContent="Escribe el motivo";return}
     b.disabled=true;const {error}=await sb.rpc("solicitar_baja_driver",{p_driver_id:b.dataset.bjok,p_motivo:m});if(error){$("bj-e").textContent=error.message;b.disabled=false;return}
     dform=null;await loadDrivers()})}
-const EST={por_validar:["Por validar","#946200","#fff4d6"],en_revision:["En revisión","#1d4ed8","#e3ecff"],aprobada:["Aprobada","#0f7a3d","#dff5e6"],rechazada:["Rechazada","#b42318","#fde4e1"],en_curso:["En curso","#555b7a","#ececf4"]};
+const EST={por_validar:["Por validar","#946200","#fff4d6"],en_revision:["En revisión","#1d4ed8","#e3ecff"],aprobada:["Aprobada","#0f7a3d","#dff5e6"],rechazada:["Rechazada","#b42318","#fde4e1"],en_curso:["En curso","#555b7a","#ececf4"],aclaracion:["Aclaración solicitada","#7a4b00","#ffe9b8"],respondida:["Respondida · en revisión","#1d4ed8","#e3ecff"],apelada:["Apelada · en revisión","#1d4ed8","#e3ecff"],vencida:["Plazo vencido","#b42318","#fde4e1"]};
 const pillE=k=>{const e=EST[k]||EST.por_validar;return `<span style="background:${e[2]};color:${e[1]};font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;white-space:nowrap">${e[0]}</span>`};
 async function loadEstatus(){
   const box=$("gest");if(!box)return;
@@ -553,7 +591,7 @@ async function loadEstatus(){
   RUTAS_K=r.data||[];CANS_K=c.data||[];drawKpi();
   const fl=ACC.es_flotillero,f=x=>new Date(x).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
   const rows=(r.data||[]).map(x=>`<div class="item"><div><b>Ruta ${x.id_ruta}</b><small>${f(x.fecha)} · ${x.cliente} · ${x.cedis}${fl?" · "+x.driver:""} · ${x.entregados==null?"—":x.entregados}/${x.asignados}</small></div>${pillE(x.estatus)}</div>`).join("");
-  const can=(c.data||[]).map(x=>`<div class="item"><div><b>Cancelación${x.id_ruta?" · Ruta "+x.id_ruta:""}</b><small>${f(x.fecha)} · ${x.cliente} · ${x.cedis}${fl?" · "+x.driver:""}</small></div>${pillE(x.estatus)}</div>`).join("");
+  const can=(c.data||[]).map(x=>`<div class="item"><div><b>Cancelación${x.id_ruta?" · Ruta "+x.id_ruta:""}</b><small>${f(x.fecha)} · ${x.cliente} · ${x.cedis}${fl?" · "+x.driver:""}</small></div>${pillE(estC(x))}</div>`).join("");
   box.innerHTML=`<h3 style="margin:4px 0">Rutas</h3>${rows||'<div class="note">Aún no tienes rutas.</div>'}<h3 style="margin:14px 0 4px">Cancelaciones</h3>${can||'<div class="note">Aún no tienes cancelaciones.</div>'}`}
 const parseF=s=>{const [y,m,d]=s.split("-");return new Date(+y,m-1,+d)};
 const monday=d=>{const x=new Date(d);x.setHours(0,0,0,0);x.setDate(x.getDate()-((x.getDay()+6)%7));return x};

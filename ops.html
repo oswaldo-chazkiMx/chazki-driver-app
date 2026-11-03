@@ -50,7 +50,7 @@ td select{padding:6px;border:1px solid var(--line);border-radius:8px;font-size:1
   <div id="amsg"></div>
 </div>
 <div id="panel" class="hide">
-<header><h1>Chazki Driver · Operaciones</h1><div><span id="who" style="font-size:13px;margin-right:10px"></span><a href="index.html">App driver</a> <button id="out">Salir</button></div></header>
+<header><h1>Chazki Driver · Operaciones</h1><div><button id="bell" type="button" style="position:relative;background:rgba(255,255,255,.2);border:0;border-radius:99px;color:#fff;padding:5px 10px;cursor:pointer;margin-right:8px">🔔<span id="bellc" class="hide" style="position:absolute;top:-4px;right:-4px;background:#e5484d;color:#fff;border-radius:99px;font-size:10px;font-weight:700;min-width:16px;height:16px;line-height:16px;text-align:center">0</span></button><span id="who" style="font-size:13px;margin-right:10px"></span><a href="index.html">App driver</a> <button id="out">Salir</button></div></header>
 <main>
   <div class="bar"><label>Desde <input type="date" id="d1"></label><label>Hasta <input type="date" id="d2"></label>
     <select id="fcli"><option value="">Todos los clientes</option></select><button id="go" style="padding:9px 16px;border:0;border-radius:10px;background:#4b2fd0;color:#fff;cursor:pointer">Actualizar</button></div>
@@ -103,7 +103,7 @@ async function boot(){
   if(!session){$("auth").classList.remove("hide");return}
   const {data:me}=await sb.from("drivers").select("nombre,rol").eq("id",session.user.id).single();
   if(!me||!Object.keys(TABS).includes(me.rol)||!dominioOk(session.user.email)){$("auth").classList.remove("hide");$("amsg").innerHTML='<div class="errbox">Esta cuenta no tiene acceso al panel. Es solo para personal de Chazki con correo @chazki.com.</div>';await sb.auth.signOut();return}
-  ROL=me.rol;aplicarRol();DSET=(await sb.rpc("datasets_disponibles")).data||[];cargaLog();
+  ROL=me.rol;aplicarRol();suscribirAvisos(session.user.id);DSET=(await sb.rpc("datasets_disponibles")).data||[];cargaLog();
   $("auth").classList.add("hide");$("panel").classList.remove("hide");$("who").textContent=me.nombre+" · "+(ROLES_TXT[me.rol]||me.rol);
   const hoy=new Date().toLocaleDateString("en-CA");$("d1").value=hoy;$("d2").value=hoy;
   const {data:cl}=await sb.from("clientes").select("id,nombre").order("nombre");
@@ -119,7 +119,7 @@ async function load(){
   R=(r.data||[]).filter(keep);C=(c.data||[]).filter(keep);
   const paths=C.map(x=>x.foto_path);photos={};
   if(paths.length){const s=await sb.storage.from("cancelaciones").createSignedUrls(paths,3600);(s.data||[]).forEach(x=>{photos[x.path]=x.signedUrl})}
-  await cargaExtra();
+  await cargaEventos();await cargaExtra();
   render();
 }
 function render(){
@@ -168,12 +168,50 @@ function vistaPorValidar(){const l=porValidar();
 function vistaValidadas(){const l=Object.values(LIQ);
   return `<table><tr><th>Fecha</th><th>Driver</th><th>Proveedor</th><th>Cuenta · esquema</th><th>Efectiv.</th><th>Costo</th><th>Retención</th><th>IVA</th><th>Pago al proveedor</th><th>Venta</th><th>Utilidad</th><th>Registro</th><th></th></tr>`+
   (l.map(x=>{const ru=R.find(y=>y.id===x.ruta_id),p=PRV.find(y=>y.id===x.proveedor_id);return `<tr><td>${ru?dd(ru.checkin_at):""}</td><td>${ru?ru.drivers.nombre:""}</td><td>${p?p.nombre:"—"}</td><td>${x.cuenta}<br><small>${x.esquema||""}</small></td><td>${pc(x.efectividad)}</td><td>${fm(x.costo_total)}</td><td>${fm(x.retencion)}</td><td>${fm(x.iva)}</td><td><b>${fm(x.pago_driver)}</b></td><td>${fm(x.venta_total)}</td><td>${fm(x.utilidad)}<br><small>${pc(x.margen)}</small></td><td>${x.registro_fiscal}</td><td><button class="btn ghost sm" data-anu="${x.ruta_id}">Anular</button></td></tr>`}).join("")||`<tr><td colspan="13">No hay rutas validadas en este periodo.</td></tr>`)+`</table>`}
-const ESTC={por_validar:["Por validar","w"],en_revision:["En revisión","w"],aprobada:["Aprobada","ok"],rechazada:["Rechazada","bad"]};
-function estCan(x){const e=ESTC[x.estatus]||ESTC.por_validar;const pill=`<span class="pill ${e[1]}">${e[0]}</span>`;
-  if(!["master","ops","coordinador","ih"].includes(ROL)||x.estatus==="aprobada"||x.estatus==="rechazada")return pill;
-  return pill+`<br><button class="btn sm" data-cap="${x.id}">Aprobar</button> <button class="btn ghost sm" data-crc="${x.id}">Rechazar</button>`}
-async function resolverCan(id,estatus){const {error}=await sb.from("cancelaciones").update({estatus}).eq("id",id);
-  if(error){toast(error.message);return}const c=C.find(x=>x.id===id);if(c)c.estatus=estatus;render();toast(estatus==="aprobada"?"Cancelación aprobada":"Cancelación rechazada")}
+const ESTC={por_validar:["Por validar","w"],en_revision:["En revisión","w"],aprobada:["Aprobada","ok"],rechazada:["Rechazada","bad"],aclaracion:["Aclaración pedida","w"],respondida:["Respondida por el driver","ok"],apelada:["Apelada por el driver","ok"],vencida:["Plazo vencido","bad"]};
+let CEV={},EVP={};
+const cuentaR=v=>{const ms=new Date(v)-Date.now();if(ms<=0)return null;const m=Math.floor(ms/60000);return Math.floor(m/60)+" h "+String(m%60).padStart(2,"0")+" min"};
+const estK=x=>((x.estatus==="aclaracion"||x.estatus==="rechazada")&&x.plazo_vence&&new Date(x.plazo_vence)<Date.now())?"vencida":x.estatus;
+function estPill(x){const k=estK(x),e=ESTC[k]||ESTC.por_validar;let h=`<span class="pill ${e[1]}">${e[0]}</span>`;
+  if((x.estatus==="aclaracion"||x.estatus==="rechazada")&&k!=="vencida")h+=`<br><small>⏱ Driver: ${cuentaR(x.plazo_vence)}</small>`;
+  if(x.estatus==="respondida"||x.estatus==="apelada")h+=`<br><small><b>💬 Nueva respuesta</b></small>`;return h}
+function estCan(x){const h=estPill(x);
+  if(!["master","ops","coordinador","ih"].includes(ROL)||x.estatus==="aprobada")return h;
+  return h+`<br><button class="btn sm" data-rev="${x.id}">Revisar</button>`}
+async function cargaEventos(){CEV={};EVP={};if(!C.length)return;const ids=C.map(x=>x.id);const r=await sb.from("cancelacion_eventos").select("*").in("cancelacion_id",ids).order("creado_en");
+  (r.data||[]).forEach(e=>(CEV[e.cancelacion_id]=CEV[e.cancelacion_id]||[]).push(e));
+  const ps=(r.data||[]).map(e=>e.foto_path).filter(Boolean);if(ps.length){const s=await sb.storage.from("cancelaciones").createSignedUrls(ps,3600);(s.data||[]).forEach(x=>EVP[x.path]=x.signedUrl)}}
+const EVL={rechazo:"Chazki rechazó",aclaracion:"Chazki pidió aclaración",aprobacion:"Chazki aprobó",respuesta:"El driver respondió",apelacion:"El driver apeló"};
+function revisarCan(id){const x=C.find(y=>y.id===id);if(!x)return;const m=$("modal");m.classList.remove("hide");
+  const hist=(CEV[id]||[]).map(e=>`<div style="padding:6px 0;border-bottom:1px solid var(--line)"><b>${EVL[e.tipo]||e.tipo}</b> <small>${dd(e.creado_en)} ${hh(e.creado_en)}</small><br>${e.texto||""}${e.foto_path&&EVP[e.foto_path]?`<br><a href="${EVP[e.foto_path]}" target="_blank" rel="noopener"><img src="${EVP[e.foto_path]}" style="max-width:160px;border-radius:8px;margin-top:4px"></a>`:""}</div>`).join("")||'<small>Sin movimientos.</small>';
+  m.innerHTML=`<div class="box" style="max-height:90vh;overflow:auto"><h2 style="margin:0 0 4px">Cancelación · ${x.drivers.nombre}</h2><div style="color:var(--mut);font-size:13px">${x.cedis.clientes.nombre} · ${x.cedis.nombre} · ${dd(x.capturado_at)} ${hh(x.capturado_at)}${x.id_ruta?" · Ruta "+x.id_ruta:""}</div>
+   <div style="margin-top:8px">${estPill(x)}</div>
+   ${photos[x.foto_path]?`<img src="${photos[x.foto_path]}" style="max-width:100%;max-height:220px;border-radius:10px;margin-top:8px">`:""}
+   <h3 style="margin:12px 0 4px">Historial</h3>${hist}
+   <label>Mensaje para el driver (obligatorio al rechazar o pedir aclaración)</label><textarea id="rv-t" rows="3"></textarea>
+   <div class="note">Al rechazar o pedir aclaración, el driver recibe un aviso y tiene 12 horas para apelar o responder. Pasado ese plazo la decisión queda firme.</div><div id="rv-e"></div>
+   <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="btn" data-rva="aprobar">Aprobar</button><button class="btn ghost" data-rva="aclarar">Pedir aclaración</button><button class="btn ghost" data-rva="rechazar" style="color:#b42318">Rechazar</button><button class="btn ghost" id="rv-x">Cerrar</button></div></div>`;
+  $("rv-x").onclick=()=>m.classList.add("hide");
+  m.querySelectorAll("[data-rva]").forEach(b=>b.onclick=async()=>{const a=b.dataset.rva,t=$("rv-t").value.trim();if(a!=="aprobar"&&!t){$("rv-e").innerHTML='<div class="errbox">Escribe el mensaje para el driver</div>';return}
+    m.querySelectorAll("[data-rva]").forEach(z=>z.disabled=true);const {error}=await sb.rpc("resolver_cancelacion",{p_id:id,p_accion:a,p_texto:t||null});
+    if(error){$("rv-e").innerHTML=`<div class="errbox">${error.message}</div>`;m.querySelectorAll("[data-rva]").forEach(z=>z.disabled=false);return}
+    m.classList.add("hide");toast(a==="aprobar"?"Cancelación aprobada":a==="rechazar"?"Rechazada · el driver tiene 12 h para apelar":"Aclaración solicitada · el driver tiene 12 h");await load()})}
+let NOT=[];
+async function loadNotifs(){const {data}=await sb.from("notificaciones").select("*").order("creada_en",{ascending:false}).limit(30);NOT=data||[];drawBell()}
+function drawBell(){const n=NOT.filter(x=>!x.leida_en).length;$("bellc").textContent=n>9?"9+":n;$("bellc").classList.toggle("hide",!n)}
+function abrirAvisos(){const m=$("modal");m.classList.remove("hide");const f=x=>new Date(x).toLocaleString("es-MX",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"});
+  const perm=("Notification" in window&&Notification.permission==="default")?'<button class="btn ghost sm" id="nt-perm">Activar avisos del navegador</button>':"";
+  m.innerHTML=`<div class="box" style="max-height:90vh;overflow:auto"><h2 style="margin:0 0 8px">🔔 Avisos</h2>${perm}${NOT.length?NOT.map(n=>`<div class="item" data-nt="${n.id}" style="display:block;padding:10px;border-bottom:1px solid var(--line);cursor:pointer;${n.leida_en?"opacity:.6":"background:#f3f0ff"}"><b>${n.titulo}</b>${n.cuerpo?`<br><small>${n.cuerpo}</small>`:""}<br><small style="color:var(--mut)">${f(n.creada_en)}</small></div>`).join(""):"<small>Sin avisos.</small>"}<div style="margin-top:12px"><button class="btn ghost" id="nt-x">Cerrar</button></div></div>`;
+  $("nt-x").onclick=()=>m.classList.add("hide");const pr=$("nt-perm");if(pr)pr.onclick=async()=>{await Notification.requestPermission();abrirAvisos()};
+  const ir={cancelacion:"c",cambio_perfil:"k",baja:"b",validacion:"a"};
+  m.querySelectorAll("[data-nt]").forEach(el=>el.onclick=()=>{const n=NOT.find(x=>x.id==el.dataset.nt);m.classList.add("hide");const t=n&&ir[n.ref_tipo];const b=t&&document.querySelector(`.tabs button[data-t=${t}]`);if(b)b.click()});
+  sb.rpc("marcar_notificaciones_leidas",{p_ids:null}).then(()=>{NOT.forEach(n=>n.leida_en=n.leida_en||new Date().toISOString());drawBell()})}
+$("bell").onclick=abrirAvisos;
+function suscribirAvisos(uid){loadNotifs();setInterval(loadNotifs,60000);
+  sb.channel("avisos-"+uid).on("postgres_changes",{event:"INSERT",schema:"public",table:"notificaciones",filter:"usuario=eq."+uid},p=>{NOT.unshift(p.new);drawBell();toast("🔔 "+p.new.titulo);
+    if("Notification" in window&&Notification.permission==="granted")try{new Notification(p.new.titulo,{body:p.new.cuerpo||""})}catch(e){}
+    if((p.new.tipo||"").startsWith("cancelacion"))load()}).subscribe()}
+setInterval(()=>{if(tab==="c")render()},30000);
 const CAMPOS={nombre:"Nombre",placas:"Placas",tipo:"Tipo de vehículo",marca_modelo:"Marca / modelo",licencia_numero:"Número de licencia",licencia_tipo:"Tipo de licencia",licencia_vigencia:"Vigencia de licencia"};
 function vistaCambios(){
   const f=CAMB.map(q=>{const d=DRV.find(y=>y.id===q.driver_id);
@@ -363,7 +401,7 @@ function enlazar(){
   document.querySelectorAll("[data-val]").forEach(b=>b.onclick=()=>abrirValidar(+b.dataset.val));
   document.querySelectorAll("[data-anu]").forEach(b=>b.onclick=()=>anular(+b.dataset.anu));
   document.querySelectorAll("[data-gd]").forEach(b=>b.onclick=()=>guardarDriver(b.dataset.gd));
-  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-cpa]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpa,true));document.querySelectorAll("[data-cpr]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpr,false));document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-cap]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.cap,"aprobada"));document.querySelectorAll("[data-crc]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.crc,"rechazada"));document.querySelectorAll("[data-tfv]").forEach(b=>b.onclick=()=>{TFV=b.dataset.tfv;render()});
+  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-cpa]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpa,true));document.querySelectorAll("[data-cpr]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpr,false));document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-rev]").forEach(b=>b.onclick=()=>revisarCan(+b.dataset.rev));document.querySelectorAll("[data-tfv]").forEach(b=>b.onclick=()=>{TFV=b.dataset.tfv;render()});
   document.querySelectorAll("[data-re]").forEach(b=>b.onclick=()=>formRegla(+b.dataset.re));
   const rgn=$("rg-n");if(rgn)rgn.onclick=()=>formRegla(null);const rfc=$("rg-fc");if(rfc){rfc.onchange=()=>{RGF.cuenta=rfc.value;render()};$("rg-ft").onchange=e=>{RGF.tipo=e.target.value;render()}}
   const tfc=$("tf-c");if(tfc){tfc.onchange=()=>{TFL.cuenta=tfc.value;render()};$("tf-v").onchange=e=>{TFL.veh=e.target.value;render()};$("tf-e").onchange=e=>{TFL.esq=e.target.value;render()};$("tf-a").onchange=e=>{TFL.act=e.target.checked;render()};
