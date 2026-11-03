@@ -373,14 +373,13 @@ function getLoc(){return new Promise(res=>{if(!navigator.geolocation)return res(
 async function stamp(img){
   $("cmeta").textContent="Obteniendo ubicación…";err("canerr",null);
   const loc=await getLoc();
-  if(!loc){$("cmeta").textContent="";err("canerr","No se pudo obtener tu ubicación. Activa el GPS y permite la ubicación para este sitio, y vuelve a tomar la foto.");return}
   const d=new Date(),iw=img.naturalWidth||img.width,ih=img.naturalHeight||img.height,w=Math.min(1000,iw),h=Math.round(ih*w/iw);
   const cv=$("cv");cv.width=w;cv.height=h;const x=cv.getContext("2d");x.drawImage(img,0,0,w,h);
   const cli=cliName($("ccli").value)||"—",ced=cedName($("ccli").value,$("ccedis").value)||"—";
-  const co=cedObj($("ccli").value,$("ccedis").value);let val={estado:"sin_coordenadas",dist:null};
-  if(co&&co.lat!=null&&co.lng!=null){const dm=distM(loc.lat,loc.lng,co.lat,co.lng);val={estado:dm<=co.radio_m?"dentro":"fuera",dist:dm,radio:co.radio_m}}
+  const co=cedObj($("ccli").value,$("ccedis").value);let val={estado:loc?"sin_coordenadas":"sin_ubicacion",dist:null};
+  if(loc&&co&&co.lat!=null&&co.lng!=null){const dm=distM(loc.lat,loc.lng,co.lat,co.lng);val={estado:dm<=co.radio_m?"dentro":"fuera",dist:dm,radio:co.radio_m}}
   const dia=d.toLocaleDateString("es-MX",{weekday:"long"}),fecha=d.toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"}),hora=d.toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
-  const lines=["CANCELADO POR EL CLIENTE",`${cli} · ${ced}`,`${dia} ${fecha} · ${hora}`,`GPS: ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}`,val.estado==="sin_coordenadas"?"Ubicación del CEDIS: sin validar":`A ${fmtDist(val.dist)} del CEDIS · ${val.estado==="dentro"?"DENTRO":"FUERA"} del radio`,`Driver: ${DRIVER.nombre} · ${DRIVER.codigo||""}`];
+  const lines=["CANCELADO POR EL CLIENTE",`${cli} · ${ced}`,`${dia} ${fecha} · ${hora}`,loc?`GPS: ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}`:"GPS: ubicación no disponible",val.estado==="sin_ubicacion"?"Ubicación sin validar: se revisará":val.estado==="sin_coordenadas"?"Ubicación del CEDIS: sin validar":`A ${fmtDist(val.dist)} del CEDIS · ${val.estado==="dentro"?"DENTRO":"FUERA"} del radio`,`Driver: ${DRIVER.nombre} · ${DRIVER.codigo||""}`];
   const fs=Math.max(14,Math.round(w/34)),pad=fs*.7,bh=lines.length*fs*1.35+pad*2;
   x.fillStyle="rgba(0,0,0,.62)";x.fillRect(0,h-bh,w,bh);x.textAlign="left";
   lines.forEach((l,i)=>{x.font=(i===0?"bold ":"")+fs+"px sans-serif";x.fillStyle=i===0?"#ffb4b6":"#fff";x.fillText(l,pad,h-bh+pad+fs*1.1+i*fs*1.35)});
@@ -389,8 +388,9 @@ async function stamp(img){
   canBlob=await new Promise(r=>cv.toBlob(r,"image/jpeg",.78));canMeta={loc,d,val};
   const vm=val.estado==="dentro"?`<span style="color:var(--ok)">✔ Estás a ${fmtDist(val.dist)} del CEDIS: ubicación validada</span>`:
     val.estado==="fuera"?`<span style="color:var(--bad)">⚠ Estás a ${fmtDist(val.dist)} del CEDIS (máximo ${fmtDist(val.radio)}). Si el CEDIS es otro, cámbialo y toma la foto de nuevo. Si lo registras así, Operaciones lo revisará.</span>`:
-    `<span style="color:var(--mut)">Este CEDIS aún no tiene ubicación registrada; no se puede validar.</span>`;
-  $("cmeta").innerHTML=`📍 ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)} · ${dia} ${fecha} ${hora}<br>${vm}`;checkCan();
+    val.estado==="sin_ubicacion"?`<span style="color:var(--bad)">⚠ No se pudo detectar tu ubicación. Puedes registrar la cancelación igual: la foto lleva la marca de agua con fecha y hora, y Operaciones la revisará. Si puedes, activa el GPS y toma la foto otra vez.</span>`:
+    `<span style="color:var(--mut)">Este CEDIS aún no tiene ubicación registrada; se registra sin validar.</span>`;
+  $("cmeta").innerHTML=`📍 ${loc?loc.lat.toFixed(5)+", "+loc.lng.toFixed(5):"ubicación no disponible"} · ${dia} ${fecha} ${hora}<br>${vm}`;checkCan();
 }
 function checkCan(){$("bcan").disabled=!(canBlob&&$("ccli").value&&$("ccedis").value)}
 $("bcan").onclick=async()=>{
@@ -398,13 +398,13 @@ $("bcan").onclick=async()=>{
   const path=`${ME.id}/${Date.now()}.jpg`;
   const up=await sb.storage.from("cancelaciones").upload(path,canBlob,{contentType:"image/jpeg"});
   if(up.error){err("canerr",up.error);$("bcan").disabled=false;return}
-  const {error}=await sb.from("cancelaciones").insert({driver_id:ME.id,ruta_id:S.route?S.route.dbId:null,cedis_id:+$("ccedis").value,id_ruta:$("crid").value.trim()||null,foto_path:path,lat:canMeta.loc.lat,lng:canMeta.loc.lng,capturado_at:canMeta.d.toISOString()});
+  const {error}=await sb.from("cancelaciones").insert({driver_id:ME.id,ruta_id:S.route?S.route.dbId:null,cedis_id:+$("ccedis").value,id_ruta:$("crid").value.trim()||null,foto_path:path,lat:canMeta.loc?canMeta.loc.lat:null,lng:canMeta.loc?canMeta.loc.lng:null,capturado_at:canMeta.d.toISOString()});
   if(error){err("canerr",error);$("bcan").disabled=false;return}
   toast("Cancelación registrada y enviada a Operaciones");canBlob=null;$("cv").classList.add("hide");$("cmeta").textContent="";checkCan();loadCan();
 };
 async function loadCan(){
   const {data}=await sb.from("cancelaciones").select("*,cedis(nombre,clientes(nombre))").eq("driver_id",ME.id).order("capturado_at",{ascending:false}).limit(10);
-  $("canlist").innerHTML=(data&&data.length)?data.map(r=>{const d=new Date(r.capturado_at);return `<div class="item"><div><b>${r.cedis.clientes.nombre}</b> · ${r.cedis.nombre}<small>${d.toLocaleDateString("es-MX",{weekday:"long",day:"2-digit",month:"2-digit"})} · ${d.toTimeString().slice(0,5)}${r.id_ruta?" · Ruta "+r.id_ruta:""}</small></div>${r.ubicacion_validada==="fuera"?'<span class="pill w">Ubicación a revisar</span>':'<span class="pill bad">Cancelado</span>'}</div>`}).join(""):'<div class="note">Aún no hay cancelaciones.</div>';
+  $("canlist").innerHTML=(data&&data.length)?data.map(r=>{const d=new Date(r.capturado_at);return `<div class="item"><div><b>${r.cedis.clientes.nombre}</b> · ${r.cedis.nombre}<small>${d.toLocaleDateString("es-MX",{weekday:"long",day:"2-digit",month:"2-digit"})} · ${d.toTimeString().slice(0,5)}${r.id_ruta?" · Ruta "+r.id_ruta:""}</small></div>${(r.ubicacion_validada==="fuera"||r.ubicacion_validada==="sin_ubicacion")?'<span class="pill w">Ubicación a revisar</span>':'<span class="pill bad">Cancelado</span>'}</div>`}).join(""):'<div class="note">Aún no hay cancelaciones.</div>';
 }
 
 // ---------- Ganancias ----------
