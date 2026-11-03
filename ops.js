@@ -41,7 +41,7 @@ const NAV_INFO={
   e:["Equipo","♧","Gestiona el acceso del equipo administrativo."]
 };
 function seleccionarTab(b){
-  document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===b));
+  document.querySelectorAll(".role-nav button").forEach(x=>x.classList.toggle("on",x===b));
   tab=b.dataset.t;
   const [title,,description]=NAV_INFO[tab]||["Operación","",""];
   $("page-title").textContent=title;
@@ -49,7 +49,7 @@ function seleccionarTab(b){
   render();
 }
 function aplicarRol(){
-  document.querySelectorAll(".tabs button").forEach(b=>{
+  document.querySelectorAll(".role-nav button").forEach(b=>{
     if(!puede(b.dataset.t)){b.remove();return}
     const [label,icon]=NAV_INFO[b.dataset.t]||[b.textContent,"•"];
     b.innerHTML=`<span class="nav-icon" aria-hidden="true">${icon}</span><span>${label}</span>`;
@@ -65,11 +65,11 @@ function aplicarRol(){
     group.appendChild(b);group.classList.remove("hide");
     group.previousElementSibling.classList.remove("hide");
   }
-  const f=document.querySelector(".tabs button");if(f)seleccionarTab(f);
+  const f=document.querySelector(".role-nav button");if(f)seleccionarTab(f);
 }
 $("out").onclick=async()=>{await sb.auth.signOut();location.reload()};
 $("lb").onclick=()=>$("lb").classList.add("hide");
-document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>seleccionarTab(b));
+document.querySelectorAll(".role-nav button").forEach(b=>b.onclick=()=>seleccionarTab(b));
 $("go").onclick=load;
 async function boot(){
   const {data:{session}}=await sb.auth.getSession();
@@ -107,7 +107,7 @@ function render(){
   if(tab==="i"){const rows=R.flatMap(x=>x.ruta_incidencias.map(i=>({x,i})));h=`<table><tr><th>Fecha</th><th>Driver</th><th>Cliente · CEDIS</th><th>Incidencia</th><th>Comentario</th></tr>`+
     (rows.map(({x,i})=>`<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${esc(x.cedis.clientes.nombre)} · ${esc(x.cedis.nombre)}</td><td><span class="pill bad">${esc(i.tipos_incidencia.nombre)}</span></td><td>${esc(i.comentario||"—")}</td></tr>`).join("")||`<tr><td colspan="5">Sin incidencias en este periodo.</td></tr>`)+`</table>`}
   if(tab==="f"){const m={};R.forEach(x=>x.ruta_fallos.forEach(f=>{m[f.causas_fallo.nombre]=(m[f.causas_fallo.nombre]||0)+f.cantidad}));const e=Object.entries(m).sort((a,b)=>b[1]-a[1]);
-    h=`<table><tr><th>Causa</th><th>Paquetes</th></tr>`+(e.map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join("")||`<tr><td colspan="2">Sin fallidos en este periodo.</td></tr>`)+`</table>`}
+  h=`<table><tr><th>Causa</th><th>Paquetes</th></tr>`+(e.map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")||`<tr><td colspan="2">Sin fallidos en este periodo.</td></tr>`)+`</table>`}
   if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();if(tab==="t")h=vistaTarifario();if(tab==="n")h=vistaPadron();
   $("view").innerHTML=h;enlazar();
   document.querySelectorAll("img.th").forEach(i=>i.onclick=()=>{$("lbimg").src=i.dataset.u;$("lb").classList.remove("hide")});
@@ -188,9 +188,9 @@ setInterval(()=>{if(tab==="c")render()},30000);
 const CAMPOS={nombre:"Nombre",placas:"Placas",tipo:"Tipo de vehículo",marca_modelo:"Marca / modelo",licencia_numero:"Número de licencia",licencia_tipo:"Tipo de licencia",licencia_vigencia:"Vigencia de licencia"};
 function vistaCambios(){
   const f=CAMB.map(q=>{const d=DRV.find(y=>y.id===q.driver_id);
-    const det=Object.entries(q.datos).map(([k,v])=>`${CAMPOS[k]||k}: <s style="color:#888">${esc((q.anterior&&q.anterior[k])||"—")}</s> → <b>${v}</b>`).join("<br>");
+    const det=Object.entries(q.datos).map(([k,v])=>`${esc(CAMPOS[k]||k)}: <s style="color:#888">${esc((q.anterior&&q.anterior[k])||"—")}</s> → <b>${esc(v)}</b>`).join("<br>");
     return `<tr><td>${esc(d?d.nombre:q.driver_id)}<br><small>${dd(q.solicitado_en)}</small></td><td>${det}</td><td>${q.estatus==="pendiente"?"<span class='pill w'>Pendiente</span>":q.estatus==="aprobada"?"<span class='pill ok'>Aprobada</span>":"<span class='pill bad'>Rechazada</span>"}</td><td>${q.estatus==="pendiente"?`<button class="btn sm" data-cpa="${esc(q.id)}">Aprobar</button> <button class="btn ghost sm" data-cpr="${esc(q.id)}">Rechazar</button>`:""}</td></tr>`}).join("");
-  return `<h3 style="margin:12px 8px 0">Cambios de datos solicitados por los drivers</h3><small style="padding:0 8px">Nombre, vehículo y licencia solo cambian cuando Chazki los autoriza.</small><table><tr><th>Driver</th><th>Cambio solicitado</th><th>Estatus</th><th></th></tr>${esc(f||'<tr><td colspan="4">Sin solicitudes.</td></tr>')}</table>`}
+  return `<h3 style="margin:12px 8px 0">Cambios de datos solicitados por los drivers</h3><small style="padding:0 8px">Nombre, vehículo y licencia solo cambian cuando Chazki los autoriza.</small><table><tr><th>Driver</th><th>Cambio solicitado</th><th>Estatus</th><th></th></tr>${f||'<tr><td colspan="4">Sin solicitudes.</td></tr>'}</table>`}
 async function resolverCambio(id,ok){const {error}=await sb.rpc("resolver_cambio_perfil",{p_id:id,p_aprobar:ok,p_nota:null});
   if(error){toast(error.message);return}await cargaExtra();render();toast(ok?"Cambio aprobado y aplicado":"Cambio rechazado")}
 async function verManif(id){const ru=R.find(x=>x.id===id);const paths=ru.ruta_manifiestos.map(x=>x.foto_path);
@@ -250,10 +250,10 @@ let RGF={cuenta:"",tipo:""};
 function vistaReglas(){
   const ed=esOps(),sty='style="padding:8px;border:1px solid var(--line);border-radius:10px"';
   const L=(RGL||[]).filter(g=>(!RGF.cuenta||g.cuenta===RGF.cuenta)&&(!RGF.tipo||(RGF.tipo==="bono"?esBono(g.tipo_regla):!esBono(g.tipo_regla))));
-  const rows=L.map(g=>`<tr><td><b>${esc(g.cuenta)}</b></td><td>${esBono(g.tipo_regla)?'<span class="pill ok">Bono</span>':g.tipo_regla==="bandera"?'<span class="pill w">Bandera</span>':'<span class="pill bad">Penalización</span>'}<br><small>${TIPO_R[g.tipo_regla]||g.tipo_regla}</small></td><td>${g.aplica_a==="cobro"?"Cobro":"Pago"}</td><td>${esc(g.tipo_unidad||"Todos")}</td><td>${esc(g.esquema||"Todos")}</td><td>${condR(g)}</td><td style="text-align:right"><b>${valR(g)}</b></td><td><small>${esc(g.descripcion)}</small>${g.excepcion_validacion_supervisor?' <span class="pill w">Exonerable</span>':""}${g.por_confirmar?' <span class="pill w">Por confirmar</span>':""}</td><td>${g.activo?"":'<span class="pill bad">Inactiva</span>'}</td>${ed?`<td><button class="btn ghost sm" data-re="${esc(g.id)}">Editar</button></td>`:""}</tr>`).join("");
+  const rows=L.map(g=>`<tr><td><b>${esc(g.cuenta)}</b></td><td>${esBono(g.tipo_regla)?'<span class="pill ok">Bono</span>':g.tipo_regla==="bandera"?'<span class="pill w">Bandera</span>':'<span class="pill bad">Penalización</span>'}<br><small>${esc(TIPO_R[g.tipo_regla]||g.tipo_regla)}</small></td><td>${g.aplica_a==="cobro"?"Cobro":"Pago"}</td><td>${esc(g.tipo_unidad||"Todos")}</td><td>${esc(g.esquema||"Todos")}</td><td>${esc(condR(g))}</td><td style="text-align:right"><b>${esc(valR(g))}</b></td><td><small>${esc(g.descripcion)}</small>${g.excepcion_validacion_supervisor?' <span class="pill w">Exonerable</span>':""}${g.por_confirmar?' <span class="pill w">Por confirmar</span>':""}</td><td>${g.activo?"":'<span class="pill bad">Inactiva</span>'}</td>${ed?`<td><button class="btn ghost sm" data-re="${esc(g.id)}">Editar</button></td>`:""}</tr>`).join("");
   return `<div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px;align-items:center"><select id="rg-fc" ${sty}><option value="">Todos los clientes</option>${["MELI","COPPEL","LIVERPOOL"].map(c=>`<option ${RGF.cuenta===c?"selected":""}>${c}</option>`).join("")}</select><select id="rg-ft" ${sty}><option value="">Penalizaciones y bonos</option><option value="pen" ${RGF.tipo==="pen"?"selected":""}>Solo penalizaciones</option><option value="bono" ${RGF.tipo==="bono"?"selected":""}>Solo bonos</option></select>${ed?'<button class="btn" id="rg-n">+ Nueva regla</button>':""}</div>
    <div style="padding:0 8px 6px"><small>${ed?"Puedes agregar y editar. Los cambios aplican a rutas que se validen de ahora en adelante y quedan en bitácora.":"Solo consulta."}</small></div>
-   <table><tr><th>Cliente</th><th>Tipo</th><th>Aplica a</th><th>Vehículo</th><th>Esquema</th><th>Condición</th><th>Valor</th><th>Descripción</th><th></th>${ed?"<th></th>":""}</tr>${esc(rows||'<tr><td colspan="10">Sin reglas.</td></tr>')}</table>`}
+   <table><tr><th>Cliente</th><th>Tipo</th><th>Aplica a</th><th>Vehículo</th><th>Esquema</th><th>Condición</th><th>Valor</th><th>Descripción</th><th></th>${ed?"<th></th>":""}</tr>${rows||'<tr><td colspan="10">Sin reglas.</td></tr>'}</table>`}
 
 const uniq=(k)=>[...new Set((TF||[]).map(x=>x[k]).filter(Boolean))].sort();
 const subTF=()=>`<div class="tabs" style="padding:8px 8px 0"><button class="${TFV==="t"?"on":""}" data-tfv="t">Tarifas</button><button class="${TFV==="r"?"on":""}" data-tfv="r">Penalizaciones y bonos</button></div>`;
@@ -266,7 +266,7 @@ function vistaTarifario(){
   const ed=esOps();
   const f=`<div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px;align-items:center"><select id="tf-c" ${sty}>${op(["MELI","COPPEL","LIVERPOOL"],TFL.cuenta).replace("Todos","Todos los clientes")}</select><input id="tf-q" placeholder="Buscar ubicación, zona…" value="${esc(TFL.q)}" ${sty}><select id="tf-v" ${sty}>${op(uniq("tipo_unidad"),TFL.veh).replace("Todos","Todos los vehículos")}</select><select id="tf-e" ${sty}>${op(uniq("esquema"),TFL.esq).replace("Todos","Todos los esquemas")}</select><label style="font-size:13px"><input type="checkbox" id="tf-a" ${TFL.act?"checked":""}> Solo activas</label>${ed?'<button class="btn" id="tf-n">+ Nueva tarifa</button>':""}</div>`;
   const rows=L.slice(0,300).map(x=>`<tr><td><b>${esc(x.cuenta)}</b>${x.cliente&&x.cliente!==x.cuenta?`<br><small>${esc(x.cliente)}</small>`:""}</td><td>${esc(x.ubicacion||"—")}${x.ciudad?`<br><small>${esc(x.ciudad)}</small>`:""}</td><td>${esc(x.zona||"—")}${x.variable?` <span class="pill w">${esc(x.variable)}</span>`:""}</td><td>${esc(x.tipo_unidad||"—")}</td><td>${esc(x.esquema||"—")}</td><td style="text-align:right"><b>${x.pago_base==null?"—":fm(x.pago_base)}</b></td><td style="text-align:right"><b>${x.tarifa_cliente==null?"—":fm(x.tarifa_cliente)}</b></td><td><small>${esc(x.vigencia_desde)}${x.vigencia_hasta?" → "+x.vigencia_hasta:" → abierta"}</small>${x.activo?"":' <span class="pill bad">Inactiva</span>'}</td>${ed?`<td><button class="btn ghost sm" data-te="${esc(x.id)}">Editar</button></td>`:""}</tr>`).join("");
-  return subTF()+f+`<div style="padding:0 8px 6px"><small>${esc(L.length)} tarifas${L.length>300?" (se muestran 300; afina el filtro)":""} · ${ed?"Puedes agregar y editar. Los cambios no alteran rutas ya validadas y quedan en bitácora.":"Solo consulta. Los cambios los hacen Operaciones y la cuenta maestra."}</small></div><table><tr><th>Cliente</th><th>Ubicación</th><th>Tipo de ruta</th><th>Vehículo</th><th>Esquema</th><th>Pago</th><th>Cobro</th><th>Vigencia</th>${ed?"<th></th>":""}</tr>${esc(rows||'<tr><td colspan="9">Sin tarifas con ese filtro.</td></tr>')}</table>`}
+  return subTF()+f+`<div style="padding:0 8px 6px"><small>${esc(L.length)} tarifas${L.length>300?" (se muestran 300; afina el filtro)":""} · ${ed?"Puedes agregar y editar. Los cambios no alteran rutas ya validadas y quedan en bitácora.":"Solo consulta. Los cambios los hacen Operaciones y la cuenta maestra."}</small></div><table><tr><th>Cliente</th><th>Ubicación</th><th>Tipo de ruta</th><th>Vehículo</th><th>Esquema</th><th>Pago</th><th>Cobro</th><th>Vigencia</th>${ed?"<th></th>":""}</tr>${rows||'<tr><td colspan="9">Sin tarifas con ese filtro.</td></tr>'}</table>`}
 function formTarifa(id){
   const t=id?TF.find(x=>x.id===id):{cuenta:"",ubicacion:"",ciudad:"",tipo_unidad:"",esquema:"",zona:"",variable:"",pago_base:"",tarifa_cliente:"",vigencia_desde:new Date().toLocaleDateString("en-CA"),vigencia_hasta:"",activo:true};
   const m=$("modal");m.classList.remove("hide");const dl=(i,k)=>`<datalist id="${i}">${uniq(k).map(v=>`<option value="${v}">`).join("")}</datalist>`;
@@ -338,9 +338,9 @@ const CATALOGO={rutas:["Rutas","Cada ruta con driver, flotillero, cliente, CEDIS
  drivers:["Drivers y flotilleros","Base de drivers con flotillero y registro fiscal."],liquidaciones_pago:["Liquidaciones (pago)","Pago al proveedor por ruta validada, sin cobro al cliente ni utilidad."],
  liquidaciones:["Liquidaciones completas","Pago, cobro al cliente, venta, utilidad y margen por ruta validada."],pagos:["Pagos","Pagos generados por driver y flotillero con su estatus."],auditoria:["Bajas y cambios de datos","Solicitudes de baja y de cambio de datos con su estatus."]};
 function vistaDescargas(){
-  const l=(DSET||[]).map(k=>`<div class="item" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 8px;border-bottom:1px solid var(--line)"><div><b>${CATALOGO[k][0]}</b><br><small>${CATALOGO[k][1]}</small></div><button class="btn sm" data-dl="${k}">Descargar CSV</button></div>`).join("");
+  const l=(DSET||[]).map(k=>{const [label,description]=CATALOGO[k]||[k,""];return `<div class="item" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 8px;border-bottom:1px solid var(--line)"><div><b>${esc(label)}</b><br><small>${esc(description)}</small></div><button class="btn sm" data-dl="${esc(k)}">Descargar CSV</button></div>`}).join("");
   const lg=DLOG.map(x=>`<tr><td>${dd(x.en)} ${hh(x.en)}</td><td>${esc(x.rol)}</td><td>${(CATALOGO[x.dataset]||[x.dataset])[0]}</td><td>${esc(x.filas)}</td><td>${esc(x.desde)} → ${esc(x.hasta)}</td></tr>`).join("");
-  return `<h3 style="margin:12px 8px 0">Descarga de datos</h3><div style="padding:0 8px"><span class="pill ok">${NIVEL[ROL]||ROL}</span><br><small>Usa el rango de fechas y el cliente de la barra de arriba. Cada descarga queda registrada.</small></div>${esc(l||'<div style="padding:12px">Tu nivel no tiene descargas.</div>')}
+  return `<h3 style="margin:12px 8px 0">Descarga de datos</h3><div style="padding:0 8px"><span class="pill ok">${esc(NIVEL[ROL]||ROL)}</span><br><small>Usa el rango de fechas y el cliente de la barra de arriba. Cada descarga queda registrada.</small></div>${l||'<div style="padding:12px">Tu nivel no tiene descargas.</div>'}
    ${DLOG.length?`<h3 style="margin:16px 8px 0">Últimas descargas</h3><table><tr><th>Cuándo</th><th>Rol</th><th>Descarga</th><th>Filas</th><th>Periodo</th></tr>${lg}</table>`:""}`}
 const csvCell=v=>{if(v==null)return"";const s=String(v).replace(/"/g,'""');return /[",\n\r]/.test(s)?`"${s}"`:s};
 async function descargar(k,btn){btn.disabled=true;const t=btn.textContent;btn.textContent="Generando…";
@@ -356,12 +356,12 @@ function vistaBajas(){
   const f=BAJ.map(q=>{const d=DRV.find(y=>y.id===q.driver_id),p=PRV.find(y=>y.id===q.proveedor_id);
     const mia=q.estatus==="pendiente"&&((puedeS&&!q.aprob_supervisor)||(puedeC&&!q.aprob_coord));
     return `<tr><td>${esc(d?d.nombre:q.driver_id)}</td><td>${esc(p?p.nombre:"—")}</td><td>${esc(q.motivo)}<br><small>${dd(q.solicitado_en)}</small></td><td>Supervisor ${ck(q.aprob_supervisor)}<br>Coordinador ${ck(q.aprob_coord)}</td><td>${q.estatus==="pendiente"?"<span class='pill w'>Pendiente</span>":q.estatus==="aprobada"?"<span class='pill ok'>Aprobada</span>":"<span class='pill bad'>Rechazada</span>"}</td><td>${mia?`<button class="btn sm" data-bja="${esc(q.id)}">Autorizar</button> <button class="btn ghost sm" data-bjr="${esc(q.id)}">Rechazar</button>`:""}</td></tr>`}).join("");
-  return `<h3 style="margin:12px 8px 0">Solicitudes de baja de drivers</h3><small style="padding:0 8px">La baja desvincula al driver del flotillero y requiere la autorización del supervisor y del coordinador.</small><table><tr><th>Driver</th><th>Flotillero</th><th>Motivo</th><th>Autorizaciones</th><th>Estatus</th><th></th></tr>${esc(f||'<tr><td colspan="6">Sin solicitudes.</td></tr>')}</table>`}
+  return `<h3 style="margin:12px 8px 0">Solicitudes de baja de drivers</h3><small style="padding:0 8px">La baja desvincula al driver del flotillero y requiere la autorización del supervisor y del coordinador.</small><table><tr><th>Driver</th><th>Flotillero</th><th>Motivo</th><th>Autorizaciones</th><th>Estatus</th><th></th></tr>${f||'<tr><td colspan="6">Sin solicitudes.</td></tr>'}</table>`}
 async function resolverBaja(id,ok){const {data,error}=await sb.rpc("resolver_baja",{p_id:id,p_aprobar:ok,p_nota:null});
   if(error){toast(error.message);return}await cargaExtra();render();toast(ok?"Autorización registrada ("+data+")":"Solicitud rechazada")}
 function vistaAprobar(){
   const f=PEND.map(q=>{const r=q.rutas||{};return `<tr><td>${esc(r.id_ruta||q.ruta_id)}</td><td>${esc(r.drivers?r.drivers.nombre:"")}</td><td>${esc(r.cedis?r.cedis.clientes.nombre+" · "+r.cedis.nombre:"")}</td><td>${esc(r.entregados)}/${esc(r.paquetes_asignados)}</td><td>No aplicar penalización al pago<br><small>${esc(q.motivo)}</small></td><td>${esCoord()?`<button class="btn sm" data-ap="${esc(q.id)}">Aprobar</button> <button class="btn ghost sm" data-rc="${esc(q.id)}">Rechazar</button>`:'<span class="pill w">En espera</span>'}</td></tr>`}).join("");
-  return `<h3 style="margin:12px 8px 0">Excepciones por aprobar</h3><table><tr><th>Ruta</th><th>Driver</th><th>Cliente · CEDIS</th><th>Entreg.</th><th>Solicitud</th><th></th></tr>${esc(f||'<tr><td colspan="6">Nada pendiente.</td></tr>')}</table>`}
+  return `<h3 style="margin:12px 8px 0">Excepciones por aprobar</h3><table><tr><th>Ruta</th><th>Driver</th><th>Cliente · CEDIS</th><th>Entreg.</th><th>Solicitud</th><th></th></tr>${f||'<tr><td colspan="6">Nada pendiente.</td></tr>'}</table>`}
 async function resolverVal(id,ok){const {error}=await sb.rpc("resolver_validacion",{p_id:id,p_aprobar:ok,p_nota:null});
   if(error){toast(error.message);return}await cargaExtra();render();toast(ok?"Aprobada: ruta validada y pago generado":"Solicitud rechazada")}
 function vistaEquipo(){
@@ -374,7 +374,7 @@ function vistaEquipo(){
    <button class="btn" id="eq-ok">Asignar</button></div>
    <small style="padding:0 8px">Entra con Google; el rol se activa en su primer ingreso (o al instante si ya entró).</small>
    <h3 style="margin:12px 8px 0">Equipo con acceso</h3><table><tr><th>Nombre</th><th>Rol</th><th>Estatus</th></tr>${eq}</table>
-   <h3 style="margin:12px 8px 0">Invitaciones</h3><table><tr><th>Correo</th><th>Rol</th></tr>${esc(inv||'<tr><td colspan="2">Sin invitaciones.</td></tr>')}</table>`}
+   <h3 style="margin:12px 8px 0">Invitaciones</h3><table><tr><th>Correo</th><th>Rol</th></tr>${inv||'<tr><td colspan="2">Sin invitaciones.</td></tr>'}</table>`}
 async function asignarRol(){const m=$("eq-m").value.trim().toLowerCase();
   if(!/^[^@\s]+@chazki\.com$/.test(m)){toast("Solo correos @chazki.com");return}
   const {data,error}=await sb.rpc("asignar_rol",{p_email:m,p_rol:$("eq-r").value});
@@ -382,7 +382,7 @@ async function asignarRol(){const m=$("eq-m").value.trim().toLowerCase();
 function vistaProveedores(){
   const opts=sel=>`<option value="">Sin proveedor</option>`+PRV.map(p=>`<option value="${esc(p.id)}" ${sel==p.id?"selected":""}>${esc(p.nombre)}</option>`).join("");
   const dr=DRV.map(d=>`<tr><td>${esc(d.nombre)}<br><small>${esc(d.codigo||"")}</small></td><td><select data-rol="${esc(d.id)}">${["driver","flotillero","ops","coordinador","ih","finanzas","master"].map(r=>`<option ${d.rol===r?"selected":""}>${r}</option>`).join("")}</select></td><td><select data-prov="${esc(d.id)}">${opts(d.proveedor_id)}</select></td><td><button class="btn sm" data-gd="${esc(d.id)}">Guardar</button></td></tr>`).join("");
-  const pv=PRV.map(p=>{const t=DRV.find(d=>d.id===p.titular_id);return `<tr><td>${esc(p.nombre)}</td><td>${esc(p.tipo)}</td><td>${esc(p.tipo_registro||'<span class="pill w">Sin definir</span>')}</td><td>${esc(t?t.nombre:"—")}</td></tr>`}).join("");
+  const pv=PRV.map(p=>{const t=DRV.find(d=>d.id===p.titular_id);return `<tr><td>${esc(p.nombre)}</td><td>${esc(p.tipo)}</td><td>${p.tipo_registro?esc(p.tipo_registro):'<span class="pill w">Sin definir</span>'}</td><td>${esc(t?t.nombre:"—")}</td></tr>`}).join("");
   const st='style="padding:9px;border:1px solid var(--line);border-radius:10px"';
   if(!esOps())return `<h3 style="margin:12px 8px 0">Proveedores</h3><table><tr><th>Proveedor</th><th>Tipo</th><th>Registro fiscal</th><th>Titular</th></tr>${pv}</table>`;
   return `<h3 style="margin:12px 8px 0">Alta de proveedor</h3><div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px">
@@ -391,7 +391,7 @@ function vistaProveedores(){
     <select id="np-r" ${st}><option value="">Registro fiscal…</option><option>FACTURA</option><option>SIN FACTURA</option></select>
     <select id="np-u" ${st}><option value="">Quién ve sus pagos…</option>${DRV.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join("")}</select>
     <button class="btn" id="np-ok">Crear</button></div>
-    <h3 style="margin:12px 8px 0">Proveedores</h3><table><tr><th>Proveedor</th><th>Tipo</th><th>Registro fiscal</th><th>Titular (ve los pagos)</th></tr>${esc(pv||'<tr><td colspan="4">Aún no hay proveedores.</td></tr>')}</table>
+    <h3 style="margin:12px 8px 0">Proveedores</h3><table><tr><th>Proveedor</th><th>Tipo</th><th>Registro fiscal</th><th>Titular (ve los pagos)</th></tr>${pv||'<tr><td colspan="4">Aún no hay proveedores.</td></tr>'}</table>
     <h3 style="margin:16px 8px 0">Drivers</h3><table><tr><th>Driver</th><th>Rol</th><th>Proveedor</th><th></th></tr>${dr}</table>`}
 function enlazar(){
   document.querySelectorAll("[data-val]").forEach(b=>b.onclick=()=>abrirValidar(+b.dataset.val));
