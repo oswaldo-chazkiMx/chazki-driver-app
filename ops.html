@@ -25,6 +25,15 @@ img.th{width:56px;height:56px;object-fit:cover;border-radius:8px;cursor:pointer}
 #auth button{width:100%;padding:12px;border:0;border-radius:12px;background:var(--pri);color:#fff;font-weight:700;font-size:15px;cursor:pointer}
 .errbox{background:#fde3e4;color:#8f1d22;border-radius:10px;padding:9px;font-size:13px;margin-top:10px}
 .hide{display:none!important}
+#modal{position:fixed;inset:0;background:rgba(20,23,43,.55);z-index:20;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:24px 12px}
+#modal .box{background:#fff;border-radius:16px;padding:18px;width:100%;max-width:660px}
+#modal label{display:block;font-size:12px;color:var(--mut);margin:10px 0 4px}
+#modal input[type=number],#modal input[type=text],#modal select,#modal textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;font-size:14px;font-family:inherit}
+.btn{border:0;border-radius:10px;padding:10px 16px;font-size:14px;font-weight:700;cursor:pointer;background:var(--pri);color:#fff}
+.btn.ghost{background:#eceefb;color:var(--pri)}.btn:disabled{background:#c9cbdb;cursor:not-allowed}.sm{padding:6px 10px;font-size:12px;border-radius:8px}
+td select{padding:6px;border:1px solid var(--line);border-radius:8px;font-size:12px}
+.res{width:100%}.res td{padding:5px 8px}.res td:last-child{text-align:right;font-variant-numeric:tabular-nums}.res tr.t td{font-weight:700;border-top:2px solid var(--line)}.res tr.h td{color:var(--mut);font-size:11px;text-transform:uppercase;border:0;padding-top:12px}
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#14172b;color:#fff;padding:11px 18px;border-radius:99px;font-size:13px;z-index:40;opacity:0;transition:.25s;pointer-events:none;max-width:90%}#toast.show{opacity:1}
 #lb{position:fixed;inset:0;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;z-index:9}#lb img{max-width:92vw;max-height:92vh;border-radius:10px}
 </style>
 </head>
@@ -41,16 +50,17 @@ img.th{width:56px;height:56px;object-fit:cover;border-radius:8px;cursor:pointer}
   <div class="bar"><label>Desde <input type="date" id="d1"></label><label>Hasta <input type="date" id="d2"></label>
     <select id="fcli"><option value="">Todos los clientes</option></select><button id="go" style="padding:9px 16px;border:0;border-radius:10px;background:#4b2fd0;color:#fff;cursor:pointer">Actualizar</button></div>
   <div class="kpis" id="kpis"></div>
-  <div class="tabs"><button class="on" data-t="r">Rutas</button><button data-t="c">Cancelaciones</button><button data-t="i">Incidencias</button><button data-t="f">Fallidos por causa</button></div>
+  <div class="tabs" style="flex-wrap:wrap"><button class="on" data-t="r">Rutas</button><button data-t="v">Por validar</button><button data-t="l">Validadas</button><button data-t="c">Cancelaciones</button><button data-t="i">Incidencias</button><button data-t="f">Fallidos por causa</button><button data-t="p">Proveedores y drivers</button></div>
   <div class="card" id="view"></div>
 </main></div>
 <div id="lb" class="hide"><img id="lbimg"></div>
+<div id="modal" class="hide"></div><div id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
 <script>
 const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);const $=id=>document.getElementById(id);
-let R=[],C=[],tab="r",photos={};
+let R=[],C=[],tab="r",photos={},LIQ={},DRV=[],PRV=[],TAR=null;
 const fd=m=>m==null?"—":(m<1000?m+" m":(m/1000).toFixed(1)+" km");
 const hh=s=>s?new Date(s).toTimeString().slice(0,5):"—";
 const dd=s=>new Date(s).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
@@ -80,12 +90,13 @@ async function load(){
   R=(r.data||[]).filter(keep);C=(c.data||[]).filter(keep);
   const paths=C.map(x=>x.foto_path);photos={};
   if(paths.length){const s=await sb.storage.from("cancelaciones").createSignedUrls(paths,3600);(s.data||[]).forEach(x=>{photos[x.path]=x.signedUrl})}
+  await cargaExtra();
   render();
 }
 function render(){
   const cer=R.filter(x=>x.estado==="cerrada"),asg=R.reduce((s,x)=>s+x.paquetes_asignados,0),ent=cer.reduce((s,x)=>s+x.entregados,0),fal=cer.reduce((s,x)=>s+x.fallidos,0);
   const incs=R.reduce((s,x)=>s+x.ruta_incidencias.length,0);
-  $("kpis").innerHTML=[["Rutas",R.length],["En ruta",R.filter(x=>x.estado==="en_ruta").length],["Paquetes asignados",asg],["Entregados",ent],["Fallidos",fal],["Efectividad",(ent+fal)?Math.round(ent/(ent+fal)*100)+"%":"—"],["Cancelaciones",C.length],["Canc. a revisar",C.filter(x=>x.ubicacion_validada==="fuera"||x.ubicacion_validada==="sin_ubicacion").length],["Incidencias",incs]].map(([k,v])=>`<div class="kpi"><small>${k}</small><b>${v}</b></div>`).join("");
+  $("kpis").innerHTML=[["Rutas",R.length],["En ruta",R.filter(x=>x.estado==="en_ruta").length],["Paquetes asignados",asg],["Entregados",ent],["Fallidos",fal],["Efectividad",(ent+fal)?Math.round(ent/(ent+fal)*100)+"%":"—"],["Cancelaciones",C.length],["Canc. a revisar",C.filter(x=>x.ubicacion_validada==="fuera"||x.ubicacion_validada==="sin_ubicacion").length],["Incidencias",incs],["Por validar",porValidar().length],["Pago validado",fm(sumLiq("pago_driver"))]].map(([k,v])=>`<div class="kpi"><small>${k}</small><b>${v}</b></div>`).join("");
   let h="";
   if(tab==="r")h=`<table><tr><th>Fecha</th><th>Driver</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Zonas</th><th>Llegada</th><th>Asig.</th><th>Entreg.</th><th>Fall.</th><th>Estado</th></tr>`+
     (R.map(x=>`<tr><td>${dd(x.checkin_at)}</td><td>${x.drivers.nombre}<br><small>${x.drivers.codigo||""}</small></td><td><b>${x.cedis.clientes.nombre}</b><br>${x.cedis.nombre}</td><td>${x.id_ruta}</td><td>${x.zonas.join(", ")}</td><td>${hh(x.hora_llegada_cedis)}</td><td>${x.paquetes_asignados}</td><td>${x.entregados??"—"}</td><td>${x.fallidos??"—"}</td><td><span class="pill ${x.estado==="cerrada"?"ok":"w"}">${x.estado==="cerrada"?"Cerrada "+hh(x.checkout_at):"En ruta"}</span></td></tr>`).join("")||`<tr><td colspan="10">Sin rutas en este periodo.</td></tr>`)+`</table>`;
@@ -95,8 +106,121 @@ function render(){
     (rows.map(({x,i})=>`<tr><td>${dd(x.checkin_at)}</td><td>${x.drivers.nombre}</td><td>${x.cedis.clientes.nombre} · ${x.cedis.nombre}</td><td><span class="pill bad">${i.tipos_incidencia.nombre}</span></td><td>${i.comentario||"—"}</td></tr>`).join("")||`<tr><td colspan="5">Sin incidencias en este periodo.</td></tr>`)+`</table>`}
   if(tab==="f"){const m={};R.forEach(x=>x.ruta_fallos.forEach(f=>{m[f.causas_fallo.nombre]=(m[f.causas_fallo.nombre]||0)+f.cantidad}));const e=Object.entries(m).sort((a,b)=>b[1]-a[1]);
     h=`<table><tr><th>Causa</th><th>Paquetes</th></tr>`+(e.map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join("")||`<tr><td colspan="2">Sin fallidos en este periodo.</td></tr>`)+`</table>`}
-  $("view").innerHTML=h;
+  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();
+  $("view").innerHTML=h;enlazar();
   document.querySelectorAll("img.th").forEach(i=>i.onclick=()=>{$("lbimg").src=i.dataset.u;$("lb").classList.remove("hide")});
+}
+// ================= Validación de rutas, pagos y proveedores =================
+const fm=n=>{if(n==null)return "—";const v=Number(n);const t=Math.abs(v).toLocaleString("es-MX",{minimumFractionDigits:2,maximumFractionDigits:2});return (v<0&&Math.abs(v)>=0.005?"-":"")+"$"+t};
+const pc=n=>n==null?"—":(Number(n)*100).toFixed(1)+"%";
+const nz=s=>(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9 ]/g," ").trim();
+const cuentaDe=c=>c==="MERCADO LIBRE"?"MELI":(c==="COPPEL"||c==="COPPEL BT")?"COPPEL":c==="LIVERPOOL"?"LIVERPOOL":null;
+const sumLiq=k=>Object.values(LIQ).reduce((s,x)=>s+Number(x[k]||0),0);
+const porValidar=()=>R.filter(x=>x.estado==="cerrada"&&!LIQ[x.id]&&cuentaDe(x.cedis.clientes.nombre));
+function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),3200)}
+async function cargaExtra(){
+  LIQ={};const ids=R.map(x=>x.id);
+  const [l,d,p]=await Promise.all([
+    ids.length?sb.from("liquidaciones").select("*").in("ruta_id",ids):{data:[]},
+    sb.from("drivers").select("id,nombre,codigo,rol,estatus,proveedor_id").order("nombre"),
+    sb.from("proveedores").select("*").order("nombre")]);
+  (l.data||[]).forEach(x=>LIQ[x.ruta_id]=x);DRV=d.data||[];PRV=p.data||[];
+}
+const provDe=driverId=>{const d=DRV.find(y=>y.id===driverId);return d&&PRV.find(y=>y.id===d.proveedor_id)};
+function vistaPorValidar(){const l=porValidar();
+  return `<table><tr><th>Fecha</th><th>Driver</th><th>Proveedor</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Asig.</th><th>Entreg.</th><th>Efectiv.</th><th></th></tr>`+
+  (l.map(x=>{const p=provDe(x.driver_id);return `<tr><td>${dd(x.checkin_at)}</td><td>${x.drivers.nombre}</td><td>${p?p.nombre+`<br><small>${p.tipo_registro||"sin registro fiscal"}</small>`:'<span class="pill w">Sin proveedor</span>'}</td><td><b>${x.cedis.clientes.nombre}</b><br>${x.cedis.nombre}</td><td>${x.id_ruta}</td><td>${x.paquetes_asignados}</td><td>${x.entregados}</td><td>${pc(x.entregados/x.paquetes_asignados)}</td><td><button class="btn sm" data-val="${x.id}">Validar</button></td></tr>`}).join("")||`<tr><td colspan="9">No hay rutas por validar en este periodo (solo MELI, Coppel y Liverpool tienen tarifario cargado).</td></tr>`)+`</table>`}
+function vistaValidadas(){const l=Object.values(LIQ);
+  return `<table><tr><th>Fecha</th><th>Driver</th><th>Proveedor</th><th>Cuenta · esquema</th><th>Efectiv.</th><th>Costo</th><th>Retención</th><th>IVA</th><th>Pago al proveedor</th><th>Venta</th><th>Utilidad</th><th>Registro</th><th></th></tr>`+
+  (l.map(x=>{const ru=R.find(y=>y.id===x.ruta_id),p=PRV.find(y=>y.id===x.proveedor_id);return `<tr><td>${ru?dd(ru.checkin_at):""}</td><td>${ru?ru.drivers.nombre:""}</td><td>${p?p.nombre:"—"}</td><td>${x.cuenta}<br><small>${x.esquema||""}</small></td><td>${pc(x.efectividad)}</td><td>${fm(x.costo_total)}</td><td>${fm(x.retencion)}</td><td>${fm(x.iva)}</td><td><b>${fm(x.pago_driver)}</b></td><td>${fm(x.venta_total)}</td><td>${fm(x.utilidad)}<br><small>${pc(x.margen)}</small></td><td>${x.registro_fiscal}</td><td><button class="btn ghost sm" data-anu="${x.ruta_id}">Anular</button></td></tr>`}).join("")||`<tr><td colspan="13">No hay rutas validadas en este periodo.</td></tr>`)+`</table>`}
+function vistaProveedores(){
+  const opts=sel=>`<option value="">Sin proveedor</option>`+PRV.map(p=>`<option value="${p.id}" ${sel==p.id?"selected":""}>${p.nombre}</option>`).join("");
+  const dr=DRV.map(d=>`<tr><td>${d.nombre}<br><small>${d.codigo||""}</small></td><td><select data-rol="${d.id}">${["driver","flotillero","ops"].map(r=>`<option ${d.rol===r?"selected":""}>${r}</option>`).join("")}</select></td><td><select data-prov="${d.id}">${opts(d.proveedor_id)}</select></td><td><button class="btn sm" data-gd="${d.id}">Guardar</button></td></tr>`).join("");
+  const pv=PRV.map(p=>{const t=DRV.find(d=>d.id===p.titular_id);return `<tr><td>${p.nombre}</td><td>${p.tipo}</td><td>${p.tipo_registro||'<span class="pill w">Sin definir</span>'}</td><td>${t?t.nombre:"—"}</td></tr>`}).join("");
+  const st='style="padding:9px;border:1px solid var(--line);border-radius:10px"';
+  return `<h3 style="margin:12px 8px 0">Alta de proveedor</h3><div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px">
+    <input id="np-n" placeholder="Nombre del proveedor" ${st} style="flex:2;min-width:180px;padding:9px;border:1px solid var(--line);border-radius:10px">
+    <select id="np-t" ${st}><option value="independiente">Independiente</option><option value="flotillero">Flotillero</option></select>
+    <select id="np-r" ${st}><option value="">Registro fiscal…</option><option>FACTURA</option><option>SIN FACTURA</option></select>
+    <select id="np-u" ${st}><option value="">Quién ve sus pagos…</option>${DRV.map(d=>`<option value="${d.id}">${d.nombre}</option>`).join("")}</select>
+    <button class="btn" id="np-ok">Crear</button></div>
+    <h3 style="margin:12px 8px 0">Proveedores</h3><table><tr><th>Proveedor</th><th>Tipo</th><th>Registro fiscal</th><th>Titular (ve los pagos)</th></tr>${pv||'<tr><td colspan="4">Aún no hay proveedores.</td></tr>'}</table>
+    <h3 style="margin:16px 8px 0">Drivers</h3><table><tr><th>Driver</th><th>Rol</th><th>Proveedor</th><th></th></tr>${dr}</table>`}
+function enlazar(){
+  document.querySelectorAll("[data-val]").forEach(b=>b.onclick=()=>abrirValidar(+b.dataset.val));
+  document.querySelectorAll("[data-anu]").forEach(b=>b.onclick=()=>anular(+b.dataset.anu));
+  document.querySelectorAll("[data-gd]").forEach(b=>b.onclick=()=>guardarDriver(b.dataset.gd));
+  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;
+}
+async function guardarDriver(id){const rol=document.querySelector(`[data-rol="${id}"]`).value,pv=document.querySelector(`[data-prov="${id}"]`).value;
+  const {error}=await sb.from("drivers").update({rol,proveedor_id:pv?+pv:null}).eq("id",id);
+  if(error){toast(error.message);return}await cargaExtra();render();toast("Driver actualizado")}
+async function crearProveedor(){const n=$("np-n").value.trim();if(!n){toast("Escribe el nombre del proveedor");return}
+  const {error}=await sb.from("proveedores").insert({nombre:n,tipo:$("np-t").value,tipo_registro:$("np-r").value||null,titular_id:$("np-u").value||null});
+  if(error){toast(error.message);return}await cargaExtra();render();toast("Proveedor creado")}
+async function anular(rutaId){
+  const pg=await sb.from("pagos").select("estatus").eq("ruta_id",rutaId).eq("concepto","servicio");
+  if((pg.data||[]).some(x=>x.estatus==="pagado")){toast("Este pago ya está marcado como pagado; no se puede anular");return}
+  if(!confirm("¿Anular la validación de esta ruta? Se borran su liquidación y su pago pendiente."))return;
+  const a=await sb.from("pagos").delete().eq("ruta_id",rutaId).eq("concepto","servicio").eq("estatus","pendiente");
+  if(a.error){toast(a.error.message);return}
+  const b=await sb.from("liquidaciones").delete().eq("ruta_id",rutaId);if(b.error){toast(b.error.message);return}
+  await cargaExtra();render();toast("Validación anulada")}
+async function cargarTarifas(){if(TAR)return;const {data}=await sb.from("tarifas").select("id,cuenta,conc,ubicacion,ciudad,tipo_unidad,esquema,zona,variable,pago_base,tarifa_cliente,vigencia_desde,vigencia_hasta").order("ubicacion").order("tipo_unidad").order("esquema").order("zona");TAR=data||[]}
+function sugeridas(ru,todas){
+  const cuenta=cuentaDe(ru.cedis.clientes.nombre),fecha=new Date(ru.checkin_at).toLocaleDateString("en-CA");
+  let l=TAR.filter(t=>t.cuenta===cuenta),nota="";
+  const vig=l.filter(t=>t.vigencia_desde<=fecha&&(!t.vigencia_hasta||t.vigencia_hasta>=fecha));
+  if(vig.length)l=vig;else nota="No hay tarifas vigentes en la fecha de la ruta; se muestran todas las de la cuenta. ";
+  if(!todas){let f;
+    if(cuenta==="MELI"){const code=ru.cedis.nombre.split(" - ")[0].toUpperCase();f=l.filter(t=>(t.ubicacion||"").toUpperCase()===code||(!t.ubicacion&&(t.conc||"").toUpperCase().includes(code)))}
+    else{const stop=new Set(["express","hibrida","coppel","paqueteria","paquete","circuitos","para","los","las"]);const tk=nz(ru.cedis.nombre).split(" ").filter(w=>w.length>=3&&!stop.has(w));
+      f=l.filter(t=>{const u=nz((t.ubicacion||"")+" "+(t.ciudad||""));return tk.some(w=>u.includes(w))})}
+    if(f.length)l=f;else nota+="No encontré tarifas para este CEDIS; se muestran todas las de la cuenta.";}
+  return {l,nota};
+}
+const filaRes=(a,b,cls="")=>`<tr class="${cls}"><td>${a}</td><td>${b}</td></tr>`;
+function tablaRes(j){
+  return `<table class="res">`+filaRes("Efectividad",pc(j.efectividad)+" ("+j.entregados+" de "+j.asignados+")")+
+   filaRes("Al proveedor","","h")+filaRes("Pago base",fm(j.pago_base))+(j.regla_pago?filaRes("Regla aplicada: "+j.regla_pago,fm(j.dcto_pago)):"")+(Number(j.ajuste_pago)?filaRes("Ajuste",fm(j.ajuste_pago)):"")+filaRes("Costo total",fm(j.costo_total),"t")+
+   (j.registro_fiscal==="SIN FACTURA"?filaRes("Retención 5%",fm(-j.retencion))+filaRes("Neto a pagar",fm(j.neto))+filaRes("Comisión 2% (costo de Chazki)",fm(j.comision)):filaRes("IVA 16%",fm(j.iva)))+
+   filaRes("Pago al proveedor ("+j.registro_fiscal.toLowerCase()+")",fm(j.pago_driver),"t")+
+   filaRes("Cobro al cliente","","h")+filaRes("Cobro base",fm(j.cobro_base))+(j.regla_cobro?filaRes("Regla aplicada: "+j.regla_cobro,fm(j.dcto_cobro)):"")+(Number(j.ajuste_cobro)?filaRes("Ajuste",fm(j.ajuste_cobro)):"")+filaRes("Venta total",fm(j.venta_total),"t")+
+   filaRes("Utilidad (venta menos costo total)",fm(j.utilidad)+" · "+pc(j.margen),"t")+`</table>`+((j.avisos||[]).length?`<div class="errbox">${j.avisos.join(". ")}</div>`:"");
+}
+async function abrirValidar(id){
+  const ru=R.find(x=>x.id===id);await cargarTarifas();
+  const p=provDe(ru.driver_id),cuenta=cuentaDe(ru.cedis.clientes.nombre),m=$("modal");m.classList.remove("hide");
+  const pintar=()=>{const {l,nota}=sugeridas(ru,$("m-todas").checked);
+    $("m-tar").innerHTML=l.map(t=>`<option value="${t.id}">${[t.ubicacion,t.tipo_unidad,t.esquema,t.zona,t.variable==="PEAK"?"PEAK":""].filter(Boolean).join(" · ")} — pago ${fm(t.pago_base)} / cobro ${fm(t.tarifa_cliente)}</option>`).join("");
+    $("m-nota-t").textContent=nota;reset()};
+  const reset=()=>{$("m-prev").innerHTML="";$("m-ok").disabled=true};
+  m.innerHTML=`<div class="box"><h2 style="margin:0 0 4px">Validar ruta ${ru.id_ruta}</h2>
+    <div style="color:var(--mut);font-size:13px">${ru.drivers.nombre} · ${ru.cedis.clientes.nombre} · ${ru.cedis.nombre} · ${ru.entregados} entregados de ${ru.paquetes_asignados}</div>
+    <label>Tarifa aplicable</label><select id="m-tar"></select>
+    <div style="font-size:12px;color:var(--mut);margin-top:4px"><label style="display:inline;margin:0"><input type="checkbox" id="m-todas"> Ver todas las tarifas de la cuenta</label> <span id="m-nota-t" style="color:#946200"></span></div>
+    <label>Registro fiscal del proveedor ${p?`(${p.nombre})`:"(sin proveedor asignado)"}</label>
+    <select id="m-reg"><option value="">Elige…</option><option ${p&&p.tipo_registro==="FACTURA"?"selected":""}>FACTURA</option><option ${p&&p.tipo_registro==="SIN FACTURA"?"selected":""}>SIN FACTURA</option></select>
+    ${cuenta==="MELI"?`<label style="display:flex;gap:8px;align-items:flex-start;color:var(--ink)"><input type="checkbox" id="m-ex" style="margin-top:2px"> El supervisor validó que la efectividad menor a 90% no fue imputable al driver (se paga la ruta)</label>`:'<input type="checkbox" id="m-ex" class="hide">'}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label>Ajuste al pago (+ o −)</label><input type="number" id="m-ap" value="0" step="0.01"></div><div><label>Ajuste al cobro (+ o −)</label><input type="number" id="m-ac" value="0" step="0.01"></div></div>
+    <label>Nota (opcional)</label><textarea id="m-nota" rows="2"></textarea>
+    <div id="m-prev" style="margin-top:12px"></div>
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button class="btn ghost" id="m-calc">Calcular</button><button class="btn" id="m-ok" disabled>Validar y generar pago</button><button class="btn ghost" id="m-x">Cancelar</button></div></div>`;
+  pintar();
+  $("m-todas").onchange=pintar;
+  ["m-tar","m-reg","m-ex","m-ap","m-ac"].forEach(i=>$(i).addEventListener("input",reset));
+  $("m-x").onclick=()=>m.classList.add("hide");
+  const args=()=>({p_ruta_id:id,p_tarifa_id:+$("m-tar").value,p_registro:$("m-reg").value,p_excepcion:$("m-ex").checked,p_ajuste_pago:+$("m-ap").value||0,p_ajuste_cobro:+$("m-ac").value||0});
+  $("m-calc").onclick=async()=>{
+    if(!$("m-tar").value){$("m-prev").innerHTML='<div class="errbox">Elige una tarifa.</div>';return}
+    const r=await sb.rpc("calcular_liquidacion",args());
+    if(r.error){$("m-prev").innerHTML=`<div class="errbox">${r.error.message}</div>`;$("m-ok").disabled=true;return}
+    $("m-prev").innerHTML=tablaRes(r.data);$("m-ok").disabled=false};
+  $("m-ok").onclick=async()=>{
+    $("m-ok").disabled=true;
+    const r=await sb.rpc("validar_ruta",{...args(),p_nota:$("m-nota").value.trim()||null});
+    if(r.error){$("m-prev").innerHTML+=`<div class="errbox">${r.error.message}</div>`;return}
+    m.classList.add("hide");await cargaExtra();render();toast("Ruta validada y pago generado")};
 }
 boot();
 </script>

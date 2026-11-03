@@ -171,6 +171,7 @@ canvas{width:100%;border-radius:12px;margin-top:10px;display:block}
     <div class="bars" id="bars"></div>
   </div>
   <div class="card"><h2>Desglose</h2><div id="gdes"></div></div>
+  <div class="card hide" id="gflota"><h2>Por driver (periodo elegido)</h2><div id="gflo"></div></div>
   <div class="card"><h2>Últimos pagos</h2><div id="gpag"></div></div>
 </section>
 
@@ -222,7 +223,7 @@ function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");set
 $("hdate").textContent=new Date().toLocaleDateString("es-MX",{weekday:"long",day:"numeric",month:"long"});
 const VTIPOS=[["🛵","Moto"],["🚗","Sedan"],["🚙","Small"],["🚐","Large"],["🚚","Pickup"],["🚛","Van"]];
 
-let ME=null,DRIVER=null,CLI=[],CAUSAS=[],INCID=[],vt=null;
+let ME=null,DRIVER=null,CLI=[],CAUSAS=[],INCID=[],vt=null,ACC={puede_ver_ganancias:true,es_flotillero:false};
 const S={stage:0,zonas:[],route:null,fallos:{},inc:null,incSel:new Set()};
 
 // ---------- Autenticación ----------
@@ -264,6 +265,7 @@ async function boot(){
   fillClientes($("cli"));fillClientes($("ccli"));
   $("incchips").innerHTML=INCID.map(c=>`<span class="chip" data-i="${c.id}">${c.nombre}</span>`).join("");
   renderStepper();
+  const ac=await sb.rpc("mi_acceso_ganancias");if(ac.data)ACC=ac.data;
   await Promise.all([loadPerfil(),loadHist(),loadGan(),loadCan(),resumeRoute()]);
 }
 
@@ -409,8 +411,13 @@ async function loadCan(){
 
 // ---------- Ganancias ----------
 let PAGOS=[],gp="sem";
-async function loadGan(){const d=new Date();d.setDate(d.getDate()-62);
-  const {data}=await sb.from("pagos").select("*").eq("driver_id",ME.id).gte("fecha",d.toLocaleDateString("en-CA")).order("fecha",{ascending:false});PAGOS=data||[];drawG()}
+async function loadGan(){
+  // Un driver que pertenece a un flotillero no ve los pagos: los ve su transportista
+  if(!ACC.puede_ver_ganancias){$("t-gan").innerHTML='<div class="card"><h2>💰 Tus pagos</h2><div class="note" style="font-size:14px;margin-top:0">Los pagos de tus servicios los recibe y consulta tu transportista. Si tienes dudas sobre un pago, habla con él.</div></div>';return}
+  const d=new Date();d.setDate(d.getDate()-62);
+  const sel=ACC.es_flotillero?"*,drivers(nombre),rutas(id_ruta)":"*";
+  const q=sb.from("pagos").select(sel).gte("fecha",d.toLocaleDateString("en-CA")).order("fecha",{ascending:false});
+  const {data}=ACC.es_flotillero?await q:await q.eq("driver_id",ME.id);PAGOS=data||[];drawG()}
 const parseF=s=>{const [y,m,d]=s.split("-");return new Date(+y,m-1,+d)};
 const monday=d=>{const x=new Date(d);x.setHours(0,0,0,0);x.setDate(x.getDate()-((x.getDay()+6)%7));return x};
 function drawG(){
@@ -423,7 +430,10 @@ function drawG(){
   $("bars").innerHTML=vals.map((v,i)=>`<div><span>${v?fmt(v):""}</span><b style="height:${Math.max(3,v/mx*100)}%"></b>${xs[i]}</div>`).join("");
   const by=c=>sel.filter(p=>p.concepto===c).reduce((a,p)=>a+ +p.monto,0);
   $("gdes").innerHTML=[["Servicios","servicio"],["Bonos","bono"],["Propinas","propina"],["Ajustes","ajuste"]].map(([l,c])=>`<div class="item"><span>${l}</span><b>${fmt(by(c))}</b></div>`).join("");
-  $("gpag").innerHTML=PAGOS.length?PAGOS.slice(0,8).map(p=>`<div class="item"><div>${p.concepto[0].toUpperCase()+p.concepto.slice(1)}<small>${parseF(p.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short"})}</small></div><div style="text-align:right"><b>${fmt(p.monto)}</b><small><span class="pill ${p.estatus==="pagado"?"ok":"w"}">${p.estatus}</span></small></div></div>`).join(""):'<div class="note">Aún no tienes pagos registrados.</div>';
+  $("gflota").classList.toggle("hide",!ACC.es_flotillero);
+  if(ACC.es_flotillero){const m={};sel.forEach(p=>{const n=p.drivers?p.drivers.nombre:"—";m[n]=(m[n]||0)+ +p.monto});
+    $("gflo").innerHTML=Object.entries(m).sort((a,b)=>b[1]-a[1]).map(([n,v])=>`<div class="item"><span>${n}</span><b>${fmt(v)}</b></div>`).join("")||'<div class="note">Sin pagos en este periodo.</div>'}
+  $("gpag").innerHTML=PAGOS.length?PAGOS.slice(0,ACC.es_flotillero?15:8).map(p=>`<div class="item"><div>${p.concepto[0].toUpperCase()+p.concepto.slice(1)}${ACC.es_flotillero&&p.drivers?" · "+p.drivers.nombre:""}<small>${parseF(p.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short"})}${p.rutas?" · Ruta "+p.rutas.id_ruta:""}</small></div><div style="text-align:right"><b>${fmt(p.monto)}</b><small><span class="pill ${p.estatus==="pagado"?"ok":"w"}">${p.estatus}</span></small></div></div>`).join(""):'<div class="note">Aún no tienes pagos registrados.</div>';
 }
 document.querySelectorAll("#gseg button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#gseg button").forEach(x=>x.classList.toggle("on",x===b));gp=b.dataset.p;drawG()});
 
