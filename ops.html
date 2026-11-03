@@ -186,21 +186,80 @@ async function verManif(id){const ru=R.find(x=>x.id===id);const paths=ru.ruta_ma
   const s=await sb.storage.from("manifiestos").createSignedUrls(paths,3600);const m=$("modal");m.classList.remove("hide");
   m.innerHTML=`<div class="box"><h2 style="margin:0 0 8px">Manifiestos · Ruta ${ru.id_ruta}</h2><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${(s.data||[]).map(x=>`<a href="${x.signedUrl}" target="_blank" rel="noopener"><img src="${x.signedUrl}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px"></a>`).join("")}</div><div style="margin-top:12px"><button class="btn ghost" id="mf-x">Cerrar</button></div></div>`;$("mf-x").onclick=()=>m.classList.add("hide")}
 let TF=null,TFL={cuenta:"",q:"",veh:"",esq:"",act:true};
-async function cargaTF(){const {data,error}=await sb.from("tarifas").select("*").order("cuenta").order("ubicacion").order("tipo_unidad").limit(2000);if(error){toast(error.message);return}TF=data||[];render()}
+async function cargaTF(){const [t,g]=await Promise.all([sb.from("tarifas").select("*").order("cuenta").order("ubicacion").order("tipo_unidad").limit(2000),sb.from("reglas_penalizacion").select("*").order("cuenta").order("aplica_a").order("prioridad")]);if(t.error){toast(t.error.message);return}TF=t.data||[];RGL=g.data||[];render()}
+let TFV="t",RGL=null,RTD=[];
+const TIPO_R={porcentaje_descuento:"Penalización · descuento %",pago_fijo:"Penalización · pago fijo",bono_fijo:"Bono · monto fijo",bono_porcentaje:"Bono · % del pago base",bandera:"Bandera (informativa)"};
+const pcs=v=>v==null?"":(Math.round(Number(v)*10000)/100)+"%";
+const condR=g=>[g.efectividad_menor_que!=null?"Efectividad < "+pcs(g.efectividad_menor_que):"",g.efectividad_minima!=null?"Efectividad ≥ "+pcs(g.efectividad_minima):"",g.entregados_minimos!=null?"Entregados ≥ "+g.entregados_minimos:""].filter(Boolean).join(" y ")||"Siempre";
+const valR=g=>g.valor==null?"—":(["porcentaje_descuento","bono_porcentaje"].includes(g.tipo_regla)?pcs(g.valor):fm(g.valor));
+const esBono=t=>String(t).startsWith("bono");
+const reglasDe=(c,u,e)=>(RGL||[]).filter(g=>g.cuenta===c&&(!g.tipo_unidad||g.tipo_unidad===u)&&(!g.esquema||g.esquema===e));
+const kindDe=g=>g.tipo_regla==="porcentaje_descuento"?"pen_pct":g.tipo_regla==="pago_fijo"?"pen_fijo":g.tipo_regla==="bono_fijo"?"bono_fijo":"bono_pct";
+const KIND={pen_pct:["porcentaje_descuento","Penalización: descuento % al pago o cobro"],pen_fijo:["pago_fijo","Penalización: pago fijo $"],bono_fijo:["bono_fijo","Bono por productividad: monto fijo $"],bono_pct:["bono_porcentaje","Bono por productividad: % del pago base"]};
+function reglaCampos(p,g,opts){g=g||{};const k=g.tipo_regla?kindDe(g):"pen_pct";const sty='style="width:100%"';
+  const dl=(id,key)=>`<datalist id="${id}">${uniq(key).map(v=>`<option value="${v}">`).join("")}</datalist>`;
+  return `<label>Tipo de regla</label><select id="${p}-k">${Object.entries(KIND).map(([v,x])=>`<option value="${v}" ${v===k?"selected":""}>${x[1]}</option>`).join("")}</select>
+   <div id="${p}-aw"><label>Se aplica a</label><select id="${p}-a"><option value="pago" ${g.aplica_a!=="cobro"?"selected":""}>Pago al driver</option><option value="cobro" ${g.aplica_a==="cobro"?"selected":""}>Cobro al cliente</option></select></div>
+   <label id="${p}-vl">Valor</label><input id="${p}-v" type="number" step="0.01" value="${g.valor==null?"":(["porcentaje_descuento","bono_porcentaje"].includes(g.tipo_regla)?Math.round(g.valor*10000)/100:g.valor)}">
+   <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div id="${p}-emw"><label>Efectividad menor que (%)</label><input id="${p}-em" type="number" step="0.1" value="${g.efectividad_menor_que==null?"":g.efectividad_menor_que*100}"></div>
+   <div id="${p}-eminw"><label>Efectividad mínima (%)</label><input id="${p}-emin" type="number" step="0.1" value="${g.efectividad_minima==null?"":g.efectividad_minima*100}"></div>
+   <div id="${p}-entw"><label>Entregados mínimos</label><input id="${p}-ent" type="number" step="1" value="${g.entregados_minimos??""}"></div></div>
+   ${opts&&opts.alcance?"":`<label>Vehículo (vacío = todos)</label><input id="${p}-u" list="${p}-dlu" value="${g.tipo_unidad||""}">${dl(p+"-dlu","tipo_unidad")}<label>Esquema (vacío = todos)</label><input id="${p}-e" list="${p}-dle" value="${g.esquema||""}">${dl(p+"-dle","esquema")}`}
+   <label>Descripción (opcional, se genera sola)</label><input id="${p}-d" value="${g.descripcion||""}">
+   <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label>Prioridad (menor va primero)</label><input id="${p}-p" type="number" step="1" value="${g.prioridad??5}"></div>
+   <div id="${p}-xw" style="display:flex;align-items:flex-end"><label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="${p}-x" ${g.excepcion_validacion_supervisor?"checked":""}> Se puede exonerar al validar</label></div></div>`}
+function reglaToggle(p){const k=$(p+"-k").value,b=esBono(KIND[k][0]);
+  $(p+"-aw").style.display=b?"none":"block";$(p+"-xw").style.display=b?"none":"flex";$(p+"-emw").style.display=b?"none":"block";$(p+"-eminw").style.display=b?"block":"none";$(p+"-entw").style.display=b?"block":"none";
+  $(p+"-vl").textContent=k==="pen_pct"||k==="bono_pct"?"Valor (% — ej. 5 = 5%)":"Valor ($)"}
+function reglaHook(p){const f=()=>reglaToggle(p);$(p+"-k").onchange=f;f()}
+function leerRegla(p,alc){const n=i=>{const v=$(p+"-"+i).value.trim();return v===""?null:+v};const kd=$(p+"-k").value,tipo=KIND[kd][0],b=esBono(tipo);
+  const v=n("v");if(v==null||v<=0)throw new Error("Captura el valor de la regla");const pct=["porcentaje_descuento","bono_porcentaje"].includes(tipo);if(pct&&v>100)throw new Error("El porcentaje no puede pasar de 100");
+  const em=b?null:n("em"),emin=b?n("emin"):null,ent=b?n("ent"):null;
+  if(b&&emin==null&&ent==null)throw new Error("Un bono necesita efectividad mínima o entregados mínimos");
+  const row={tipo_regla:tipo,aplica_a:b?"pago":$(p+"-a").value,valor:pct?v/100:v,efectividad_menor_que:em==null?null:em/100,efectividad_minima:emin==null?null:emin/100,entregados_minimos:ent,
+    prioridad:n("p")??5,excepcion_validacion_supervisor:b?false:$(p+"-x").checked,tipo_unidad:alc?null:($(p+"-u").value.trim().toUpperCase()||null),esquema:alc?null:($(p+"-e").value.trim().toUpperCase()||null)};
+  if(!b&&em==null&&!row.esquema&&!row.tipo_unidad)throw new Error("Define una condición de efectividad, un vehículo o un esquema");
+  const d=$(p+"-d").value.trim();row.descripcion=d||null;return row}
+function autoDesc(r){return `${r.tipo_regla.startsWith("bono")?"Bono":"Penalización"}${r.tipo_unidad?" "+r.tipo_unidad:""}${r.esquema?" "+r.esquema:""}: ${condR(r).toLowerCase()} → ${valR(r)}${r.aplica_a==="cobro"?" (cobro)":""}`}
+async function guardarRegla(row,cuenta,id){const base={...row,cuenta,descripcion:row.descripcion||autoDesc(row),por_confirmar:false};
+  if(id)return sb.from("reglas_penalizacion").update(base).eq("id",id);return sb.from("reglas_penalizacion").insert({...base,vigencia_desde:new Date().toLocaleDateString("en-CA"),activo:true})}
+function formRegla(id){const g=id?RGL.find(x=>x.id===id):null;const m=$("modal");m.classList.remove("hide");
+  m.innerHTML=`<div class="box" style="max-height:90vh;overflow:auto"><h2 style="margin:0 0 6px">${id?"Editar regla":"Nueva penalización o bono"}</h2>
+   <label>Cliente</label><select id="rg-c" ${id?"disabled":""}><option value="">Elige…</option>${["MELI","COPPEL","LIVERPOOL"].map(c=>`<option ${g&&g.cuenta===c?"selected":""}>${c}</option>`).join("")}</select>
+   ${reglaCampos("rg",g)}
+   ${id?`<label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="rg-act" ${g.activo?"checked":""}> Regla activa</label>`:""}
+   <div class="note">Una penalización o bono aplica a todas las tarifas del cliente que coincidan con el vehículo y el esquema. Si varias penalizaciones coinciden, se usa la de menor prioridad. Los bonos coincidentes se suman.</div>
+   <div id="rg-err"></div><div style="display:flex;gap:8px;margin-top:14px"><button class="btn" id="rg-ok">Guardar</button><button class="btn ghost" id="rg-x">Cancelar</button></div></div>`;
+  reglaHook("rg");$("rg-x").onclick=()=>m.classList.add("hide");
+  $("rg-ok").onclick=async()=>{const bad=t=>{$("rg-err").innerHTML=`<div class="errbox">${t}</div>`};let row;try{row=leerRegla("rg")}catch(e){return bad(e.message)}
+    const cuenta=id?g.cuenta:$("rg-c").value;if(!cuenta)return bad("Elige el cliente");if(id)row.activo=$("rg-act").checked;
+    $("rg-ok").disabled=true;const {error}=await guardarRegla(row,cuenta,id);if(error){$("rg-ok").disabled=false;return bad(error.message)}
+    m.classList.add("hide");toast(id?"Regla actualizada":"Regla agregada");cargaTF()}}
+let RGF={cuenta:"",tipo:""};
+function vistaReglas(){
+  const ed=esOps(),sty='style="padding:8px;border:1px solid var(--line);border-radius:10px"';
+  const L=(RGL||[]).filter(g=>(!RGF.cuenta||g.cuenta===RGF.cuenta)&&(!RGF.tipo||(RGF.tipo==="bono"?esBono(g.tipo_regla):!esBono(g.tipo_regla))));
+  const rows=L.map(g=>`<tr><td><b>${g.cuenta}</b></td><td>${esBono(g.tipo_regla)?'<span class="pill ok">Bono</span>':g.tipo_regla==="bandera"?'<span class="pill w">Bandera</span>':'<span class="pill bad">Penalización</span>'}<br><small>${TIPO_R[g.tipo_regla]||g.tipo_regla}</small></td><td>${g.aplica_a==="cobro"?"Cobro":"Pago"}</td><td>${g.tipo_unidad||"Todos"}</td><td>${g.esquema||"Todos"}</td><td>${condR(g)}</td><td style="text-align:right"><b>${valR(g)}</b></td><td><small>${g.descripcion}</small>${g.excepcion_validacion_supervisor?' <span class="pill w">Exonerable</span>':""}${g.por_confirmar?' <span class="pill w">Por confirmar</span>':""}</td><td>${g.activo?"":'<span class="pill bad">Inactiva</span>'}</td>${ed?`<td><button class="btn ghost sm" data-re="${g.id}">Editar</button></td>`:""}</tr>`).join("");
+  return `<div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px;align-items:center"><select id="rg-fc" ${sty}><option value="">Todos los clientes</option>${["MELI","COPPEL","LIVERPOOL"].map(c=>`<option ${RGF.cuenta===c?"selected":""}>${c}</option>`).join("")}</select><select id="rg-ft" ${sty}><option value="">Penalizaciones y bonos</option><option value="pen" ${RGF.tipo==="pen"?"selected":""}>Solo penalizaciones</option><option value="bono" ${RGF.tipo==="bono"?"selected":""}>Solo bonos</option></select>${ed?'<button class="btn" id="rg-n">+ Nueva regla</button>':""}</div>
+   <div style="padding:0 8px 6px"><small>${ed?"Puedes agregar y editar. Los cambios aplican a rutas que se validen de ahora en adelante y quedan en bitácora.":"Solo consulta."}</small></div>
+   <table><tr><th>Cliente</th><th>Tipo</th><th>Aplica a</th><th>Vehículo</th><th>Esquema</th><th>Condición</th><th>Valor</th><th>Descripción</th><th></th>${ed?"<th></th>":""}</tr>${rows||'<tr><td colspan="10">Sin reglas.</td></tr>'}</table>`}
+
 const uniq=(k)=>[...new Set((TF||[]).map(x=>x[k]).filter(Boolean))].sort();
+const subTF=()=>`<div class="tabs" style="padding:8px 8px 0"><button class="${TFV==="t"?"on":""}" data-tfv="t">Tarifas</button><button class="${TFV==="r"?"on":""}" data-tfv="r">Penalizaciones y bonos</button></div>`;
 function vistaTarifario(){
   if(!TF){cargaTF();return '<div style="padding:16px">Cargando tarifario…</div>'}
+  if(TFV==="r")return subTF()+vistaReglas();
   const L=TF.filter(x=>(!TFL.cuenta||x.cuenta===TFL.cuenta)&&(!TFL.veh||x.tipo_unidad===TFL.veh)&&(!TFL.esq||x.esquema===TFL.esq)&&(!TFL.act||x.activo)&&(!TFL.q||[x.ubicacion,x.ciudad,x.zona,x.variable,x.conc].join(" ").toUpperCase().includes(TFL.q.toUpperCase())));
   const op=(arr,v)=>`<option value="">Todos</option>`+arr.map(a=>`<option ${a===v?"selected":""}>${a}</option>`).join("");
   const sty='style="padding:8px;border:1px solid var(--line);border-radius:10px"';
   const ed=esOps();
   const f=`<div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px;align-items:center"><select id="tf-c" ${sty}>${op(["MELI","COPPEL","LIVERPOOL"],TFL.cuenta).replace("Todos","Todos los clientes")}</select><input id="tf-q" placeholder="Buscar ubicación, zona…" value="${TFL.q}" ${sty}><select id="tf-v" ${sty}>${op(uniq("tipo_unidad"),TFL.veh).replace("Todos","Todos los vehículos")}</select><select id="tf-e" ${sty}>${op(uniq("esquema"),TFL.esq).replace("Todos","Todos los esquemas")}</select><label style="font-size:13px"><input type="checkbox" id="tf-a" ${TFL.act?"checked":""}> Solo activas</label>${ed?'<button class="btn" id="tf-n">+ Nueva tarifa</button>':""}</div>`;
   const rows=L.slice(0,300).map(x=>`<tr><td><b>${x.cuenta}</b>${x.cliente&&x.cliente!==x.cuenta?`<br><small>${x.cliente}</small>`:""}</td><td>${x.ubicacion||"—"}${x.ciudad?`<br><small>${x.ciudad}</small>`:""}</td><td>${x.zona||"—"}${x.variable?` <span class="pill w">${x.variable}</span>`:""}</td><td>${x.tipo_unidad||"—"}</td><td>${x.esquema||"—"}</td><td style="text-align:right"><b>${x.pago_base==null?"—":fm(x.pago_base)}</b></td><td style="text-align:right"><b>${x.tarifa_cliente==null?"—":fm(x.tarifa_cliente)}</b></td><td><small>${x.vigencia_desde}${x.vigencia_hasta?" → "+x.vigencia_hasta:" → abierta"}</small>${x.activo?"":' <span class="pill bad">Inactiva</span>'}</td>${ed?`<td><button class="btn ghost sm" data-te="${x.id}">Editar</button></td>`:""}</tr>`).join("");
-  return f+`<div style="padding:0 8px 6px"><small>${L.length} tarifas${L.length>300?" (se muestran 300; afina el filtro)":""} · ${ed?"Puedes agregar y editar. Los cambios no alteran rutas ya validadas y quedan en bitácora.":"Solo consulta. Los cambios los hacen Operaciones y la cuenta maestra."}</small></div><table><tr><th>Cliente</th><th>Ubicación</th><th>Tipo de ruta</th><th>Vehículo</th><th>Esquema</th><th>Pago</th><th>Cobro</th><th>Vigencia</th>${ed?"<th></th>":""}</tr>${rows||'<tr><td colspan="9">Sin tarifas con ese filtro.</td></tr>'}</table>`}
+  return subTF()+f+`<div style="padding:0 8px 6px"><small>${L.length} tarifas${L.length>300?" (se muestran 300; afina el filtro)":""} · ${ed?"Puedes agregar y editar. Los cambios no alteran rutas ya validadas y quedan en bitácora.":"Solo consulta. Los cambios los hacen Operaciones y la cuenta maestra."}</small></div><table><tr><th>Cliente</th><th>Ubicación</th><th>Tipo de ruta</th><th>Vehículo</th><th>Esquema</th><th>Pago</th><th>Cobro</th><th>Vigencia</th>${ed?"<th></th>":""}</tr>${rows||'<tr><td colspan="9">Sin tarifas con ese filtro.</td></tr>'}</table>`}
 function formTarifa(id){
   const t=id?TF.find(x=>x.id===id):{cuenta:"",ubicacion:"",ciudad:"",tipo_unidad:"",esquema:"",zona:"",variable:"",pago_base:"",tarifa_cliente:"",vigencia_desde:new Date().toLocaleDateString("en-CA"),vigencia_hasta:"",activo:true};
   const m=$("modal");m.classList.remove("hide");const dl=(i,k)=>`<datalist id="${i}">${uniq(k).map(v=>`<option value="${v}">`).join("")}</datalist>`;
-  m.innerHTML=`<div class="box"><h2 style="margin:0 0 6px">${id?"Editar tarifa":"Nueva tarifa"}</h2>
+  m.innerHTML=`<div class="box" style="max-height:90vh;overflow:auto"><h2 style="margin:0 0 6px">${id?"Editar tarifa":"Nueva tarifa"}</h2>
    <label>Cliente</label><select id="tf-fc" ${id?"disabled":""}><option value="">Elige…</option>${["MELI","COPPEL","LIVERPOOL"].map(c=>`<option ${t.cuenta===c?"selected":""}>${c}</option>`).join("")}</select>
    <label>Ubicación / CEDIS</label><input id="tf-fu" value="${t.ubicacion||""}"><label>Ciudad (opcional)</label><input id="tf-fci" value="${t.ciudad||""}">
    <label>Tipo de ruta (zona)</label><input id="tf-fz" list="dl-z" value="${t.zona||""}" placeholder="LOCAL, FORANEA 1…">${dl("dl-z","zona")}
@@ -210,7 +269,23 @@ function formTarifa(id){
    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label>Pago al driver</label><input id="tf-fp" type="number" step="0.01" value="${t.pago_base??""}"></div><div><label>Cobro al cliente</label><input id="tf-fco" type="number" step="0.01" value="${t.tarifa_cliente??""}"></div>
    <div><label>Vigencia desde</label><input id="tf-fd" type="date" value="${t.vigencia_desde||""}"></div><div><label>Vigencia hasta</label><input id="tf-fh" type="date" value="${t.vigencia_hasta||""}"></div></div>
    <label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="tf-fa" ${t.activo?"checked":""}> Tarifa activa</label>
+   <h3 style="margin:16px 0 4px">Penalizaciones y bonos</h3><div id="rt-box"></div><div id="rt-form" class="hide"></div>
    <div id="tf-err"></div><div style="display:flex;gap:8px;margin-top:14px"><button class="btn" id="tf-ok">Guardar</button><button class="btn ghost" id="tf-x">Cancelar</button></div></div>`;
+  RTD=[];const ctx=()=>({c:id?t.cuenta:$("tf-fc").value,u:$("tf-fv").value.trim().toUpperCase(),e:$("tf-fe").value.trim().toUpperCase()});
+  const drawRT=()=>{const c=ctx();const ex=c.c?reglasDe(c.c,c.u,c.e):[];
+    $("rt-box").innerHTML=(ex.length?ex.map(g=>`<div class="item" style="padding:6px 0;border-bottom:1px solid var(--line)"><div><span class="pill ${esBono(g.tipo_regla)?"ok":"bad"}">${esBono(g.tipo_regla)?"Bono":g.tipo_regla==="bandera"?"Bandera":"Penalización"}</span> <b>${valR(g)}</b> · ${condR(g)}<br><small>${g.descripcion}${g.activo?"":" (inactiva)"}</small></div></div>`).join(""):'<div class="note" style="margin:0">Sin penalizaciones ni bonos para este cliente, vehículo y esquema.</div>')
+      +RTD.map((r,i)=>`<div class="item" style="padding:6px 0"><div><span class="pill w">Por crear</span> <b>${valR(r)}</b> · ${condR(r)}<br><small>${r.descripcion||autoDesc(r)}</small></div><button class="btn ghost sm" data-rtx="${i}">Quitar</button></div>`).join("")
+      +'<button class="btn ghost sm" id="rt-add" style="margin-top:8px">+ Agregar penalización o bono</button><div class="note">Aplican a todas las tarifas del cliente con ese vehículo y esquema. Para editar o desactivar las existentes, usa la pestaña Penalizaciones y bonos.</div>';
+    $("rt-box").querySelectorAll("[data-rtx]").forEach(b=>b.onclick=()=>{RTD.splice(+b.dataset.rtx,1);drawRT()});
+    $("rt-add").onclick=()=>{$("rt-form").classList.remove("hide");$("rt-form").innerHTML=reglaCampos("rt",null,{alcance:true})+'<label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="rt-lu" checked> Limitar a este vehículo</label><label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="rt-le" checked> Limitar a este esquema</label><div id="rt-err"></div><div style="display:flex;gap:8px;margin-top:8px"><button class="btn sm" id="rt-ok">Agregar regla</button><button class="btn ghost sm" id="rt-no">Cancelar</button></div>';
+      reglaHook("rt");$("rt-no").onclick=()=>{$("rt-form").classList.add("hide");$("rt-form").innerHTML=""};
+      $("rt-ok").onclick=async()=>{let r;try{r=leerRegla("rt",true)}catch(e){$("rt-err").innerHTML=`<div class="errbox">${e.message}</div>`;return}
+        const cx=ctx();if(!cx.c){$("rt-err").innerHTML='<div class="errbox">Primero elige el cliente de la tarifa</div>';return}
+        r.tipo_unidad=$("rt-lu").checked?(cx.u||null):null;r.esquema=$("rt-le").checked?(cx.e||null):null;
+        if(id){const {error}=await guardarRegla(r,cx.c,null);if(error){$("rt-err").innerHTML=`<div class="errbox">${error.message}</div>`;return}const g=await sb.from("reglas_penalizacion").select("*");RGL=g.data||RGL;toast("Regla agregada")}
+        else{r._lu=$("rt-lu").checked;r._le=$("rt-le").checked;RTD.push(r)}
+        $("rt-form").classList.add("hide");$("rt-form").innerHTML="";drawRT()}}};
+  drawRT();["tf-fv","tf-fe","tf-fc"].forEach(i=>{const e=$(i);if(e)e.addEventListener("change",drawRT)});
   $("tf-x").onclick=()=>m.classList.add("hide");
   $("tf-ok").onclick=async()=>{const v=i=>$(i).value.trim();const row={ubicacion:v("tf-fu")||null,ciudad:v("tf-fci")||null,zona:v("tf-fz").toUpperCase()||null,tipo_unidad:v("tf-fv").toUpperCase()||null,esquema:v("tf-fe").toUpperCase()||null,variable:v("tf-fva").toUpperCase()||null,
      pago_base:v("tf-fp")===""?null:+v("tf-fp"),tarifa_cliente:v("tf-fco")===""?null:+v("tf-fco"),vigencia_desde:v("tf-fd"),vigencia_hasta:v("tf-fh")||null,activo:$("tf-fa").checked};
@@ -221,6 +296,7 @@ function formTarifa(id){
     row.conc=[row.ubicacion,row.tipo_unidad,row.esquema,row.zona,row.variable].filter(Boolean).join("");
     const q=id?sb.from("tarifas").update(row).eq("id",id):sb.from("tarifas").insert({...row,cuenta,cliente:cuenta,fuente:"Panel"});
     $("tf-ok").disabled=true;const {error}=await q;if(error){$("tf-ok").disabled=false;return bad(error.message)}
+    if(!id&&RTD.length){for(const r of RTD){const x={...r};x.tipo_unidad=r._lu?row.tipo_unidad:null;x.esquema=r._le?row.esquema:null;delete x._lu;delete x._le;const g=await guardarRegla(x,cuenta,null);if(g.error){toast("Tarifa creada, pero una regla falló: "+g.error.message)}}}
     m.classList.add("hide");TF=null;TAR=null;toast(id?"Tarifa actualizada":"Tarifa agregada");cargaTF()}}
 const NIVEL={master:"Cuenta maestra · acceso completo",ops:"Operaciones · acceso completo",coordinador:"Coordinador · operación y pagos, sin cobro ni utilidad",finanzas:"Finanzas · pagos, liquidaciones y utilidad",ih:"Supervisor · datos operativos, sin importes"};
 const CATALOGO={rutas:["Rutas","Cada ruta con driver, flotillero, cliente, CEDIS, paquetes, efectividad, estatus de validación, manifiestos y extras (maniobras, estadía, otros)."],
@@ -287,7 +363,10 @@ function enlazar(){
   document.querySelectorAll("[data-val]").forEach(b=>b.onclick=()=>abrirValidar(+b.dataset.val));
   document.querySelectorAll("[data-anu]").forEach(b=>b.onclick=()=>anular(+b.dataset.anu));
   document.querySelectorAll("[data-gd]").forEach(b=>b.onclick=()=>guardarDriver(b.dataset.gd));
-  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-cpa]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpa,true));document.querySelectorAll("[data-cpr]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpr,false));document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-cap]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.cap,"aprobada"));document.querySelectorAll("[data-crc]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.crc,"rechazada"));const tfc=$("tf-c");if(tfc){tfc.onchange=()=>{TFL.cuenta=tfc.value;render()};$("tf-v").onchange=e=>{TFL.veh=e.target.value;render()};$("tf-e").onchange=e=>{TFL.esq=e.target.value;render()};$("tf-a").onchange=e=>{TFL.act=e.target.checked;render()};
+  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-cpa]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpa,true));document.querySelectorAll("[data-cpr]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpr,false));document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-cap]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.cap,"aprobada"));document.querySelectorAll("[data-crc]").forEach(b=>b.onclick=()=>resolverCan(+b.dataset.crc,"rechazada"));document.querySelectorAll("[data-tfv]").forEach(b=>b.onclick=()=>{TFV=b.dataset.tfv;render()});
+  document.querySelectorAll("[data-re]").forEach(b=>b.onclick=()=>formRegla(+b.dataset.re));
+  const rgn=$("rg-n");if(rgn)rgn.onclick=()=>formRegla(null);const rfc=$("rg-fc");if(rfc){rfc.onchange=()=>{RGF.cuenta=rfc.value;render()};$("rg-ft").onchange=e=>{RGF.tipo=e.target.value;render()}}
+  const tfc=$("tf-c");if(tfc){tfc.onchange=()=>{TFL.cuenta=tfc.value;render()};$("tf-v").onchange=e=>{TFL.veh=e.target.value;render()};$("tf-e").onchange=e=>{TFL.esq=e.target.value;render()};$("tf-a").onchange=e=>{TFL.act=e.target.checked;render()};
    $("tf-q").onchange=e=>{TFL.q=e.target.value;render()};const n=$("tf-n");if(n)n.onclick=()=>formTarifa(null)}
   document.querySelectorAll("[data-te]").forEach(b=>b.onclick=()=>formTarifa(+b.dataset.te));
   document.querySelectorAll("[data-dl]").forEach(b=>b.onclick=()=>descargar(b.dataset.dl,b));document.querySelectorAll("[data-mf]").forEach(b=>b.onclick=()=>verManif(+b.dataset.mf));const eo=$("eq-ok");if(eo)eo.onclick=asignarRol;
@@ -322,7 +401,7 @@ function sugeridas(ru,todas){
 const filaRes=(a,b,cls="")=>`<tr class="${cls}"><td>${a}</td><td>${b}</td></tr>`;
 function tablaRes(j){
   return `<table class="res">`+filaRes("Efectividad",pc(j.efectividad)+" ("+j.entregados+" de "+j.asignados+")")+
-   filaRes("Al proveedor","","h")+filaRes("Pago base",fm(j.pago_base))+(j.regla_pago?filaRes("Regla aplicada: "+j.regla_pago,fm(j.dcto_pago)):"")+(Number(j.ajuste_pago)?filaRes("Ajuste",fm(j.ajuste_pago)):"")+filaRes("Costo total",fm(j.costo_total),"t")+
+   filaRes("Al proveedor","","h")+filaRes("Pago base",fm(j.pago_base))+(j.regla_pago?filaRes("Regla aplicada: "+j.regla_pago,fm(j.dcto_pago)):"")+(Number(j.bono_pago)?filaRes("Bono: "+j.regla_bono,fm(j.bono_pago)):"")+(Number(j.ajuste_pago)?filaRes("Ajuste",fm(j.ajuste_pago)):"")+filaRes("Costo total",fm(j.costo_total),"t")+
    (j.registro_fiscal==="SIN FACTURA"?filaRes("Retención 5%",fm(-j.retencion))+filaRes("Neto a pagar",fm(j.neto))+filaRes("Comisión 2% (costo de Chazki)",fm(j.comision)):filaRes("IVA 16%",fm(j.iva)))+
    filaRes("Pago al proveedor ("+j.registro_fiscal.toLowerCase()+")",fm(j.pago_driver),"t")+
    filaRes("Cobro al cliente","","h")+filaRes("Cobro base",fm(j.cobro_base))+(j.regla_cobro?filaRes("Regla aplicada: "+j.regla_cobro,fm(j.dcto_cobro)):"")+(Number(j.ajuste_cobro)?filaRes("Ajuste",fm(j.ajuste_cobro)):"")+filaRes("Venta total",fm(j.venta_total),"t")+
