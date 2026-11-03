@@ -1,8 +1,7 @@
 {
   "appId": "com.chazki.driver",
   "appName": "Chazki Driver",
-  "webDir": ".",
-  "bundledWebRuntime": false,
+  "webDir": "driver-app",
   "server": {
     "androidScheme": "https"
   }

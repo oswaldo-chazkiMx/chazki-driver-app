@@ -3,7 +3,8 @@
   "private": true,
   "version": "1.0.0",
   "scripts": {
-    "android:sync": "npx cap sync android",
+    "android:prepare": "node scripts/prepare-android-web.js",
+    "android:sync": "npm run android:prepare && npx cap sync android",
     "android:open": "npx cap open android",
     "android:build": "npm run android:sync && cd android && gradlew.bat assembleDebug"
   },
