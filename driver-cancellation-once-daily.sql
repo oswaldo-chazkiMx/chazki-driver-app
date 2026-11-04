@@ -6,13 +6,18 @@ create index if not exists cancelaciones_driver_capturado_at_idx
 create or replace function public.limitar_cancelacion_driver_diaria()
 returns trigger
 language plpgsql
-set search_path = public, pg_temp
+security definer
+set search_path = pg_catalog, public, pg_temp
 as $$
 declare
   v_dia date;
   v_inicio timestamptz;
   v_fin timestamptz;
 begin
+  if new.driver_id = 'f640638a-d9a6-4136-a7dd-481e86715c7e'::uuid then
+    return new;
+  end if;
+
   v_dia := (new.capturado_at at time zone 'America/Mexico_City')::date;
   v_inicio := v_dia::timestamp at time zone 'America/Mexico_City';
   v_fin := (v_dia + 1)::timestamp at time zone 'America/Mexico_City';

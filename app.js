@@ -2,6 +2,7 @@ const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&
 const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);
 const $=id=>document.getElementById(id);
 const LOCAL_DB="chazki-driver-offline";
+const CANCEL_DAILY_LIMIT_EXEMPT_DRIVER_ID="f640638a-d9a6-4136-a7dd-481e86715c7e";
 let OFFLINE_MODE=!navigator.onLine, syncBusy=false, syncCancelBusy=false;
 function openLocalDb(){
   return new Promise((resolve,reject)=>{
@@ -618,7 +619,7 @@ async function stamp(img){
     `<span style="color:var(--mut)">Este CEDIS aún no tiene ubicación registrada; se registra sin validar.</span>`;
   $("cmeta").innerHTML=`📍 ${loc?loc.lat.toFixed(5)+", "+loc.lng.toFixed(5):"ubicación no disponible"} · ${dia} ${fecha} ${hora}<br>${vm}`;checkCan();
 }
-function checkCan(){$("bcan").disabled=canUsedToday||canLimitUnknown||!(canBlob&&$("ccli").value&&$("ccedis").value)}
+function checkCan(){const dailyLimitLocked=ME?.id!==CANCEL_DAILY_LIMIT_EXEMPT_DRIVER_ID&&(canUsedToday||canLimitUnknown);$("bcan").disabled=dailyLimitLocked||!(canBlob&&$("ccli").value&&$("ccedis").value)}
 $("bcan").onclick=async()=>{
   $("bcan").disabled=true;err("canerr",null);
   try{
@@ -642,9 +643,10 @@ const diaCancelacion=v=>{
   return `${values.year}-${values.month}-${values.day}`;
 };
 function updateCancelAvailability(){
-  const box=$("can-limit"),locked=canUsedToday||canLimitUnknown;
+  const box=$("can-limit"),exempt=ME?.id===CANCEL_DAILY_LIMIT_EXEMPT_DRIVER_ID,locked=!exempt&&(canUsedToday||canLimitUnknown);
   box.classList.toggle("hide",!locked);
-  box.textContent=canUsedToday
+  if(exempt){box.classList.remove("hide");box.textContent="Cuenta de pruebas: no aplica el límite diario. Se mantienen los requisitos de autorización y evidencia."}
+  else box.textContent=canUsedToday
     ?"Ya registraste una cancelación hoy. Solo se permite una cancelación por día."
     :"No se pudo verificar si ya registraste una cancelación hoy. Conéctate a internet y actualiza antes de continuar.";
   ["ccli","ccedis","det2","bcam","cfile"].forEach(id=>$(id).disabled=locked);
