@@ -222,7 +222,8 @@ function pnrEventLabelOps(type){
 function render(){
   const cer=R.filter(x=>x.estado==="cerrada"),asg=R.reduce((s,x)=>s+x.paquetes_asignados,0),ent=cer.reduce((s,x)=>s+x.entregados,0),fal=cer.reduce((s,x)=>s+x.fallidos,0);
   const incs=R.reduce((s,x)=>s+x.ruta_incidencias.length,0);
-  $("kpis").innerHTML=[["Rutas",R.length],["En ruta",R.filter(x=>x.estado==="en_ruta").length],["Paquetes asignados",asg],["Entregados",ent],["Fallidos",fal],["Efectividad",(ent+fal)?Math.round(ent/(ent+fal)*100)+"%":"—"],["Cancelaciones",C.length],["Canc. a revisar",C.filter(x=>x.ubicacion_validada==="fuera"||x.ubicacion_validada==="sin_ubicacion").length],["Incidencias",incs]].concat(veFin()?[["Por validar",porValidar().length],["Pago validado",fm(sumLiq("pago_driver"))]]:[]).map(([k,v])=>`<div class="kpi"><small>${k}</small><b>${v}</b></div>`).join("");
+  $("kpis").classList.toggle("hide",tab!=="r");
+  $("kpis").innerHTML=tab==="r"?[["Rutas",R.length],["En ruta",R.filter(x=>x.estado==="en_ruta").length],["Paquetes asignados",asg],["Entregados",ent],["Fallidos",fal],["Efectividad",(ent+fal)?Math.round(ent/(ent+fal)*100)+"%":"—"],["Cancelaciones",C.length],["Canc. a revisar",C.filter(x=>x.ubicacion_validada==="fuera"||x.ubicacion_validada==="sin_ubicacion").length],["Incidencias",incs]].concat(veFin()?[["Por validar",porValidar().length],["Pago validado",fm(sumLiq("pago_driver"))]]:[]).map(([k,v])=>`<div class="kpi"><small>${k}</small><b>${v}</b></div>`).join(""):"";
   let h="";
   if(tab==="r")h=`<table><tr><th>Fecha</th><th>Driver</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Zonas</th><th>Llegada</th><th>Auxiliar</th><th>Asig.</th><th>Entreg.</th><th>Fall.</th><th>Manif.</th><th>Estado</th></tr>`+
     (R.map(x=>`<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}<br><small>${esc(x.drivers.codigo||"")}</small></td><td><b>${esc(x.cedis.clientes.nombre)}</b>${x.drivers.cliente_default_id&&x.drivers.cliente_default_id!==x.cedis.cliente_id?` <span class="pill w">Otra cuenta</span>`:""}<br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta)}</td><td>${esc(x.zonas.join(", "))}</td><td>${hh(x.hora_llegada_cedis)}</td><td>${x.auxiliar_requerido?`<span class="pill ${x.viaja_con_auxiliar?"ok":"w"}">${x.viaja_con_auxiliar?"Con auxiliar":"Solo"}</span>`:"No aplica"}</td><td>${esc(x.paquetes_asignados)}</td><td>${esc(x.entregados??"—")}</td><td>${esc(x.fallidos??"—")}</td><td>${x.ruta_manifiestos&&x.ruta_manifiestos.length?`<button class="btn ghost sm" data-mf="${esc(x.id)}">📎 ${esc(x.ruta_manifiestos.length)}</button>`:(x.tipo_unidad==="3.5T"?'<span class="pill bad">Sin fotos</span>':"—")}</td><td><span class="pill ${x.estado==="cerrada"?"ok":"w"}">${x.estado==="cerrada"?"Cerrada "+hh(x.checkout_at):"En ruta"}</span></td></tr>`).join("")||`<tr><td colspan="12">Sin rutas en este periodo.</td></tr>`)+`</table>`;
@@ -282,16 +283,22 @@ function vistaDocumentosOps(){
   if(!esOps())return '<div class="errbox">Solo Operaciones puede importar o autorizar documentos.</div>';
   const drivers=DRV.filter(d=>d.rol==="driver");
   const all=DOCOPS.map(d=>`<tr><td>${esc(d.drivers?.nombre||d.driver_id)}<br><small>${esc(d.drivers?.codigo||"")}</small></td><td>${esc(DOC_OPS_TIPOS.find(x=>x[0]===d.tipo)?.[1]||d.tipo)}</td><td>${esc(d.origen==="flota"?"Importado de Flota":"Driver")}</td><td>${new Date(`${d.vigencia}T00:00:00`).toLocaleDateString("es-MX")}</td><td><span class="pill ${d.estado==="aprobado"?"ok":d.estado==="pendiente"?"w":d.estado==="rechazado"?"bad":"w"}">${esc(d.estado)}</span>${d.nota?`<br><small>${esc(d.nota)}</small>`:""}</td><td>${d.url?`<a href="${esc(d.url)}" target="_blank" rel="noopener">Ver archivo</a>`:"—"}${d.estado==="pendiente"?`<br><button class="btn sm" data-doc-approve="${esc(d.id)}">Aprobar</button> <button class="btn ghost sm" data-doc-reject="${esc(d.id)}">Rechazar</button>`:""}</td></tr>`).join("");
-  return `<h3 style="margin:12px 8px 0">Importar documentos existentes de Flota</h3>
-    <div class="note">Las carpetas de Drive son privadas y no se leen directamente. Para la carga inicial, selecciona el archivo descargado de la carpeta de la agencia, indica su vigencia y guárdalo en el expediente privado del driver.</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;padding:8px">
-      <label>Driver<select id="doc-flota-driver"><option value="">Selecciona un driver…</option>${drivers.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)} · ${esc(d.codigo||"")}</option>`).join("")}</select></label>
-      <label>Documento<select id="doc-flota-type">${DOC_OPS_TIPOS.map(([k,n])=>`<option value="${k}">${n}</option>`).join("")}</select></label>
-      <label>Vigencia<input id="doc-flota-date" type="date"></label>
-      <label>Archivo de Flota<input id="doc-flota-file" type="file" accept="image/jpeg,image/png,image/webp,application/pdf"></label>
-    </div><div id="doc-flota-error" style="padding:0 8px"></div><div style="padding:0 8px"><button class="btn" id="doc-flota-save">Importar documento aprobado</button></div>
-    <h3 style="margin:16px 8px 0">Solicitudes y documentos (${DOCOPS.length})</h3>${DOCOPSERR?`<div class="errbox">${esc(DOCOPSERR)}</div>`:""}
-    <table><tr><th>Driver</th><th>Documento</th><th>Origen</th><th>Vigencia</th><th>Estado</th><th>Archivo / autorización</th></tr>${all||'<tr><td colspan="6">Sin documentos registrados.</td></tr>'}</table>`;
+  const missingTable=/Could not find the table ['"]public\.driver_documents['"] in the schema cache/i.test(DOCOPSERR);
+  const loadError=DOCOPSERR?(missingTable
+    ?'<div class="doc-error"><b>Aún no está configurado el expediente de documentos.</b>En Supabase, ejecuta el archivo <code>driver-documents-workflow.sql</code> completo y vuelve a cargar esta sección. Esto crea la tabla y sus permisos.</div>'
+    :`<div class="errbox">No se pudieron cargar los documentos: ${esc(DOCOPSERR)}</div>`):"";
+  return `<section class="doc-import">
+    <div class="doc-import-head"><span class="doc-import-icon" aria-hidden="true">▧</span><div><h3>Importar documentos de Flota</h3><p>Selecciona el expediente del driver, el tipo de documento, su vigencia y el archivo descargado de la carpeta de la agencia. Se guardará en el almacenamiento privado de la aplicación.</p></div></div>
+    <div class="doc-import-grid">
+      <label class="doc-import-field">Driver<select id="doc-flota-driver"><option value="">Selecciona un driver…</option>${drivers.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)} · ${esc(d.codigo||"")}</option>`).join("")}</select></label>
+      <label class="doc-import-field">Documento<select id="doc-flota-type">${DOC_OPS_TIPOS.map(([k,n])=>`<option value="${k}">${n}</option>`).join("")}</select></label>
+      <label class="doc-import-field">Fecha de vencimiento<input id="doc-flota-date" type="date"></label>
+      <label class="doc-import-field">Archivo de Flota<input id="doc-flota-file" type="file" accept="image/jpeg,image/png,image/webp,application/pdf"></label>
+    </div><div id="doc-flota-error"></div>
+    <div class="doc-import-footer"><span class="note">PDF o imagen (JPEG, PNG, WebP), máximo 10 MB. La vigencia es obligatoria.</span><button class="btn" id="doc-flota-save">Guardar documento aprobado</button></div>
+  </section>
+  <div class="doc-section-title"><h3>Solicitudes y documentos</h3><span class="doc-count">${DOCOPS.length} ${DOCOPS.length===1?"documento":"documentos"}</span></div>${loadError}
+  <div class="doc-table-wrap"><table><thead><tr><th>Driver</th><th>Documento</th><th>Origen</th><th>Vigencia</th><th>Estado</th><th>Archivo / autorización</th></tr></thead><tbody>${all||'<tr><td colspan="6">Sin documentos registrados.</td></tr>'}</tbody></table></div>`;
 }
 async function importarDocumentoFlota(){
   const errorBox=$("doc-flota-error"),button=$("doc-flota-save"),driverId=$("doc-flota-driver").value,tipo=$("doc-flota-type").value,vigencia=$("doc-flota-date").value,file=$("doc-flota-file").files[0];

@@ -292,3 +292,5 @@ revoke all on function public.resolver_documento_driver(uuid, boolean, text) fro
 grant execute on function public.resolver_documento_driver(uuid, boolean, text) to authenticated;
 
 commit;
+
+notify pgrst, 'reload schema';
