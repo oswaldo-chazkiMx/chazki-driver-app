@@ -454,11 +454,38 @@ function vistaIndicadores(){
     periodos.set(p.key,entry);
   }
   const trends=[...periodos.values()].sort((a,b)=>a.key.localeCompare(b.key));
-  const stats=(label,value)=>`<div class="kpi"><small>${label}</small><b>${value}</b></div>`;
+  const pendientes=Math.max(0,resumen.asignados-resumen.entregados-resumen.fallidos);
+  const efectividad=resumen.asignados?resumen.entregados/resumen.asignados:0;
+  const ventas=rows.reduce((s,x)=>s+(Number(x.liq.venta_total)||0),0);
+  const utilidad=rows.reduce((s,x)=>s+(Number(x.liq.utilidad)||0),0);
+  const pagos=rows.reduce((s,x)=>s+(Number(x.liq.pago_driver)||0),0);
+  const chartPeriods=trends.slice(-8);
+  const chartBar=(label,value,max,color)=>`<div class="exec-bar-row"><span class="exec-bar-label">${label}</span><div class="exec-track"><div class="exec-fill" style="--chart-color:${color};width:${Number(value)>0?Math.max(1,Math.min(100,Number(value)/max*100)):0}%"></div></div><b class="exec-bar-value">${esc(Number(value).toLocaleString("es-MX"))}</b></div>`;
+  const chartCard=(title,description,series,commonScale=false)=>{
+    const sharedMax=Math.max(1,...chartPeriods.flatMap(period=>series.map(item=>Number(period[item.key])||0)));
+    return `<section class="exec-chart"><h4>${title}</h4><p>${description}</p><div class="exec-legend">${series.map(x=>`<span><i style="--chart-color:${x.color}"></i>${x.label}</span>`).join("")}</div><div class="exec-bars">${chartPeriods.length?chartPeriods.map(period=>`<div class="exec-period"><div class="exec-period-title">${esc(period.label)}</div>${series.map(item=>chartBar(item.label,period[item.key],commonScale?sharedMax:Math.max(1,...chartPeriods.map(row=>Number(row[item.key])||0)),item.color)).join("")}</div>`).join(""):'<div class="exec-empty">No hay datos para graficar en el periodo seleccionado.</div>'}</div></section>`;
+  };
+  const volumeChart=chartCard("Volumen operativo",`Rutas y paquetes asignados por ${analyticsGrain==="dia"?"día":analyticsGrain==="semana"?"semana":analyticsGrain==="mes"?"mes":"año"}. Se muestran los últimos ${Math.min(8,trends.length)} periodos.`,[
+    {key:"rutas",label:"Rutas",color:"#6b4df5"},{key:"asignados",label:"Paquetes",color:"#27a879"}
+  ]);
+  const deliveryChart=`<section class="exec-chart"><h4>Resultado de entregas</h4><p>Distribución de los paquetes asignados en el rango consultado.</p>
+    ${resumen.asignados?`<div class="exec-stack" role="img" aria-label="${resumen.entregados} entregados, ${resumen.fallidos} fallidos, ${pendientes} pendientes">
+      <span style="width:${resumen.entregados/resumen.asignados*100}%;background:#20a779"></span><span style="width:${resumen.fallidos/resumen.asignados*100}%;background:#e15b62"></span><span style="width:${pendientes/resumen.asignados*100}%;background:#dce2ec"></span>
+    </div><div class="exec-mix">
+      <div class="exec-mix-row"><span><i style="color:#20a779">●</i> Entregados</span><b>${resumen.entregados.toLocaleString("es-MX")} · ${pc(efectividad)}</b></div>
+      <div class="exec-mix-row"><span><i style="color:#e15b62">●</i> Fallidos</span><b>${resumen.fallidos.toLocaleString("es-MX")} · ${pc(resumen.fallidos/resumen.asignados)}</b></div>
+      <div class="exec-mix-row"><span><i style="color:#9aa6b8">●</i> Pendientes / diferencia</span><b>${pendientes.toLocaleString("es-MX")} · ${pc(pendientes/resumen.asignados)}</b></div>
+    </div>`:'<div class="exec-empty">No hay paquetes asignados en el periodo.</div>'}
+  </section>`;
+  const financeChart=veFin()?chartCard("Resumen financiero",`Importes validados por ${analyticsGrain==="dia"?"día":analyticsGrain==="semana"?"semana":analyticsGrain==="mes"?"mes":"año"} · últimos ${Math.min(8,trends.length)} periodos.`,[
+    {key:"ventas",label:"Venta",color:"#6b4df5"},{key:"pagos",label:"Pago",color:"#27a879"},{key:"utilidad",label:"Utilidad",color:"#f0a52b"}
+  ],true):"";
+  const stats=(label,value,detail="")=>`<div class="exec-stat"><small>${label}</small><b>${value}</b>${detail?`<span>${detail}</span>`:""}</div>`;
+  const numericSummary=`<section class="exec-summary">${stats("Rutas",resumen.rutas,"en el periodo")}${stats("Efectividad",pc(efectividad),"entregados sobre asignados")}${stats("Incidencias",R.reduce((s,x)=>s+(x.ruta_incidencias||[]).length,0),"reportadas en ruta")}${stats("Cancelaciones por revisar",C.filter(x=>x.ubicacion_validada==="fuera"||x.ubicacion_validada==="sin_ubicacion").length,"requieren atención")}${veFin()?stats("Venta validada",fm(ventas),"liquidaciones del periodo")+stats("Utilidad",fm(utilidad),"liquidaciones del periodo"):""}</section>`;
+  const tableTitle=`Indicadores por ${analyticsGrain==="dia"?"día":analyticsGrain==="semana"?"semana":analyticsGrain==="mes"?"mes":"año"}`;
   return `<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h3>Indicadores del negocio</h3>${selectorPeriodo("analytics-period",analyticsGrain)}</div>
-    <div class="kpis">${stats("Rutas",resumen.rutas)}${stats("Paquetes asignados",resumen.asignados)}${stats("Entregados",resumen.entregados)}${stats("Fallidos",resumen.fallidos)}${stats("Efectividad",resumen.asignados?pc(resumen.entregados/resumen.asignados):"—")}${stats("Cancelaciones",C.length)}${veFin()?stats("Venta validada",fm(rows.reduce((s,x)=>s+(Number(x.liq.venta_total)||0),0))):""}${veFin()?stats("Utilidad",fm(rows.reduce((s,x)=>s+(Number(x.liq.utilidad)||0),0))):""}</div>
-    <h3>Indicadores por ${analyticsGrain==="dia"?"día":analyticsGrain==="semana"?"semana":analyticsGrain==="mes"?"mes":"año"}</h3>${tablaResumen(trends,veFin())}
-    <h3>Incidencias y excepciones</h3><div class="item"><span>Incidencias reportadas</span><b>${R.reduce((s,x)=>s+(x.ruta_incidencias||[]).length,0)}</b></div><div class="item"><span>Cancelaciones que requieren revisión</span><b>${C.filter(x=>x.ubicacion_validada==="fuera"||x.ubicacion_validada==="sin_ubicacion").length}</b></div><div class="item"><span>Rutas pendientes de validar</span><b>${veFin()?porValidar().length:"—"}</b></div>`;
+    ${numericSummary}<div class="exec-charts">${volumeChart}${deliveryChart}${financeChart}</div>
+    <div class="exec-table-title"><h3>${tableTitle}</h3><span class="note">Detalle numérico completo</span></div><div class="exec-table-wrap">${tablaResumen(trends,veFin())}</div>`;
 }
 function vistaFinanzas(){
   if(!veFin())return '<div class="errbox">No tienes permisos para consultar información financiera.</div>';
