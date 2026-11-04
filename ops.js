@@ -1,6 +1,6 @@
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);const $=id=>document.getElementById(id);
-let R=[],C=[],tab="r",photos={},LIQ={},DRV=[],PRV=[],TAR=null,ANU=[],ANUERR="",AUD={},AUDERR="",DOCOPS=[],DOCOPSERR="",PNR_OPS=[],PNR_OPS_ERR="",analyticsGrain="dia",financeGrain="dia";
+let R=[],C=[],tab="r",photos={},LIQ={},DRV=[],PRV=[],TAR=null,ANU=[],ANUERR="",AUD={},AUDERR="",DOCOPS=[],DOCOPSERR="",PNR_OPS=[],PNR_OPS_ERR="",NO_SHOW_OPS=[],NO_SHOW_EVENTS=[],NO_SHOW_CLIENTS=[],NO_SHOW_ERR="",analyticsGrain="dia",financeGrain="dia";
 const fd=m=>m==null?"—":(m<1000?m+" m":(m/1000).toFixed(1)+" km");
 const hh=s=>s?new Date(s).toTimeString().slice(0,5):"—";
 const dd=s=>new Date(s).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
@@ -25,7 +25,7 @@ $("abtn").onclick=async()=>{
   if(!dominioOk(email)){$("amsg").innerHTML='<div class="errbox">Solo personal de Chazki: usa tu correo @chazki.com.</div>';return}
   const r=await sb.auth.signInWithPassword({email,password});
   if(r.error){$("amsg").innerHTML='<div class="errbox">Correo o contraseña incorrectos.</div>';return}boot()};
-const TABS={master:"rvalbkcifpedtnxyzgq",ops:"rvalbkcifpdtnxyzgq",coordinador:"rvalbkcifpdtxyzq",finanzas:"rlcpdxyzq",ih:"rvabkcifdx"};
+const TABS={master:"rvalbkcifpedtnxyzgqn",ops:"rvalbkcifpdtnxyzgqn",coordinador:"rvalbkcifpdtxyzqn",finanzas:"rlcpdxyzq",ih:"rvabkcifdxn"};
 const puede=t=>(TABS[ROL]||"").includes(t);
 const veFin=()=>["master","ops","coordinador","finanzas"].includes(ROL);
 const cargaFin=()=>veFin()||ROL==="ih";
@@ -42,6 +42,7 @@ const NAV_INFO={
   f:["Fallidos por causa","↘","Analiza paquetes no entregados por motivo."],
   g:["Documentos de drivers","▧","Importa documentos de Flota y autoriza actualizaciones."],
   q:["PNR y penalizaciones","⚖","Registra reclamos, revisa evidencias y consulta descuentos."],
+  n:["NO SHOW","⏱","Registra servicios no atendidos y resuelve las apelaciones de Drivers."],
   x:["Indicadores del negocio","▥","Consulta indicadores operativos del periodo."],
   y:["Finanzas por cliente","$","Consulta ventas, pagos, utilidad y penalizaciones."],
   z:["Desempeño de flotilla","♙","Compara resultados de flotilleros y drivers."],
@@ -55,10 +56,11 @@ const NAV_INFO={
 function seleccionarTab(b){
   document.querySelectorAll(".role-nav button").forEach(x=>x.classList.toggle("on",x===b));
   tab=b.dataset.t;
+  document.querySelector(".bar").classList.toggle("hide",tab==="n");
   const [title,,description]=NAV_INFO[tab]||["Operación","",""];
   $("page-title").textContent=title;
   $("page-description").textContent=description;
-  if(["l","x","y","z","g","q"].includes(tab)){load();return}
+  if(["l","x","y","z","g","q","n"].includes(tab)){load();return}
   render();
 }
 function aplicarRol(){
@@ -118,6 +120,12 @@ async function boot(){
   try{await load()}finally{$("loading").classList.add("hide")}
 }
 async function load(){
+  if(tab==="n"){
+    await cargaExtra();
+    await cargarNoShowsOps();
+    render();
+    return;
+  }
   const a=new Date($("d1").value+"T00:00:00").toISOString(),b=new Date($("d2").value+"T23:59:59").toISOString();
   let routeRows,cancelRows;
   try{
@@ -168,6 +176,67 @@ async function cargarPnrsOps(){
       PNR_OPS=PNR_OPS.map(x=>({...x,pnr_reclamo_eventos:(x.pnr_reclamo_eventos||[]).map(e=>({...e,urls:(e.adjuntos||[]).map(path=>({path,url:urls[path]})).filter(x=>x.url)}))}));
     }
   }catch(error){PNR_OPS_ERR=error.message||String(error)}
+}
+async function cargarNoShowsOps(){
+      NO_SHOW_OPS=[];NO_SHOW_EVENTS=[];NO_SHOW_CLIENTS=[];NO_SHOW_ERR="";
+      try{
+        const [cases,clients]=await Promise.all([
+          fetchPaged(()=>sb.from("no_show_casos").select("*").order("creado_en",{ascending:false}).limit(1000)),
+          fetchPaged(()=>sb.from("clientes").select("id,nombre,cedis(id,nombre,cliente_id)").order("nombre"))
+        ]);
+        NO_SHOW_OPS=cases;
+        NO_SHOW_CLIENTS=clients;
+        const ids=cases.map(x=>x.id);
+        if(ids.length)NO_SHOW_EVENTS=await fetchPaged(()=>sb.from("no_show_eventos").select("*").in("caso_id",ids).order("creado_en"));
+      }catch(error){NO_SHOW_ERR=error.message||String(error)}
+    }
+    const noShowFmtDate=value=>value?new Date(`${String(value).slice(0,10)}T12:00:00`).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"}):"—";
+    const noShowFmtDateTime=value=>value?new Date(value).toLocaleString("es-MX",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
+    const noShowStatus={
+      reportado:["Reportado · apelación disponible","w"],
+      apelado:["Apelación pendiente","bad"],
+      apelacion_aceptada:["Apelación aceptada · descuento revertido","ok"],
+      apelacion_rechazada:["Apelación rechazada · descuento vigente","bad"]
+    };
+    function vistaNoShowsOps(){
+      const puedeReportar=ROL==="ih";
+      const puedeResolver=["master","ops","coordinador"].includes(ROL);
+      const drivers=DRV.filter(d=>d.rol==="driver");
+      const form=puedeReportar?`<section class="pnr-panel">
+        <div class="pnr-form-head"><div><h3>Reportar servicio NO SHOW</h3><p>El reporte no crea una ruta operativa. Se usa el tarifario vigente para la fecha del servicio; si no hay regla/tarifa NO SHOW, el monto manual no puede exceder el valor contratado.</p></div></div>
+        <div class="pnr-form-grid">
+          <label class="pnr-field pnr-span-3">Driver<select id="ns-driver"><option value="">Selecciona un Driver…</option>${drivers.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)} · ${esc(d.codigo||"")}</option>`).join("")}</select></label>
+          <div class="pnr-field pnr-span-3"><span>Flotillero aplicable</span><div id="ns-provider" class="note" style="margin:0">Se determina desde el perfil del Driver.</div></div>
+          <label class="pnr-field pnr-span-3">Cliente<select id="ns-client"><option value="">Selecciona un cliente…</option>${NO_SHOW_CLIENTS.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join("")}</select></label>
+          <label class="pnr-field pnr-span-3">CEDIS<select id="ns-cedis" disabled><option value="">Selecciona primero un cliente…</option></select></label>
+          <label class="pnr-field pnr-span-3">Fecha del servicio<input id="ns-date" type="date" max="${new Date().toLocaleDateString("en-CA")}"></label>
+          <label class="pnr-field pnr-span-3">Entregas contratadas (solo tarifas por paquete)<input id="ns-packages" type="number" min="1" max="10000" step="1" inputmode="numeric" placeholder="Ej. 40"><small>El límite se calcula como pago base × entregas contratadas.</small></label>
+          <label class="pnr-field pnr-span-3">Importe manual (solo si no hay regla/tarifa NO SHOW)<input id="ns-amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="$0.00"></label>
+          <label class="pnr-field pnr-span-6">Observaciones del Supervisor <span style="font-weight:400">Máximo 200 caracteres; no se permiten groserías.</span><textarea id="ns-observations" rows="3" maxlength="200" placeholder="Describe brevemente el servicio al que no se presentó"></textarea></label>
+        </div>
+        <div id="ns-form-error"></div>
+        <div class="pnr-form-footer"><span style="color:var(--mut);font-size:12px">El Driver podrá apelar una vez dentro de 6 horas.</span><button class="btn" id="ns-report-save">Registrar NO SHOW</button></div>
+      </section>`:'<div class="note">La captura corresponde al Supervisor. Coordinación puede revisar y resolver las apelaciones.</div>';
+      const rows=NO_SHOW_OPS.map(c=>{
+        const appealExpired=c.estado==="reportado"&&new Date(c.vence_apelacion_en)<=Date.now();
+        const [label,style]=appealExpired?["Reportado · plazo vencido","w"]:noShowStatus[c.estado]||["Estatus desconocido","w"];
+        const events=NO_SHOW_EVENTS.filter(e=>e.caso_id===c.id);
+        const driver=DRV.find(d=>d.id===c.driver_id);
+        const provider=PRV.find(p=>String(p.id)===String(c.proveedor_id));
+        const canResolve=puedeResolver&&c.estado==="apelado";
+        return `<article class="pnr-claim">
+          <div class="pnr-claim-top"><div class="pnr-claim-title"><b>${esc(c.driver_nombre||driver?.nombre||c.driver_id)}</b><span style="color:var(--mut)"> · ${esc(c.cuenta)}</span></div><span class="pill ${style}">${esc(label)}</span></div>
+          <div class="pnr-claim-meta"><span>Flotillero: <b>${esc(provider?.nombre||"Sin proveedor")}</b></span><span>Servicio: <b>${esc(noShowFmtDate(c.fecha_servicio))}</b></span><span>Cliente: <b>${esc(c.cliente_nombre)}</b></span><span>CEDIS: <b>${esc(c.cedis_nombre)}</b></span><span>Unidad: <b>${esc(c.tipo_unidad)}</b></span></div>
+          <div class="pnr-claim-meta"><span>Penalización: <b>${esc(fm(c.monto_penalizacion))}</b></span><span>Valor contratado: <b>${esc(fm(c.valor_servicio_contratado))}</b></span><span>Cálculo: <b>${esc(c.metodo_calculo)}</b></span><span>Reportado: <b>${esc(noShowFmtDateTime(c.creado_en))}</b></span></div>
+          <div class="pnr-claim-detail"><b>Observaciones del Supervisor</b><br>${esc(c.observaciones_supervisor)}</div>
+          ${c.apelacion?`<div class="pnr-claim-detail"><b>Contestación del Driver</b><br>${esc(c.apelacion)}<small style="display:block;color:var(--mut);margin-top:5px">${esc(noShowFmtDateTime(c.apelacion_en))}</small></div>`:""}
+          ${c.resolucion?`<div class="pnr-claim-detail"><b>Resolución</b><br>${esc(c.resolucion)}</div>`:""}
+          ${events.length?`<details><summary>Historial (${events.length} movimientos)</summary><div class="pnr-timeline">${events.map(e=>`<div class="pnr-event"><b>${esc(({reportado:"Reporte creado",apelacion_driver:"Apelación del Driver",apelacion_aceptada:"Apelación aceptada",apelacion_rechazada:"Apelación rechazada"})[e.tipo]||e.tipo)}</b><small>${esc(noShowFmtDateTime(e.creado_en))}</small><div style="white-space:pre-wrap">${esc(e.mensaje)}</div></div>`).join("")}</div></details>`:""}
+          ${canResolve?`<div class="pnr-actions"><button class="btn sm" data-ns-resolve="aceptar" data-ns-id="${esc(c.id)}">Aceptar apelación y revertir</button><button class="btn bad sm" data-ns-resolve="rechazar" data-ns-id="${esc(c.id)}">Rechazar apelación</button></div>`:""}
+        </article>`;
+      }).join("");
+      return `<div class="pnr-layout">${NO_SHOW_ERR?`<div class="errbox">No se pudo cargar NO SHOW. Ejecuta no-show-workflow.sql en Supabase y verifica el acceso. ${esc(NO_SHOW_ERR)}</div>`:""}${form}
+        <section class="pnr-list"><div class="pnr-list-head"><h3>Reportes NO SHOW</h3><span class="pnr-count">${NO_SHOW_OPS.length} ${NO_SHOW_OPS.length===1?"caso":"casos"}</span></div>${rows?`<div class="pnr-list">${rows}</div>`:'<div class="pnr-empty">Todavía no hay reportes NO SHOW.</div>'}</section></div>`;
 }
 const PNR_OPS_STATE={
   esperando_driver:["Pendiente de respuesta del driver","w"],
@@ -233,7 +302,7 @@ function render(){
     (rows.map(({x,i})=>`<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${esc(x.cedis.clientes.nombre)} · ${esc(x.cedis.nombre)}</td><td><span class="pill bad">${esc(i.tipos_incidencia.nombre)}</span></td><td>${esc(i.comentario||"—")}</td></tr>`).join("")||`<tr><td colspan="5">Sin incidencias en este periodo.</td></tr>`)+`</table>`}
   if(tab==="f"){const m={};R.forEach(x=>x.ruta_fallos.forEach(f=>{m[f.causas_fallo.nombre]=(m[f.causas_fallo.nombre]||0)+f.cantidad}));const e=Object.entries(m).sort((a,b)=>b[1]-a[1]);
   h=`<table><tr><th>Causa</th><th>Paquetes</th></tr>`+(e.map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")||`<tr><td colspan="2">Sin fallidos en este periodo.</td></tr>`)+`</table>`}
-  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();if(tab==="t")h=vistaTarifario();if(tab==="x")h=vistaIndicadores();if(tab==="y")h=vistaFinanzas();if(tab==="z")h=vistaDesempeno();if(tab==="g")h=vistaDocumentosOps();if(tab==="q")h=vistaPnrsOps();
+  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();if(tab==="t")h=vistaTarifario();if(tab==="x")h=vistaIndicadores();if(tab==="y")h=vistaFinanzas();if(tab==="z")h=vistaDesempeno();if(tab==="g")h=vistaDocumentosOps();if(tab==="q")h=vistaPnrsOps();if(tab==="n")h=vistaNoShowsOps();
   $("view").innerHTML=h;enlazar();
   document.querySelectorAll("img.th").forEach(i=>i.onclick=()=>{$("lbimg").src=i.dataset.u;$("lb").classList.remove("hide")});
 }
@@ -241,7 +310,8 @@ function render(){
 const fm=n=>{if(n==null)return "—";const v=Number(n);const t=Math.abs(v).toLocaleString("es-MX",{minimumFractionDigits:2,maximumFractionDigits:2});return (v<0&&Math.abs(v)>=0.005?"-":"")+"$"+t};
 const pc=n=>n==null?"—":(Number(n)*100).toFixed(1)+"%";
 const nz=s=>(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9 ]/g," ").trim();
-const cuentaDe=c=>c==="MERCADO LIBRE"?"MELI":(c==="COPPEL"||c==="COPPEL BT")?"COPPEL":c==="LIVERPOOL"?"LIVERPOOL":null;
+const cuentaDe=c=>c==="MERCADO LIBRE"?"MELI":(c==="COPPEL"||c==="COPPEL BT")?"COPPEL":c==="LIVERPOOL"?"LIVERPOOL":(c==="CUBBO"||c==="NESPRESSO"||c==="ESTAFETA"||c==="AMPM")?c:null;
+const CUENTAS_TARIFARIO=["MELI","COPPEL","LIVERPOOL","CUBBO","NESPRESSO","ESTAFETA","AMPM"];
 const sumLiq=k=>Object.values(LIQ).reduce((s,x)=>s+Number(x[k]||0),0);
 const porValidar=()=>R.filter(x=>x.estado==="cerrada"&&!LIQ[x.id]&&!PEND.some(q=>q.ruta_id===x.id)&&cuentaDe(x.cedis.clientes.nombre));
 function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),3200)}
@@ -326,7 +396,7 @@ async function resolverDocumento(id,aprobar){
 }
 function vistaPorValidar(){const l=porValidar();
   return `<table><tr><th>Fecha</th><th>Driver</th><th>Proveedor</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Asig.</th><th>Entreg.</th><th>Efectiv.</th><th></th></tr>`+
-  (l.map(x=>{const p=provDe(x.driver_id);return `<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${p?esc(p.nombre)+`<br><small>${esc(p.tipo_registro||"sin registro fiscal")}</small>`:'<span class="pill w">Sin proveedor</span>'}</td><td><b>${esc(x.cedis.clientes.nombre)}</b><br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta)}</td><td>${esc(x.paquetes_asignados)}</td><td>${esc(x.entregados)}</td><td>${pc(x.entregados/x.paquetes_asignados)}</td><td><button class="btn ghost sm" data-det="${esc(x.id)}">Detalle</button> <button class="btn sm" data-val="${esc(x.id)}">Validar</button></td></tr>`}).join("")||`<tr><td colspan="9">No hay rutas por validar en este periodo (solo MELI, Coppel y Liverpool tienen tarifario cargado).</td></tr>`)+`</table>`}
+  (l.map(x=>{const p=provDe(x.driver_id);return `<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${p?esc(p.nombre)+`<br><small>${esc(p.tipo_registro||"sin registro fiscal")}</small>`:'<span class="pill w">Sin proveedor</span>'}</td><td><b>${esc(x.cedis.clientes.nombre)}</b><br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta)}</td><td>${esc(x.paquetes_asignados)}</td><td>${esc(x.entregados)}</td><td>${pc(x.entregados/x.paquetes_asignados)}</td><td><button class="btn ghost sm" data-det="${esc(x.id)}">Detalle</button> <button class="btn sm" data-val="${esc(x.id)}">Validar</button></td></tr>`}).join("")||`<tr><td colspan="9">No hay rutas por validar en este periodo con clientes que tengan tarifas cargadas.</td></tr>`)+`</table>`}
 async function verDetalleRuta(id){
   let ru=R.find(x=>String(x.id)===String(id));
   if(!ru){
@@ -613,7 +683,7 @@ async function guardarRegla(row,cuenta,id){const base={...row,cuenta,descripcion
   if(id)return sb.from("reglas_penalizacion").update(base).eq("id",id);return sb.from("reglas_penalizacion").insert({...base,vigencia_desde:new Date().toLocaleDateString("en-CA"),activo:true})}
 function formRegla(id){const g=id?RGL.find(x=>x.id===id):null;const m=$("modal");m.classList.remove("hide");
   m.innerHTML=`<div class="box" style="max-height:90vh;overflow:auto"><h2 style="margin:0 0 6px">${id?"Editar regla":"Nueva penalización o bono"}</h2>
-   <label>Cliente</label><select id="rg-c" ${id?"disabled":""}><option value="">Elige…</option>${["MELI","COPPEL","LIVERPOOL"].map(c=>`<option ${g&&g.cuenta===c?"selected":""}>${c}</option>`).join("")}</select>
+   <label>Cliente</label><select id="rg-c" ${id?"disabled":""}><option value="">Elige…</option>${CUENTAS_TARIFARIO.map(c=>`<option ${g&&g.cuenta===c?"selected":""}>${c}</option>`).join("")}</select>
    ${reglaCampos("rg",g)}
    ${id?`<label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="rg-act" ${g.activo?"checked":""}> Regla activa</label>`:""}
    <div class="note">Una penalización o bono aplica a todas las tarifas del cliente que coincidan con el vehículo y el esquema. Si varias penalizaciones coinciden, se usa la de menor prioridad. Los bonos coincidentes se suman.</div>
@@ -628,7 +698,7 @@ function vistaReglas(){
   const ed=esOps(),sty='style="padding:8px;border:1px solid var(--line);border-radius:10px"';
   const L=(RGL||[]).filter(g=>(!RGF.cuenta||g.cuenta===RGF.cuenta)&&(!RGF.tipo||(RGF.tipo==="bono"?esBono(g.tipo_regla):!esBono(g.tipo_regla))));
   const rows=L.map(g=>`<tr><td><b>${esc(g.cuenta)}</b></td><td>${esBono(g.tipo_regla)?'<span class="pill ok">Bono</span>':g.tipo_regla==="bandera"?'<span class="pill w">Bandera</span>':'<span class="pill bad">Penalización</span>'}<br><small>${esc(TIPO_R[g.tipo_regla]||g.tipo_regla)}</small></td><td>${g.aplica_a==="cobro"?"Cobro":"Pago"}</td><td>${esc(g.tipo_unidad||"Todos")}</td><td>${esc(g.esquema||"Todos")}</td><td>${esc(condR(g))}</td><td style="text-align:right"><b>${esc(valR(g))}</b></td><td><small>${esc(g.descripcion)}</small>${g.excepcion_validacion_supervisor?' <span class="pill w">Exonerable</span>':""}${g.por_confirmar?' <span class="pill w">Por confirmar</span>':""}</td><td>${g.activo?"":'<span class="pill bad">Inactiva</span>'}</td>${ed?`<td><button class="btn ghost sm" data-re="${esc(g.id)}">Editar</button></td>`:""}</tr>`).join("");
-  return `<div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px;align-items:center"><select id="rg-fc" ${sty}><option value="">Todos los clientes</option>${["MELI","COPPEL","LIVERPOOL"].map(c=>`<option ${RGF.cuenta===c?"selected":""}>${c}</option>`).join("")}</select><select id="rg-ft" ${sty}><option value="">Penalizaciones y bonos</option><option value="pen" ${RGF.tipo==="pen"?"selected":""}>Solo penalizaciones</option><option value="bono" ${RGF.tipo==="bono"?"selected":""}>Solo bonos</option></select>${ed?'<button class="btn" id="rg-n">+ Nueva regla</button>':""}</div>
+  return `<div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px;align-items:center"><select id="rg-fc" ${sty}><option value="">Todos los clientes</option>${CUENTAS_TARIFARIO.map(c=>`<option ${RGF.cuenta===c?"selected":""}>${c}</option>`).join("")}</select><select id="rg-ft" ${sty}><option value="">Penalizaciones y bonos</option><option value="pen" ${RGF.tipo==="pen"?"selected":""}>Solo penalizaciones</option><option value="bono" ${RGF.tipo==="bono"?"selected":""}>Solo bonos</option></select>${ed?'<button class="btn" id="rg-n">+ Nueva regla</button>':""}</div>
    <div style="padding:0 8px 6px"><small>${ed?"Puedes agregar y editar. Los cambios aplican a rutas que se validen de ahora en adelante y quedan en bitácora.":"Solo consulta."}</small></div>
    <table><tr><th>Cliente</th><th>Tipo</th><th>Aplica a</th><th>Vehículo</th><th>Esquema</th><th>Condición</th><th>Valor</th><th>Descripción</th><th></th>${ed?"<th></th>":""}</tr>${rows||'<tr><td colspan="10">Sin reglas.</td></tr>'}</table>`}
 
@@ -641,14 +711,14 @@ function vistaTarifario(){
   const op=(arr,v)=>`<option value="">Todos</option>`+arr.map(a=>`<option ${a===v?"selected":""}>${esc(a)}</option>`).join("");
   const sty='style="padding:8px;border:1px solid var(--line);border-radius:10px"';
   const ed=esOps();
-  const f=`<div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px;align-items:center"><select id="tf-c" ${sty}>${op(["MELI","COPPEL","LIVERPOOL"],TFL.cuenta).replace("Todos","Todos los clientes")}</select><input id="tf-q" placeholder="Buscar ubicación, zona…" value="${esc(TFL.q)}" ${sty}><select id="tf-v" ${sty}>${op(uniq("tipo_unidad"),TFL.veh).replace("Todos","Todos los vehículos")}</select><select id="tf-e" ${sty}>${op(uniq("esquema"),TFL.esq).replace("Todos","Todos los esquemas")}</select><label style="font-size:13px"><input type="checkbox" id="tf-a" ${TFL.act?"checked":""}> Solo activas</label>${ed?'<button class="btn" id="tf-n">+ Nueva tarifa</button>':""}</div>`;
+  const f=`<div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px;align-items:center"><select id="tf-c" ${sty}>${op(CUENTAS_TARIFARIO,TFL.cuenta).replace("Todos","Todos los clientes")}</select><input id="tf-q" placeholder="Buscar ubicación, zona…" value="${esc(TFL.q)}" ${sty}><select id="tf-v" ${sty}>${op(uniq("tipo_unidad"),TFL.veh).replace("Todos","Todos los vehículos")}</select><select id="tf-e" ${sty}>${op(uniq("esquema"),TFL.esq).replace("Todos","Todos los esquemas")}</select><label style="font-size:13px"><input type="checkbox" id="tf-a" ${TFL.act?"checked":""}> Solo activas</label>${ed?'<button class="btn" id="tf-n">+ Nueva tarifa</button>':""}</div>`;
   const rows=L.slice(0,300).map(x=>`<tr><td><b>${esc(x.cuenta)}</b>${x.cliente&&x.cliente!==x.cuenta?`<br><small>${esc(x.cliente)}</small>`:""}</td><td>${esc(x.ubicacion||"—")}${x.ciudad?`<br><small>${esc(x.ciudad)}</small>`:""}</td><td>${esc(x.zona||"—")}${x.variable?` <span class="pill w">${esc(x.variable)}</span>`:""}</td><td>${esc(x.tipo_unidad||"—")}</td><td>${esc(x.esquema||"—")}</td><td style="text-align:right"><b>${x.pago_base==null?"—":fm(x.pago_base)}</b></td><td style="text-align:right"><b>${x.tarifa_cliente==null?"—":fm(x.tarifa_cliente)}</b></td><td><small>${esc(x.vigencia_desde)}${x.vigencia_hasta?" → "+x.vigencia_hasta:" → abierta"}</small>${x.activo?"":' <span class="pill bad">Inactiva</span>'}</td>${ed?`<td><button class="btn ghost sm" data-te="${esc(x.id)}">Editar</button></td>`:""}</tr>`).join("");
   return subTF()+f+`<div style="padding:0 8px 6px"><small>${esc(L.length)} tarifas${L.length>300?" (se muestran 300; afina el filtro)":""} · ${ed?"Puedes agregar y editar. Los cambios no alteran rutas ya validadas y quedan en bitácora.":"Solo consulta. Los cambios los hacen Operaciones y la cuenta maestra."}</small></div><table><tr><th>Cliente</th><th>Ubicación</th><th>Tipo de ruta</th><th>Vehículo</th><th>Esquema</th><th>Pago</th><th>Cobro</th><th>Vigencia</th>${ed?"<th></th>":""}</tr>${rows||'<tr><td colspan="9">Sin tarifas con ese filtro.</td></tr>'}</table>`}
 function formTarifa(id){
   const t=id?TF.find(x=>x.id===id):{cuenta:"",ubicacion:"",ciudad:"",tipo_unidad:"",esquema:"",zona:"",variable:"",pago_base:"",tarifa_cliente:"",vigencia_desde:new Date().toLocaleDateString("en-CA"),vigencia_hasta:"",activo:true};
   const m=$("modal");m.classList.remove("hide");const dl=(i,k)=>`<datalist id="${i}">${uniq(k).map(v=>`<option value="${v}">`).join("")}</datalist>`;
   m.innerHTML=`<div class="box" style="max-height:90vh;overflow:auto"><h2 style="margin:0 0 6px">${id?"Editar tarifa":"Nueva tarifa"}</h2>
-   <label>Cliente</label><select id="tf-fc" ${id?"disabled":""}><option value="">Elige…</option>${["MELI","COPPEL","LIVERPOOL"].map(c=>`<option ${t.cuenta===c?"selected":""}>${c}</option>`).join("")}</select>
+   <label>Cliente</label><select id="tf-fc" ${id?"disabled":""}><option value="">Elige…</option>${CUENTAS_TARIFARIO.map(c=>`<option ${t.cuenta===c?"selected":""}>${c}</option>`).join("")}</select>
    <label>Ubicación / CEDIS</label><input id="tf-fu" value="${esc(t.ubicacion||"")}"><label>Ciudad (opcional)</label><input id="tf-fci" value="${esc(t.ciudad||"")}">
    <label>Tipo de ruta (zona)</label><input id="tf-fz" list="dl-z" value="${esc(t.zona||"")}" placeholder="LOCAL, FORANEA 1…">${dl("dl-z","zona")}
    <label>Vehículo</label><input id="tf-fv" list="dl-v" value="${esc(t.tipo_unidad||"")}" placeholder="3.5T, LARGE VAN…">${dl("dl-v","tipo_unidad")}
@@ -763,6 +833,10 @@ function enlazar(){
   const importDoc=$("doc-flota-save");if(importDoc)importDoc.onclick=importarDocumentoFlota;
   const pnrSave=$("pnr-new-save");if(pnrSave)pnrSave.onclick=crearPnROps;
   document.querySelectorAll("[data-pnr-action]").forEach(b=>b.onclick=()=>resolverPnROps(b.dataset.pnrId,b.dataset.pnrAction));
+  const nsClient=$("ns-client");if(nsClient)nsClient.onchange=()=>actualizarCedisNoShow(nsClient.value);
+  const nsDriver=$("ns-driver");if(nsDriver)nsDriver.onchange=()=>actualizarProveedorNoShow(nsDriver.value);
+  const nsSave=$("ns-report-save");if(nsSave)nsSave.onclick=crearReporteNoShow;
+  document.querySelectorAll("[data-ns-resolve]").forEach(b=>b.onclick=()=>resolverApelacionNoShowOps(b.dataset.nsId,b.dataset.nsResolve));
   document.querySelectorAll("[data-doc-approve]").forEach(b=>b.onclick=()=>resolverDocumento(b.dataset.docApprove,true));
   document.querySelectorAll("[data-doc-reject]").forEach(b=>b.onclick=()=>resolverDocumento(b.dataset.docReject,false));
   document.querySelectorAll("[data-det]").forEach(b=>b.onclick=()=>verDetalleRuta(b.dataset.det));
@@ -806,6 +880,59 @@ async function crearPnROps(){
     errorBox.innerHTML=`<div class="errbox">${created?"El PNR quedó creado, pero no se pudo actualizar la vista: ":""}${esc(error.message||error)}${cleanupError?` · No se pudieron limpiar archivos temporales: ${esc(cleanupError.message)}`:""}</div>`;
     button.disabled=false;
   }
+}
+function actualizarCedisNoShow(clientId){
+  const select=$("ns-cedis");if(!select)return;
+  const client=NO_SHOW_CLIENTS.find(c=>String(c.id)===String(clientId));
+  const cedis=(client?.cedis||[]).slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  select.innerHTML='<option value="">Selecciona un CEDIS…</option>'+cedis.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join("");
+  select.disabled=!cedis.length;
+}
+function actualizarProveedorNoShow(driverId){
+  const element=$("ns-provider");if(!element)return;
+  const provider=provDe(driverId);
+  element.textContent=provider?.nombre||"Sin flotillero asignado";
+}
+function textoInapropiadoNoShow(value){
+  const normalized=String(value||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g," ");
+  return /(^| )(puta|puto|putas|putos|mierda|chingar|chingado|chingada|chingados|chingadas|chingue|chingues|verga|vergas|pendejo|pendeja|pendejos|pendejas|culero|culera|culeros|culeras|cabron|cabrona|cabrones|cabronas|pinche|pinches|jodido|jodida|joder|maricon|maricona|maricones|fuck|fucking|shit|bitch|asshole|bastard)( |$)/.test(normalized);
+}
+async function crearReporteNoShow(){
+  const button=$("ns-report-save"),errorBox=$("ns-form-error");
+  const driverId=$("ns-driver").value,cedisId=$("ns-cedis").value,fecha=$("ns-date").value;
+  const observaciones=$("ns-observations").value.trim();
+  const packagesText=$("ns-packages").value.trim(),amountText=$("ns-amount").value.trim();
+  const packages=packagesText?Number(packagesText):null,amount=amountText?Number(amountText):null;
+  errorBox.innerHTML="";
+  if(!driverId||!cedisId||!fecha||!observaciones){errorBox.innerHTML='<div class="errbox">Completa Driver, cliente, CEDIS, fecha y observaciones.</div>';return}
+  if(observaciones.length>200||textoInapropiadoNoShow(observaciones)){errorBox.innerHTML='<div class="errbox">Las observaciones deben tener hasta 200 caracteres y no incluir groserías.</div>';return}
+  if(packages!==null&&(!Number.isInteger(packages)||packages<1||packages>10000)){errorBox.innerHTML='<div class="errbox">La cantidad contratada debe ser un entero entre 1 y 10,000.</div>';return}
+  if(amount!==null&&(!Number.isFinite(amount)||amount<=0)){errorBox.innerHTML='<div class="errbox">El importe manual debe ser mayor que cero.</div>';return}
+  button.disabled=true;
+  try{
+    const {error}=await sb.rpc("crear_reporte_no_show",{
+      p_driver_id:driverId,p_cedis_id:Number(cedisId),p_fecha_servicio:fecha,
+      p_observaciones:observaciones,p_entregas_contratadas:packages,p_monto_manual:amount
+    });
+    if(error)throw error;
+    await cargarNoShowsOps();render();
+    if(NO_SHOW_ERR){toast("Reporte creado, pero no se pudo actualizar la lista: "+NO_SHOW_ERR);return}
+    toast("Reporte NO SHOW guardado y vinculado a las ganancias del Driver");
+  }catch(error){
+    errorBox.innerHTML=`<div class="errbox">${esc(error.message||error)}</div>`;
+    button.disabled=false;
+  }
+}
+async function resolverApelacionNoShowOps(id,accion){
+  const promptText=accion==="aceptar"?"Nota de resolución (opcional). Al aceptar, se revertirá el descuento:":"Motivo de rechazo (opcional):";
+  const mensaje=prompt(promptText);
+  if(mensaje===null)return;
+  const texto=mensaje.trim();
+  if(texto.length>500||textoInapropiadoNoShow(texto)){toast("La nota debe tener hasta 500 caracteres y no incluir groserías");return}
+  const {error}=await sb.rpc("resolver_apelacion_no_show",{p_caso_id:id,p_accion:accion,p_mensaje:texto||null});
+  if(error){toast(error.message);return}
+  await load();
+  toast(accion==="aceptar"?"Apelación aceptada; penalización revertida":"Apelación rechazada; penalización vigente");
 }
 async function resolverPnROps(id,accion){
   const promptText=accion==="solicitar_soporte"?"Indica qué evidencia adicional necesita el driver:":accion==="rechazar"?"Describe por qué la segunda evidencia es insuficiente:":"Nota de resolución (opcional):";
@@ -861,10 +988,10 @@ function sugeridas(ru,todas){
 const filaRes=(a,b,cls="")=>`<tr class="${cls}"><td>${esc(a)}</td><td>${esc(b)}</td></tr>`;
 function tablaRes(j){
   return `<table class="res">`+filaRes("Efectividad",pc(j.efectividad)+" ("+j.entregados+" de "+j.asignados+")")+
-   filaRes("Al proveedor","","h")+filaRes("Pago base",fm(j.pago_base))+(j.regla_pago?filaRes("Regla aplicada: "+j.regla_pago,fm(j.dcto_pago)):"")+(Number(j.bono_pago)?filaRes("Bono: "+j.regla_bono,fm(j.bono_pago)):"")+(Number(j.ajuste_pago)?filaRes("Ajuste",fm(j.ajuste_pago)):"")+filaRes("Costo total",fm(j.costo_total),"t")+
+   filaRes("Al proveedor","","h")+filaRes("Pago base",fm(j.pago_base))+(Number(j.entregas_extra)?filaRes("Extra por "+j.entregas_extra+" entregas adicionales",fm(j.pago_entrega_extra)):"")+(j.regla_pago?filaRes("Regla aplicada: "+j.regla_pago,fm(j.dcto_pago)):"")+(Number(j.bono_pago)?filaRes("Bono: "+j.regla_bono,fm(j.bono_pago)):"")+(Number(j.ajuste_pago)?filaRes("Ajuste",fm(j.ajuste_pago)):"")+filaRes("Costo total",fm(j.costo_total),"t")+
    (j.registro_fiscal==="SIN FACTURA"?filaRes("Retención 5%",fm(-j.retencion))+filaRes("Neto a pagar",fm(j.neto))+filaRes("Comisión 2% (costo de Chazki)",fm(j.comision)):filaRes("IVA 16%",fm(j.iva)))+
    filaRes("Pago al proveedor ("+j.registro_fiscal.toLowerCase()+")",fm(j.pago_driver),"t")+
-   filaRes("Cobro al cliente","","h")+filaRes("Cobro base",fm(j.cobro_base))+(j.regla_cobro?filaRes("Regla aplicada: "+j.regla_cobro,fm(j.dcto_cobro)):"")+(Number(j.ajuste_cobro)?filaRes("Ajuste",fm(j.ajuste_cobro)):"")+filaRes("Venta total",fm(j.venta_total),"t")+
+   filaRes("Cobro al cliente","","h")+filaRes("Cobro base",fm(j.cobro_base))+(Number(j.entregas_extra)?filaRes("Cobro extra por "+j.entregas_extra+" entregas adicionales",fm(j.cobro_entrega_extra)):"")+(j.regla_cobro?filaRes("Regla aplicada: "+j.regla_cobro,fm(j.dcto_cobro)):"")+(Number(j.ajuste_cobro)?filaRes("Ajuste",fm(j.ajuste_cobro)):"")+filaRes("Venta total",fm(j.venta_total),"t")+
    filaRes("Utilidad (venta menos costo total)",fm(j.utilidad)+" · "+pc(j.margen),"t")+`</table>`+((j.avisos||[]).length?`<div class="errbox">${esc(j.avisos.join(". "))}</div>`:"");
 }
 async function abrirValidar(id){
@@ -873,7 +1000,7 @@ async function abrirValidar(id){
   const pintar=()=>{let {l,nota}=sugeridas(ru,$("m-todas").checked);
     const z=$("m-zona").value;if(z)l=l.filter(t=>{const u=(t.zona||"").toUpperCase();return z==="LOCAL"?u.startsWith("LOCAL"):new RegExp("FORANE[AO] "+z+"( |$)").test(u)});
     if(z&&!l.length)nota=(nota?nota+" · ":"")+"No hay tarifa cargada para ese tipo de ruta";
-    $("m-tar").innerHTML=l.map(t=>`<option value="${esc(t.id)}">${esc([t.ubicacion,t.tipo_unidad,t.esquema,t.zona,t.variable==="PEAK"?"PEAK":""].filter(Boolean).join(" · "))} — pago ${fm(t.pago_base)} / cobro ${fm(t.tarifa_cliente)}</option>`).join("");
+    $("m-tar").innerHTML=l.map(t=>`<option value="${esc(t.id)}">${esc([t.ubicacion,t.tipo_unidad,t.esquema,t.zona,t.variable].filter(Boolean).join(" · "))} — pago ${fm(t.pago_base)} / cobro ${fm(t.tarifa_cliente)}</option>`).join("");
     $("m-nota-t").textContent=nota;reset()};
   const reset=()=>{$("m-prev").innerHTML="";$("m-ok").disabled=true};
   m.innerHTML=`<div class="box"><h2 style="margin:0 0 4px">Validar ruta ${esc(ru.id_ruta)}</h2>

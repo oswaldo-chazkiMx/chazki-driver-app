@@ -747,7 +747,7 @@ async function loadGan(){
   const sel=ACC.es_flotillero?"*,drivers(nombre),rutas(id_ruta)":"*";
   const q=sb.from("pagos").select(sel).gte("fecha",d.toLocaleDateString("en-CA")).order("fecha",{ascending:false});
   const {data}=ACC.es_flotillero?await q:await q.eq("driver_id",ME.id);PAGOS=data||[];drawG()}
-let RUTAS_K=[],CANS_K=[],kp="sem",PNRS=[],PNR_DISCOUNTS={},PNR_ERROR="",PNR_SEEN=false;
+let RUTAS_K=[],CANS_K=[],kp="sem",PNRS=[],PNR_DISCOUNTS={},PNR_ERROR="",PNR_SEEN=false,NO_SHOW_CASES=[],NO_SHOW_EVENTS=[],NO_SHOW_ERROR="";
 function rangoK(p,prev){const n=new Date();let a,b;
   if(p==="sem"){a=monday(n);if(prev)a.setDate(a.getDate()-7);b=new Date(a);b.setDate(b.getDate()+7)}
   else{a=new Date(n.getFullYear(),n.getMonth()-(prev?1:0),1);b=new Date(a.getFullYear(),a.getMonth()+1,1)}return [a,b]}
@@ -809,19 +809,28 @@ async function loadEstatus(){
 const parseF=s=>{const [y,m,d]=s.split("-");return new Date(+y,m-1,+d)};
 const monday=d=>{const x=new Date(d);x.setHours(0,0,0,0);x.setDate(x.getDate()-((x.getDay()+6)%7));return x};
 function drawG(){
-  const hoy=new Date(),lm=monday(hoy);let xs,vals,sel;
-  if(gp==="sem"){xs=["L","M","X","J","V","S","D"];vals=Array(7).fill(0);sel=PAGOS.filter(p=>monday(parseF(p.fecha)).getTime()===lm.getTime());sel.forEach(p=>vals[(parseF(p.fecha).getDay()+6)%7]+=+p.monto)}
-  else{const y=hoy.getFullYear(),m=hoy.getMonth();xs=["S1","S2","S3","S4","S5"];vals=Array(5).fill(0);sel=PAGOS.filter(p=>{const f=parseF(p.fecha);return f.getFullYear()===y&&f.getMonth()===m});sel.forEach(p=>vals[Math.min(4,Math.floor((parseF(p.fecha).getDate()-1)/7))]+=+p.monto)}
-  const tot=vals.reduce((a,b)=>a+b,0),mx=Math.max(...vals,1);
+  const all=pagosConNoShow(),hoy=new Date(),lm=monday(hoy);let xs,vals,sel;
+  if(gp==="sem"){xs=["L","M","X","J","V","S","D"];vals=Array(7).fill(0);sel=all.filter(p=>monday(parseF(p.fecha)).getTime()===lm.getTime());sel.forEach(p=>vals[(parseF(p.fecha).getDay()+6)%7]+=+p.monto)}
+  else{const y=hoy.getFullYear(),m=hoy.getMonth();xs=["S1","S2","S3","S4","S5"];vals=Array(5).fill(0);sel=all.filter(p=>{const f=parseF(p.fecha);return f.getFullYear()===y&&f.getMonth()===m});sel.forEach(p=>vals[Math.min(4,Math.floor((parseF(p.fecha).getDate()-1)/7))]+=+p.monto)}
+  const tot=vals.reduce((a,b)=>a+b,0),mx=Math.max(...vals.map(Math.abs),1);
   $("glabel").textContent=gp==="sem"?"Ganancias de la semana":"Ganancias del mes";$("gtot").textContent=fmt(tot);
   $("gsub").textContent=`${sel.filter(p=>p.concepto==="servicio").length} servicios pagados`;
-  $("bars").innerHTML=vals.map((v,i)=>`<div><span>${v?fmt(v):""}</span><b style="height:${Math.max(3,v/mx*100)}%"></b>${xs[i]}</div>`).join("");
+  $("bars").innerHTML=vals.map((v,i)=>`<div><span>${v?fmt(v):""}</span><b style="height:${Math.max(3,Math.abs(v)/mx*100)}%;${v<0?"background:#d94848":""}"></b>${xs[i]}</div>`).join("");
   const by=c=>sel.filter(p=>p.concepto===c).reduce((a,p)=>a+ +p.monto,0);
-  $("gdes").innerHTML=[["Servicios","servicio"],["Bonos","bono"],["Propinas","propina"],["Ajustes","ajuste"]].map(([l,c])=>`<div class="item"><span>${l}</span><b>${fmt(by(c))}</b></div>`).join("");
+  $("gdes").innerHTML=[["Servicios","servicio"],["Bonos","bono"],["Propinas","propina"],["Ajustes","ajuste"],["Penalizaciones NO SHOW","penalizacion_no_show"],["Reversiones NO SHOW","reversion_no_show"]].map(([l,c])=>`<div class="item"><span>${l}</span><b>${fmt(by(c))}</b></div>`).join("");
   $("gflota").classList.toggle("hide",!ACC.es_flotillero);
   if(ACC.es_flotillero){const m={};sel.forEach(p=>{const n=p.drivers?p.drivers.nombre:"—";m[n]=(m[n]||0)+ +p.monto});
     $("gflo").innerHTML=Object.entries(m).sort((a,b)=>b[1]-a[1]).map(([n,v])=>`<div class="item"><span>${n}</span><b>${fmt(v)}</b></div>`).join("")||'<div class="note">Sin pagos en este periodo.</div>'}
-  $("gpag").innerHTML=PAGOS.length?PAGOS.slice(0,ACC.es_flotillero?15:8).map(p=>`<div class="item"><div>${p.concepto[0].toUpperCase()+p.concepto.slice(1)}${esc(ACC.es_flotillero&&p.drivers?" · "+p.drivers.nombre:"")}<small>${parseF(p.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short"})}${esc(p.rutas?" · Ruta "+p.rutas.id_ruta:"")}</small></div><div style="text-align:right"><b>${fmt(p.monto)}</b><small><span class="pill ${p.estatus==="pagado"?"ok":"w"}">${esc(p.estatus)}</span></small></div></div>`).join(""):'<div class="note">Aún no tienes pagos registrados.</div>';
+  const paymentLabel=p=>({penalizacion_no_show:"Penalización NO SHOW",reversion_no_show:"Reversión NO SHOW"}[p.concepto]||p.concepto[0].toUpperCase()+p.concepto.slice(1));
+  $("gpag").innerHTML=all.length?all.slice(0,ACC.es_flotillero?15:8).map(p=>`<div class="item"><div>${esc(paymentLabel(p))}${esc(ACC.es_flotillero&&p.drivers?" · "+p.drivers.nombre:"")}<small>${parseF(p.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short"})}${esc(p.rutas?" · Ruta "+p.rutas.id_ruta:"")}</small></div><div style="text-align:right"><b>${fmt(p.monto)}</b><small><span class="pill ${p.estatus==="pagado"?"ok":"w"}">${esc(p.estatus)}</span></small></div></div>`).join(""):'<div class="note">Aún no tienes pagos registrados.</div>';
+}
+function pagosConNoShow(){
+  const penalties=new Set(NO_SHOW_CASES.map(c=>c.pago_penalizacion_id).filter(id=>id!=null).map(String));
+  const reversals=new Set(NO_SHOW_CASES.map(c=>c.pago_reversion_id).filter(id=>id!=null).map(String));
+  return PAGOS.map(p=>({
+    ...p,
+    concepto:penalties.has(String(p.id))?"penalizacion_no_show":reversals.has(String(p.id))?"reversion_no_show":p.concepto
+  })).sort((a,b)=>String(b.fecha).localeCompare(String(a.fecha)));
 }
 document.querySelectorAll("#gseg button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#gseg button").forEach(x=>x.classList.toggle("on",x===b));gp=b.dataset.p;drawG()});
 
@@ -835,12 +844,24 @@ const PNR_ESTADOS={
 const fechaPnR=value=>value?new Date(value).toLocaleString("es-MX",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
 const fmtPnR=value=>"$"+Number(value||0).toLocaleString("es-MX",{minimumFractionDigits:2,maximumFractionDigits:2});
 async function loadPnrs(){
-  if(!navigator.onLine){PNR_ERROR="El seguimiento de PNR requiere conexión a internet.";drawPnrs();return}
-  const [claims,discounts]=await Promise.all([
+  if(!navigator.onLine){PNR_ERROR="El seguimiento de PNR requiere conexión a internet.";NO_SHOW_ERROR="Conéctate a internet para consultar los NO SHOW.";drawPnrs();return}
+  const noShowQuery=sb.from("no_show_casos").select("*").order("creado_en",{ascending:false}).limit(1000);
+  const [claims,discounts,noShows]=await Promise.all([
     sb.from("pnr_reclamos").select("*,pnr_reclamo_eventos(*)").eq("driver_id",ME.id).order("creado_en",{ascending:false}),
-    sb.from("pnr_descuentos").select("reclamo_id,saldo_pendiente,monto_aplicado").eq("driver_id",ME.id)
+    sb.from("pnr_descuentos").select("reclamo_id,saldo_pendiente,monto_aplicado").eq("driver_id",ME.id),
+    ACC.es_flotillero?noShowQuery:noShowQuery.eq("driver_id",ME.id)
   ]);
-  if(claims.error){PNR_ERROR="No se pudieron cargar tus reclamos. Verifica que Operaciones haya habilitado el módulo PNR: "+claims.error.message;PNRS=[];drawPnrs();return}
+  if(noShows.error){NO_SHOW_CASES=[];NO_SHOW_EVENTS=[];NO_SHOW_ERROR="No se pudieron cargar los NO SHOW. Verifica que Operaciones haya instalado el flujo en Supabase: "+noShows.error.message}
+  else{
+    NO_SHOW_CASES=noShows.data||[];NO_SHOW_ERROR="";
+    const ids=NO_SHOW_CASES.map(c=>c.id);
+    if(ids.length){
+      const {data,error}=await sb.from("no_show_eventos").select("*").in("caso_id",ids).order("creado_en");
+      if(error){NO_SHOW_EVENTS=[];NO_SHOW_ERROR="No se pudo cargar el historial de NO SHOW: "+error.message}
+      else NO_SHOW_EVENTS=data||[];
+    }else NO_SHOW_EVENTS=[];
+  }
+  if(claims.error){PNR_ERROR="No se pudieron cargar tus reclamos. Verifica que Operaciones haya habilitado el módulo PNR: "+claims.error.message;PNRS=[];drawPnrs();if($("gpag")&&ACC.puede_ver_ganancias)await loadGan();return}
   if(discounts.error){PNR_ERROR="No se pudo cargar el estado de tus descuentos: "+discounts.error.message;PNR_DISCOUNTS={}}
   else PNR_DISCOUNTS=Object.fromEntries((discounts.data||[]).map(x=>[x.reclamo_id,x]));
   const previousPnrs=PNRS;PNRS=claims.data||[];PNR_ERROR="";
@@ -863,11 +884,13 @@ async function loadPnrs(){
     }
   }
   drawPnrs();
+  if($("gpag")&&ACC.puede_ver_ganancias)await loadGan();
 }
 function drawPnrs(){
   const errorBox=$("pnr-error"),list=$("pnr-list");
   if(!errorBox||!list)return;
   err("pnr-error",PNR_ERROR?new Error(PNR_ERROR):null);
+  drawNoShows();
   list.innerHTML=PNRS.length?PNRS.map(claim=>{
     const [label,style]=PNR_ESTADOS[claim.estado]||["Estatus desconocido","w"];
     const events=(claim.pnr_reclamo_eventos||[]).slice().sort((a,b)=>new Date(a.creado_en)-new Date(b.creado_en));
@@ -885,6 +908,49 @@ function drawPnrs(){
     </article>`;
   }).join(""):'<div class="note">No tienes PNR ni penalizaciones registrados.</div>';
   list.querySelectorAll("[data-pnr-send]").forEach(button=>button.onclick=()=>responderPnR(button.dataset.pnrSend,button));
+}
+const estadoNoShowDriver={
+  reportado:["Penalización aplicada · apelación disponible","w"],
+  apelado:["Apelación pendiente de Coordinación","bad"],
+  apelacion_aceptada:["Apelación aceptada · penalización revertida","ok"],
+  apelacion_rechazada:["Apelación rechazada · penalización vigente","bad"]
+};
+const fechaNoShow=value=>value?new Date(`${String(value).slice(0,10)}T12:00:00`).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"}):"—";
+function drawNoShows(){
+  const errorBox=$("no-show-error"),list=$("no-show-list");
+  if(!errorBox||!list)return;
+  err("no-show-error",NO_SHOW_ERROR?new Error(NO_SHOW_ERROR):null);
+  list.innerHTML=NO_SHOW_CASES.length?NO_SHOW_CASES.map(c=>{
+    const [label,style]=estadoNoShowDriver[c.estado]||["Estatus desconocido","w"];
+    const vence=c.vence_apelacion_en?new Date(c.vence_apelacion_en):null;
+    const canAppeal=navigator.onLine&&c.estado==="reportado"&&vence&&vence>Date.now();
+    const events=NO_SHOW_EVENTS.filter(e=>e.caso_id===c.id);
+    return `<article class="card" style="border:1px solid var(--line);box-shadow:none">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><b>NO SHOW · ${esc(c.cliente_nombre)}</b><span class="pill ${style}">${esc(label)}</span></div>
+      <div class="note">Fecha del servicio: <b>${esc(fechaNoShow(c.fecha_servicio))}</b> · CEDIS: <b>${esc(c.cedis_nombre)}</b><br>Reportado: ${esc(fechaPnR(c.creado_en))}<br>Penalización en tus ganancias: <b>${esc(fmtPnR(-Number(c.monto_penalizacion||0)))}</b></div>
+      <div class="item" style="display:block"><b>Observaciones del Supervisor</b><div style="white-space:pre-wrap;margin-top:4px">${esc(c.observaciones_supervisor)}</div></div>
+      ${c.apelacion?`<div class="item" style="display:block"><b>Tu contestación</b><div style="white-space:pre-wrap;margin-top:4px">${esc(c.apelacion)}</div><small>${esc(fechaPnR(c.apelacion_en))}</small></div>`:""}
+      ${c.resolucion?`<div class="item" style="display:block"><b>Resolución de Coordinación</b><div style="white-space:pre-wrap;margin-top:4px">${esc(c.resolucion)}</div></div>`:""}
+      ${events.length?`<details><summary>Historial (${events.length} movimientos)</summary>${events.map(e=>`<div class="item" style="display:block"><b>${esc(({reportado:"Reporte creado",apelacion_driver:"Apelación enviada",apelacion_aceptada:"Apelación aceptada",apelacion_rechazada:"Apelación rechazada"})[e.tipo]||e.tipo)}</b><small>${esc(fechaPnR(e.creado_en))}</small><div style="white-space:pre-wrap">${esc(e.mensaje)}</div></div>`).join("")}</details>`:""}
+      ${canAppeal?`<label for="ns-appeal-${esc(c.id)}">Apela una sola vez (máximo 300 caracteres; vence ${esc(fechaPnR(c.vence_apelacion_en))})</label><textarea id="ns-appeal-${esc(c.id)}" rows="3" maxlength="300" placeholder="Explica por qué solicitas revisar la penalización"></textarea><div style="text-align:right;color:var(--mut);font-size:12px"><span data-ns-count="${esc(c.id)}">0</span>/300</div><button class="btn" data-ns-appeal="${esc(c.id)}">Enviar apelación</button>`:c.estado==="reportado"?"<div class=\"note\">El plazo de 6 horas para apelar venció.</div>":""}
+    </article>`;
+  }).join(""):'<div class="note">No tienes reportes NO SHOW.</div>';
+  list.querySelectorAll("[data-ns-appeal]").forEach(button=>button.onclick=()=>apelarNoShow(button.dataset.nsAppeal,button));
+  list.querySelectorAll("textarea[id^=\"ns-appeal-\"]").forEach(textarea=>textarea.oninput=()=>{const id=textarea.id.slice("ns-appeal-".length);const counter=list.querySelector(`[data-ns-count="${id}"]`);if(counter)counter.textContent=String(textarea.value.length)});
+}
+function textoInapropiadoNoShow(value){
+  const normalized=String(value||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g," ");
+  return /(^| )(puta|puto|putas|putos|mierda|chingar|chingado|chingada|chingados|chingadas|chingue|chingues|verga|vergas|pendejo|pendeja|pendejos|pendejas|culero|culera|culeros|culeras|cabron|cabrona|cabrones|cabronas|pinche|pinches|jodido|jodida|joder|maricon|maricona|maricones|fuck|fucking|shit|bitch|asshole|bastard)( |$)/.test(normalized);
+}
+async function apelarNoShow(id,button){
+  const field=$("ns-appeal-"+id),message=field.value.trim();
+  if(!message||message.length>300||textoInapropiadoNoShow(message)){err("no-show-error",new Error("Escribe una contestación de hasta 300 caracteres y sin groserías."));return}
+  button.disabled=true;err("no-show-error",null);
+  try{
+    const {error}=await sb.rpc("apelar_no_show",{p_caso_id:id,p_contestacion:message});
+    if(error)throw error;
+    toast("Apelación enviada a Coordinación");await loadPnrs();
+  }catch(error){err("no-show-error",error);button.disabled=false}
 }
 function pnrEventLabel(type){
   return ({creado:"Reclamo generado por Operaciones",respuesta_driver:"Primera respuesta del driver",solicitud_soporte:"Operaciones solicitó soporte adicional",evidencia_adicional:"Soporte adicional enviado",evidencia_aceptada:"Evidencia aceptada · reclamo cerrado sin cargo",evidencia_rechazada:"Evidencia insuficiente · reclamo cerrado con cargo",vencido:"Plazo vencido · reclamo cerrado con cargo",descuento_aplicado:"Descuento aplicado a liquidación"})[type]||type;
