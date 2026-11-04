@@ -360,6 +360,8 @@ grant execute on function public.resolver_reclamo_pnr(uuid, text, text) to authe
 
 commit;
 
+notify pgrst, 'reload schema';
+
 create extension if not exists pg_cron with schema extensions;
 select cron.unschedule(jobid) from cron.job where jobname = 'cerrar-pnrs-vencidos';
 select cron.schedule('cerrar-pnrs-vencidos', '*/10 * * * *', 'select public.cerrar_pnrs_vencidos()');

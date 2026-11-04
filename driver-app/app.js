@@ -337,6 +337,7 @@ function syncUnidad(){const on=esCoppel();$("unidad-w").classList.toggle("hide",
 $("unidad").onchange=()=>checkIn();
 document.querySelector("#cedis").addEventListener("change",checkIn);
 const textoAux=v=>String(v||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
+const AUX_CAMERA={in:{stream:null,blob:null,url:null},out:{stream:null,blob:null,url:null}};
 function requiereAuxiliarRuta(){
   const cliente=textoAux(cliName($("cli").value)+" "+cedName($("cli").value,$("cedis").value));
   const ruta=textoAux([cedName($("cli").value,$("cedis").value),$("rid").value,...S.zonas,$("unidad").value,VEHICULO?.tipo,VEHICULO?.marca_modelo,DRIVER?.tipo_vehiculo,DRIVER?.tipo_unidad,DRIVER?.esquema].join(" "));
@@ -347,28 +348,95 @@ function syncAuxiliary(){
   const required=requiereAuxiliarRuta();
   $("aux-checkin").classList.toggle("hide",!required);
   $("aux-checkin-proof").classList.toggle("hide",!required||$("aux-mode").value!=="auxiliar");
-  if(!required){$("aux-mode").value="";$("aux-in-file").value="";$("aux-in-preview").classList.add("hide")}
+  if(!required){$("aux-mode").value="";clearAuxCapture("in")}
 }
-function previewAuxPhoto(inputId,previewId){
-  $(inputId).addEventListener("change",()=>{
-    const file=$(inputId).files[0],preview=$(previewId);
-    if(file){preview.src=URL.createObjectURL(file);preview.classList.remove("hide")}
-    else{preview.removeAttribute("src");preview.classList.add("hide")}
-    if(inputId==="aux-in-file")checkIn();else enableOut();
-  });
+function stopAuxCamera(stage){
+  const camera=AUX_CAMERA[stage],video=$(`aux-${stage}-camera`);
+  if(camera.stream)camera.stream.getTracks().forEach(track=>track.stop());
+  camera.stream=null;video.srcObject=null;video.classList.add("hide");
+  $(`aux-${stage}-capture`).disabled=true;
 }
-async function procesarFotoAuxiliar(inputId){
-  const file=$(inputId).files[0];
-  if(!file)throw new Error("Toma la foto obligatoria con tu auxiliar.");
-  if(!file.type.startsWith("image/")||file.size>10*1024*1024)throw new Error("Usa una imagen de máximo 10 MB.");
-  const blob=await comprimir(file);
-  if(!blob)throw new Error("No se pudo procesar la foto del auxiliar.");
+function clearAuxCapture(stage){
+  stopAuxCamera(stage);
+  const camera=AUX_CAMERA[stage],preview=$(`aux-${stage}-preview`);
+  camera.blob=null;
+  if(camera.url)URL.revokeObjectURL(camera.url);
+  camera.url=null;preview.removeAttribute("src");preview.classList.add("hide");
+}
+async function abrirCamaraAuxiliar(stage){
+  clearAuxCapture(stage);
+  if(stage==="in")checkIn();else enableOut();
+  err(`aux-${stage}-error`,null);
+  if(!navigator.mediaDevices?.getUserMedia){err(`aux-${stage}-error`,new Error("Este dispositivo no permite abrir la cámara desde la app. Usa la app en una conexión segura o contacta a Operaciones."));return}
+  stopAuxCamera(stage);
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:"user",width:{ideal:1280},height:{ideal:960}}});
+    const camera=AUX_CAMERA[stage],video=$(`aux-${stage}-camera`);
+    camera.stream=stream;video.srcObject=stream;video.classList.remove("hide");
+    await video.play();
+    $(`aux-${stage}-capture`).disabled=false;
+  }catch(e){stopAuxCamera(stage);err(`aux-${stage}-error`,new Error(`No se pudo abrir la cámara: ${e.message||e}`))}
+}
+function textoMarcaAgua(ctx,text,maxWidth){
+  const words=String(text).split(/\s+/),lines=[];let line="";
+  for(const word of words){const test=line?`${line} ${word}`:word;if(ctx.measureText(test).width>maxWidth&&line){lines.push(line);line=word}else line=test}
+  if(line)lines.push(line);
+  return lines;
+}
+async function capturarFotoAuxiliar(stage){
+  const camera=AUX_CAMERA[stage],video=$(`aux-${stage}-camera`),canvas=$(`aux-${stage}-canvas`);
+  if(!camera.stream||!video.videoWidth||!video.videoHeight)throw new Error("Abre la cámara y espera a que se vea la imagen antes de tomar la foto.");
+  const capturedAt=new Date(),loc=await getLoc(),scale=Math.min(1,1600/video.videoWidth);
+  canvas.width=Math.round(video.videoWidth*scale);canvas.height=Math.round(video.videoHeight*scale);
+  const ctx=canvas.getContext("2d");ctx.drawImage(video,0,0,canvas.width,canvas.height);
+  const isCheckin=stage==="in",client=isCheckin?cliName($("cli").value):S.route?.cli,cedis=isCheckin?cedName($("cli").value,$("cedis").value):S.route?.cedis;
+  const routeId=isCheckin?$("rid").value.trim():S.route?.rid;
+  const unit=isCheckin?$("unidad").value||VEHICULO?.tipo||DRIVER?.tipo_unidad:S.route?.unidad;
+  const time=capturedAt.toLocaleString("es-MX",{dateStyle:"medium",timeStyle:"medium"});
+  const lines=[
+    `CHAZKI · EVIDENCIA DE ${isCheckin?"CHECK-IN":"CHECK-OUT"}`,
+    `${DRIVER.nombre||"Driver"} · ${DRIVER.codigo||ME.id}`,
+    `Cliente: ${client||"—"}`,
+    `CEDIS: ${cedis||"—"} · Ruta: ${routeId||"—"}`,
+    `Unidad: ${unit||"—"} · Placa: ${VEHICULO?.placas||"—"}`,
+    `Fecha y hora: ${time}`,
+    loc?`GPS: ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}`:"GPS: no disponible"
+  ];
+  const fontSize=Math.max(15,Math.round(canvas.width/48)),padding=fontSize*.7,lineHeight=fontSize*1.35;
+  ctx.font=`${fontSize}px sans-serif`;
+  const wrapped=lines.flatMap(line=>textoMarcaAgua(ctx,line,canvas.width-padding*2));
+  const blockHeight=wrapped.length*lineHeight+padding*2;
+  ctx.fillStyle="rgba(0,0,0,.68)";ctx.fillRect(0,canvas.height-blockHeight,canvas.width,blockHeight);
+  ctx.textAlign="left";ctx.textBaseline="top";
+  wrapped.forEach((line,index)=>{ctx.font=index===0?`bold ${fontSize}px sans-serif`:`${fontSize}px sans-serif`;ctx.fillStyle="#fff";ctx.fillText(line,padding,canvas.height-blockHeight+padding+index*lineHeight)});
+  ctx.save();ctx.translate(canvas.width/2,canvas.height/2);ctx.rotate(-.38);ctx.textAlign="center";ctx.textBaseline="middle";
+  ctx.font=`bold ${Math.round(canvas.width/9)}px sans-serif`;ctx.fillStyle="rgba(255,255,255,.16)";ctx.fillText("CHAZKI",0,0);ctx.restore();
+  const blob=await new Promise(resolve=>canvas.toBlob(resolve,"image/jpeg",.82));
+  if(!blob)throw new Error("No se pudo procesar la foto capturada.");
+  if(blob.size>10*1024*1024)throw new Error("La foto procesada excede el límite de 10 MB.");
+  camera.blob=blob;
+  if(camera.url)URL.revokeObjectURL(camera.url);
+  camera.url=URL.createObjectURL(blob);
+  const preview=$(`aux-${stage}-preview`);preview.src=camera.url;preview.classList.remove("hide");
+  stopAuxCamera(stage);err(`aux-${stage}-error`,null);
+  if(stage==="in")checkIn();else enableOut();
+}
+["in","out"].forEach(stage=>{
+  $(`aux-${stage}-open`).onclick=()=>abrirCamaraAuxiliar(stage);
+  $(`aux-${stage}-capture`).onclick=async()=>{
+    $(`aux-${stage}-capture`).disabled=true;err(`aux-${stage}-error`,null);
+    try{await capturarFotoAuxiliar(stage)}catch(e){err(`aux-${stage}-error`,e);$(`aux-${stage}-capture`).disabled=!AUX_CAMERA[stage].stream}
+  };
+});
+document.addEventListener("visibilitychange",()=>{if(document.hidden){stopAuxCamera("in");stopAuxCamera("out")}});
+$("aux-mode").onchange=()=>{if($("aux-mode").value!=="auxiliar")clearAuxCapture("in");checkIn()};
+async function procesarFotoAuxiliar(stage){
+  const blob=AUX_CAMERA[stage].blob;
+  if(!blob)throw new Error("Abre la cámara y toma una foto nueva con tu auxiliar.");
   return blob;
 }
-previewAuxPhoto("aux-in-file","aux-in-preview");previewAuxPhoto("aux-out-file","aux-out-preview");
-$("aux-mode").onchange=checkIn;
 function checkIn(){syncUnidad();syncAuxiliary();const required=requiereAuxiliarRuta(),auxMode=$("aux-mode").value;
-  const auxiliaryOk=!required||auxMode==="solo"||(auxMode==="auxiliar"&&$("aux-in-file").files.length>0);
+  const auxiliaryOk=!required||auxMode==="solo"||(auxMode==="auxiliar"&&!!AUX_CAMERA.in.blob);
   const ok=$("cli").value&&$("cedis").value&&(!esCoppel()||$("unidad").value)&&+$("pk").value>0&&$("rid").value.trim()&&S.zonas.length&&$("hora").value&&auxiliaryOk;
   $("bin").disabled=!ok;$("inhint").textContent=ok?"Todo listo. Presiona Check IN para iniciar tu ruta.":"Completa todos los campos para habilitar el check-in."}
 $("bin").onclick=async()=>{
@@ -376,7 +444,7 @@ $("bin").onclick=async()=>{
   const hoy=new Date().toLocaleDateString("en-CA");
   const checkinAt=new Date(),llegada=new Date(`${hoy}T${$("hora").value}`).toISOString(),withAux=requiereAuxiliarRuta()&&$("aux-mode").value==="auxiliar";
   let checkinBlob=null;
-  try{if(withAux)checkinBlob=await procesarFotoAuxiliar("aux-in-file")}
+  try{if(withAux)checkinBlob=await procesarFotoAuxiliar("in")}
   catch(e){err("inerr",e);$("bin").disabled=false;return}
   const tipoUnidad=esCoppel()?$("unidad").value:(VEHICULO?.tipo||DRIVER?.tipo_unidad||null);
   const routeRequiresAuxiliary=requiereAuxiliarRuta();
@@ -389,9 +457,10 @@ $("bin").onclick=async()=>{
   if(navigator.onLine)synced=await syncPendingRoute();else{OFFLINE_MODE=true;setNetStatus("Sin conexión · check-in y evidencia guardados en este dispositivo; se enviarán al recuperar la red.",true)}
   const saved=await localGet("routes",routeLocalKey());
   S.route={...routeInfo,dbId:saved?.serverRouteId||null,localKey:record.key,checkin:checkinAt};
+  clearAuxCapture("in");
   prefillCan();setStage(1);$("ent").value="";$("fal").value="";updFin();
   $("hstate").className=`pill ${synced?"ok":"w"}`;$("hstate").textContent=synced?"En ruta":"Check-in pendiente de enviar";
-  if(synced){toast("Check-in registrado · ¡Buena ruta!");$("aux-in-file").value="";$("aux-in-preview").classList.add("hide")}
+  if(synced){toast("Check-in registrado · ¡Buena ruta!")}
   else{setNetStatus("Sin conexión o sincronización pendiente · check-in y evidencia guardados en este dispositivo.",true);toast("Check-in guardado en este dispositivo")}
 };
 
@@ -466,13 +535,13 @@ $("manif-file").onchange=async e=>{
   }catch(x){err("manif-err",x)}
   $("manif-add").disabled=MANIF.length>=10;
 };
-function enableOut(){const rm=!!requiereManif(),aux=!!S.route?.viajaConAuxiliar;$("manif").classList.toggle("hide",!rm);if(rm&&!manifCargado&&S.route)loadManif();$("extras").classList.toggle("hide",!llevaExtras());$("aux-checkout-proof").classList.toggle("hide",!aux);const auxOk=!aux||$("aux-out-file").files.length>0;const ok=(S.inc===false||(S.inc===true&&S.incSel.size>0))&&(!rm||MANIF.length>0)&&auxOk;if(S.stage>=2)setStage((S.inc===false||(S.inc===true&&S.incSel.size>0))?3:2);$("bout").disabled=!(ok&&S.stage>=3)}
+function enableOut(){const rm=!!requiereManif(),aux=!!S.route?.viajaConAuxiliar;$("manif").classList.toggle("hide",!rm);if(rm&&!manifCargado&&S.route)loadManif();$("extras").classList.toggle("hide",!llevaExtras());$("aux-checkout-proof").classList.toggle("hide",!aux);const auxOk=!aux||!!AUX_CAMERA.out.blob;const ok=(S.inc===false||(S.inc===true&&S.incSel.size>0))&&(!rm||MANIF.length>0)&&auxOk;if(S.stage>=2)setStage((S.inc===false||(S.inc===true&&S.incSel.size>0))?3:2);$("bout").disabled=!(ok&&S.stage>=3)}
 $("bout").onclick=async()=>{
   $("bout").disabled=true;err("outerr",null);const r=S.route,res=S.result;
   let record;
   try{record=await localGet("routes",routeLocalKey());if(!record)throw new Error("No existe una copia local de esta ruta. No se cerró para evitar perder el registro.")}catch(e){err("outerr",e);$("bout").disabled=false;return}
   let auxiliaryBlob=null;
-  try{if(r.viajaConAuxiliar)auxiliaryBlob=await procesarFotoAuxiliar("aux-out-file")}
+  try{if(r.viajaConAuxiliar)auxiliaryBlob=await procesarFotoAuxiliar("out")}
   catch(e){err("outerr",e);$("bout").disabled=false;return}
   const checkoutAt=new Date().toISOString();
   const fl=Object.entries(S.fallos).filter(([,q])=>q>0).map(([c,q])=>({causa_id:+c,cantidad:q}));

@@ -181,17 +181,20 @@ const pnrOpsMoney=value=>fm(Number(value||0));
 function vistaPnrsOps(){
   const puedeResolver=["master","ops","coordinador"].includes(ROL);
   const drivers=DRV.filter(d=>d.rol==="driver");
-  const form=puedeResolver?`<h3 style="margin:12px 8px 0">Registrar reclamo</h3>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;padding:8px">
-      <label>PNR<input id="pnr-new-ref" maxlength="120" placeholder="Número de reclamo"></label>
-      <label>Driver<select id="pnr-new-driver"><option value="">Selecciona un driver…</option>${drivers.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)} · ${esc(d.codigo||"")}</option>`).join("")}</select></label>
-      <label>Cliente<input id="pnr-new-client" maxlength="200" placeholder="Nombre del cliente"></label>
-      <label>Ruta (opcional)<input id="pnr-new-route" maxlength="120" placeholder="ID o número de ruta"></label>
-      <label>Importe del reclamo ($)<input id="pnr-new-amount" type="number" min="0.01" step="0.01"></label>
+  const form=puedeResolver?`<section class="pnr-panel">
+    <div class="pnr-form-head"><div><h3>Registrar reclamo</h3><p>Captura los datos del caso y adjunta evidencia para notificar al driver.</p></div></div>
+    <div class="pnr-form-grid">
+      <label class="pnr-field pnr-span-2">Número de PNR<input id="pnr-new-ref" maxlength="120" placeholder="Ej. PNR-123456" autocomplete="off"></label>
+      <label class="pnr-field pnr-span-2">Driver<select id="pnr-new-driver"><option value="">Selecciona un driver…</option>${drivers.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)} · ${esc(d.codigo||"")}</option>`).join("")}</select></label>
+      <label class="pnr-field pnr-span-2">Cliente<input id="pnr-new-client" maxlength="200" placeholder="Nombre del cliente"></label>
+      <label class="pnr-field pnr-span-2">Ruta <span style="font-weight:400;color:var(--mut)">(opcional)</span><input id="pnr-new-route" maxlength="120" placeholder="ID o número de ruta"></label>
+      <label class="pnr-field pnr-span-2">Importe del reclamo<input id="pnr-new-amount" type="number" min="0.01" step="0.01" placeholder="$0.00"></label>
+      <label class="pnr-field pnr-span-6">Detalles del reclamo<textarea id="pnr-new-detail" rows="4" maxlength="5000" placeholder="Describe la entrega no reconocida y agrega la información relevante"></textarea></label>
+      <label class="pnr-field pnr-span-6 pnr-upload">Evidencia fotográfica <small>Hasta 5 imágenes · JPEG, PNG o WebP · máximo 10 MB por archivo</small><input id="pnr-new-files" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
     </div>
-    <label style="padding:0 8px">Detalles del reclamo<textarea id="pnr-new-detail" rows="3" maxlength="5000" placeholder="Describe la entrega no reconocida y la información relevante"></textarea></label>
-    <label style="padding:0 8px">Imágenes del reclamo (máximo 5)<input id="pnr-new-files" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
-    <div id="pnr-new-error" style="padding:0 8px"></div><div style="padding:0 8px"><button class="btn" id="pnr-new-save">Crear PNR y notificar al driver</button></div>`
+    <div id="pnr-new-error"></div>
+    <div class="pnr-form-footer"><span style="color:var(--mut);font-size:12px">El driver tendrá 24 horas para responder.</span><button class="btn" id="pnr-new-save">Crear reclamo y notificar</button></div>
+  </section>`
     :'<div class="note">Acceso de consulta. La captura y resolución de reclamos corresponde a Operaciones.</div>';
   const rows=PNR_OPS.map(claim=>{
     const [label,style]=PNR_OPS_STATE[claim.estado]||["Estatus desconocido","w"];
@@ -199,19 +202,19 @@ function vistaPnrsOps(){
     const discount=(claim.pnr_descuentos||[])[0];
     let actions="";
     if(puedeResolver&&claim.estado==="revision"){
-      actions=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn sm" data-pnr-action="aceptar" data-pnr-id="${esc(claim.id)}">Aceptar evidencia</button>${claim.intentos===1?`<button class="btn ghost sm" data-pnr-action="solicitar_soporte" data-pnr-id="${esc(claim.id)}">Solicitar más soporte</button>`:`<button class="btn bad sm" data-pnr-action="rechazar" data-pnr-id="${esc(claim.id)}">Cerrar y descontar</button>`}</div>`;
+      actions=`<button class="btn sm" data-pnr-action="aceptar" data-pnr-id="${esc(claim.id)}">Aceptar evidencia</button>${claim.intentos===1?`<button class="btn ghost sm" data-pnr-action="solicitar_soporte" data-pnr-id="${esc(claim.id)}">Solicitar más soporte</button>`:`<button class="btn bad sm" data-pnr-action="rechazar" data-pnr-id="${esc(claim.id)}">Cerrar y descontar</button>`}`;
     }
-    return `<article class="card" style="border:1px solid var(--line);box-shadow:none">
-      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><b>PNR ${esc(claim.pnr)} · ${esc(claim.drivers?.nombre||claim.driver_id)}</b><span class="pill ${style}">${esc(label)}</span></div>
-      <div class="note">Cliente: <b>${esc(claim.cliente)}</b>${claim.ruta_id?` · Ruta: ${esc(claim.ruta_id)}`:""} · Importe: <b>${esc(pnrOpsMoney(claim.monto))}</b><br>Creado: ${esc(pnrOpsDate(claim.creado_en))}${claim.vence_en?` · Respuesta vence: <b>${esc(pnrOpsDate(claim.vence_en))}</b>`:""}</div>
+    return `<article class="pnr-claim">
+      <div class="pnr-claim-top"><div class="pnr-claim-title"><b>PNR ${esc(claim.pnr)}</b><span style="color:var(--mut)"> · ${esc(claim.drivers?.nombre||claim.driver_id)}</span></div><span class="pill ${style}">${esc(label)}</span></div>
+      <div class="pnr-claim-meta"><span>Cliente: <b>${esc(claim.cliente)}</b></span>${claim.ruta_id?`<span>Ruta: <b>${esc(claim.ruta_id)}</b></span>`:""}<span>Importe: <b>${esc(pnrOpsMoney(claim.monto))}</b></span><span>Creado: <b>${esc(pnrOpsDate(claim.creado_en))}</b></span>${claim.vence_en?`<span>Vence: <b>${esc(pnrOpsDate(claim.vence_en))}</b></span>`:""}</div>
       ${discount?`<div class="item"><span>Descuento acumulado</span><b>${esc(pnrOpsMoney(discount.monto_aplicado))} aplicado · ${esc(pnrOpsMoney(discount.saldo_pendiente))} por aplicar a liquidaciones</b></div>`:""}
-      <details><summary style="cursor:pointer;font-weight:700">Ver información y línea del tiempo (${events.length} movimientos)</summary>
-      <div style="white-space:pre-wrap;margin:10px 0">${esc(claim.detalle)}</div>
-      ${events.map(event=>`<div class="item" style="display:block"><b>${esc(pnrEventLabelOps(event.tipo))}</b><small style="display:block">${esc(pnrOpsDate(event.creado_en))}${event.actor_email?" · "+esc(event.actor_email):""}</small>${event.mensaje?`<div style="white-space:pre-wrap;margin-top:5px">${esc(event.mensaje)}</div>`:""}${(event.urls||[]).length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${event.urls.map((file,i)=>`<a href="${esc(file.url)}" target="_blank" rel="noopener">Imagen ${i+1}</a>`).join("")}</div>`:""}</div>`).join("")||'<div class="note">Sin movimientos.</div>'}</details>${actions}
+      <details><summary>Ver detalles y línea del tiempo (${events.length} movimientos)</summary>
+      <div class="pnr-claim-detail">${esc(claim.detalle)}</div>
+      <div class="pnr-timeline">${events.map(event=>`<div class="pnr-event"><b>${esc(pnrEventLabelOps(event.tipo))}</b><small>${esc(pnrOpsDate(event.creado_en))}${event.actor_email?" · "+esc(event.actor_email):""}</small>${event.mensaje?`<div style="white-space:pre-wrap">${esc(event.mensaje)}</div>`:""}${(event.urls||[]).length?`<div class="pnr-event-files">${event.urls.map((file,i)=>`<a href="${esc(file.url)}" target="_blank" rel="noopener">Ver imagen ${i+1}</a>`).join("")}</div>`:""}</div>`).join("")||'<div class="note">Sin movimientos.</div>'}</div></details>${actions?`<div class="pnr-actions">${actions}</div>`:""}
     </article>`;
   }).join("");
-  return `${PNR_OPS_ERR?`<div class="errbox">No se pudieron cargar los PNR. Ejecuta el SQL de configuración en Supabase y verifica el acceso. ${esc(PNR_OPS_ERR)}</div>`:""}
-    ${form}<h3 style="margin:16px 8px 0">PNR registrados (${PNR_OPS.length})</h3>${rows||'<div class="note">Todavía no hay reclamos.</div>'}`;
+  return `<div class="pnr-layout">${PNR_OPS_ERR?`<div class="errbox">No se pudieron cargar los PNR. Ejecuta el SQL de configuración en Supabase y verifica el acceso. ${esc(PNR_OPS_ERR)}</div>`:""}
+    ${form}<section class="pnr-list"><div class="pnr-list-head"><h3>PNR registrados</h3><span class="pnr-count">${PNR_OPS.length} ${PNR_OPS.length===1?"reclamo":"reclamos"}</span></div>${rows?`<div class="pnr-list">${rows}</div>`:'<div class="pnr-empty">Todavía no hay reclamos registrados.</div>'}</section></div>`;
 }
 function pnrEventLabelOps(type){
   return ({creado:"Reclamo generado",respuesta_driver:"Primera respuesta del driver",solicitud_soporte:"Se solicitó soporte adicional",evidencia_adicional:"Soporte adicional recibido",evidencia_aceptada:"Evidencia aceptada · caso cerrado",evidencia_rechazada:"Evidencia insuficiente · descuento aplicado",vencido:"Plazo vencido · descuento aplicado",descuento_aplicado:"Descuento aplicado a liquidación"})[type]||type;
