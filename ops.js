@@ -1,6 +1,6 @@
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);const $=id=>document.getElementById(id);
-let R=[],C=[],tab="r",photos={},LIQ={},DRV=[],PRV=[],TAR=null;
+let R=[],C=[],tab="r",photos={},LIQ={},DRV=[],PRV=[],TAR=null,ANU=[],ANUERR="",AUD={},AUDERR="",analyticsGrain="dia",financeGrain="dia";
 const fd=m=>m==null?"—":(m<1000?m+" m":(m/1000).toFixed(1)+" km");
 const hh=s=>s?new Date(s).toTimeString().slice(0,5):"—";
 const dd=s=>new Date(s).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
@@ -25,7 +25,7 @@ $("abtn").onclick=async()=>{
   if(!dominioOk(email)){$("amsg").innerHTML='<div class="errbox">Solo personal de Chazki: usa tu correo @chazki.com.</div>';return}
   const r=await sb.auth.signInWithPassword({email,password});
   if(r.error){$("amsg").innerHTML='<div class="errbox">Correo o contraseña incorrectos.</div>';return}boot()};
-const TABS={master:"rvalbkcifpedtn",ops:"rvalbkcifpdtn",coordinador:"rvalbkcifpdt",finanzas:"rlcpd",ih:"rvabkcifd"};
+const TABS={master:"rvalbkcifpedtnxyz",ops:"rvalbkcifpdtnxyz",coordinador:"rvalbkcifpdtxyz",finanzas:"rlcpdxyz",ih:"rvabkcifdx"};
 const puede=t=>(TABS[ROL]||"").includes(t);
 const veFin=()=>["master","ops","coordinador","finanzas"].includes(ROL);
 const cargaFin=()=>veFin()||ROL==="ih";
@@ -40,11 +40,13 @@ const NAV_INFO={
   c:["Cancelaciones","⊘","Revisa cancelaciones reportadas por los drivers."],
   i:["Incidencias","!","Consulta incidentes reportados durante las rutas."],
   f:["Fallidos por causa","↘","Analiza paquetes no entregados por motivo."],
-  b:["Bajas","−","Gestiona solicitudes de baja de conductores."],
+  x:["Indicadores del negocio","▥","Consulta indicadores operativos del periodo."],
+  y:["Finanzas por cliente","$","Consulta ventas, pagos, utilidad y penalizaciones."],
+  z:["Desempeño de flotilla","♙","Compara resultados de flotilleros y drivers."],
+  b:["Desactivaciones","−","Gestiona solicitudes de desactivación de drivers."],
   k:["Cambios de datos","✎","Revisa solicitudes de actualización de perfiles."],
   t:["Tarifario","$","Consulta y administra tarifas operativas."],
   d:["Descargas","⇩","Genera reportes y exportaciones."],
-  n:["Padrón","▤","Consulta el padrón de conductores."],
   p:["Proveedores y drivers","♙","Administra proveedores y sus conductores."],
   e:["Equipo","♧","Gestiona el acceso del equipo administrativo."]
 };
@@ -54,6 +56,7 @@ function seleccionarTab(b){
   const [title,,description]=NAV_INFO[tab]||["Operación","",""];
   $("page-title").textContent=title;
   $("page-description").textContent=description;
+  if(["l","x","y","z"].includes(tab)){load();return}
   render();
 }
 function aplicarRol(){
@@ -79,6 +82,15 @@ $("out").onclick=async()=>{await sb.auth.signOut();location.reload()};
 $("lb").onclick=()=>$("lb").classList.add("hide");
 document.querySelectorAll(".role-nav button").forEach(b=>b.onclick=()=>seleccionarTab(b));
 $("go").onclick=load;
+async function fetchPaged(buildQuery){
+  const rows=[];
+  for(let offset=0;;offset+=1000){
+    const {data,error}=await buildQuery().range(offset,offset+999);
+    if(error)throw error;
+    const page=data||[];rows.push(...page);
+    if(page.length<1000)return rows;
+  }
+}
 async function boot(){
   $("loading").classList.remove("hide");
   const {data:{session}}=await sb.auth.getSession();
@@ -105,15 +117,38 @@ async function boot(){
 }
 async function load(){
   const a=new Date($("d1").value+"T00:00:00").toISOString(),b=new Date($("d2").value+"T23:59:59").toISOString();
-  const [r,c]=await Promise.all([
-    sb.from("rutas").select("*,drivers(nombre,codigo,cliente_default_id),cedis(nombre,cliente_id,clientes(nombre)),ruta_fallos(cantidad,causas_fallo(nombre)),ruta_incidencias(comentario,tipos_incidencia(nombre)),ruta_manifiestos(foto_path)").gte("checkin_at",a).lte("checkin_at",b).order("checkin_at",{ascending:false}),
-    sb.from("cancelaciones").select("*,drivers(nombre,codigo),cedis(nombre,cliente_id,clientes(nombre))").gte("capturado_at",a).lte("capturado_at",b).order("capturado_at",{ascending:false})]);
+  let routeRows,cancelRows;
+  try{
+    [routeRows,cancelRows]=await Promise.all([
+      fetchPaged(()=>sb.from("rutas").select("*,drivers(nombre,codigo,cliente_default_id),cedis(*,clientes(nombre)),ruta_fallos(cantidad,causas_fallo(nombre)),ruta_incidencias(comentario,tipos_incidencia(nombre)),ruta_manifiestos(foto_path)").gte("checkin_at",a).lte("checkin_at",b).order("checkin_at",{ascending:false})),
+      fetchPaged(()=>sb.from("cancelaciones").select("*,drivers(nombre,codigo),cedis(*,clientes(nombre))").gte("capturado_at",a).lte("capturado_at",b).order("capturado_at",{ascending:false}))
+    ]);
+  }catch(error){toast("No se pudieron cargar las rutas y cancelaciones: "+(error.message||error));return}
   const f=$("fcli").value;const keep=x=>!f||String(x.cedis.cliente_id)===f;
-  R=(r.data||[]).filter(keep);C=(c.data||[]).filter(keep);
+  R=routeRows.filter(keep);C=cancelRows.filter(keep);
   const paths=C.map(x=>x.foto_path);photos={};
   if(paths.length){const s=await sb.storage.from("cancelaciones").createSignedUrls(paths,3600);(s.data||[]).forEach(x=>{photos[x.path]=x.signedUrl})}
   await cargaEventos();await cargaExtra();
+  if(tab==="l")await cargarAnulaciones();
+  if(veFin()&&["x","y","z"].includes(tab))await cargarAuditorias();
   render();
+}
+async function cargarAnulaciones(){
+  ANU=[];ANUERR="";
+  const ids=R.map(x=>String(x.id));
+  if(!ids.length)return;
+  try{ANU=await fetchPaged(()=>sb.from("liquidacion_anulaciones").select("id,ruta_id,motivo,anulada_por_email,anulada_en").in("ruta_id",ids).order("anulada_en",{ascending:false}))}
+  catch(error){ANUERR=error.message||String(error)}
+}
+async function cargarAuditorias(){
+  AUD={};AUDERR="";
+  const ids=R.map(x=>x.id);
+  if(!ids.length)return;
+  try{
+    const data=[];
+    for(let i=0;i<ids.length;i+=500)data.push(...await fetchPaged(()=>sb.from("liquidacion_validaciones").select("ruta_id,validado_por,validado_por_email,validado_en").in("ruta_id",ids.slice(i,i+500)).order("validado_en",{ascending:false})));
+    for(const row of data)if(!AUD[String(row.ruta_id)])AUD[String(row.ruta_id)]=row;
+  }catch(error){AUDERR=error.message||String(error)}
 }
 function render(){
   const cer=R.filter(x=>x.estado==="cerrada"),asg=R.reduce((s,x)=>s+x.paquetes_asignados,0),ent=cer.reduce((s,x)=>s+x.entregados,0),fal=cer.reduce((s,x)=>s+x.fallidos,0);
@@ -128,7 +163,7 @@ function render(){
     (rows.map(({x,i})=>`<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${esc(x.cedis.clientes.nombre)} · ${esc(x.cedis.nombre)}</td><td><span class="pill bad">${esc(i.tipos_incidencia.nombre)}</span></td><td>${esc(i.comentario||"—")}</td></tr>`).join("")||`<tr><td colspan="5">Sin incidencias en este periodo.</td></tr>`)+`</table>`}
   if(tab==="f"){const m={};R.forEach(x=>x.ruta_fallos.forEach(f=>{m[f.causas_fallo.nombre]=(m[f.causas_fallo.nombre]||0)+f.cantidad}));const e=Object.entries(m).sort((a,b)=>b[1]-a[1]);
   h=`<table><tr><th>Causa</th><th>Paquetes</th></tr>`+(e.map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")||`<tr><td colspan="2">Sin fallidos en este periodo.</td></tr>`)+`</table>`}
-  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();if(tab==="t")h=vistaTarifario();if(tab==="n")h=vistaPadron();
+  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();if(tab==="t")h=vistaTarifario();if(tab==="x")h=vistaIndicadores();if(tab==="y")h=vistaFinanzas();if(tab==="z")h=vistaDesempeno();
   $("view").innerHTML=h;enlazar();
   document.querySelectorAll("img.th").forEach(i=>i.onclick=()=>{$("lbimg").src=i.dataset.u;$("lb").classList.remove("hide")});
 }
@@ -143,7 +178,7 @@ function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");set
 async function cargaExtra(){
   LIQ={};PEND=[];BAJ=[];CAMB=[];if(!cargaFin()){DRV=[];PRV=[];return}const ids=R.map(x=>x.id);
   const [l,d,p,pe,bj,cm]=await Promise.all([
-    ids.length?sb.from("liquidaciones").select("*").in("ruta_id",ids):{data:[]},
+    ids.length&&veFin()?cargarLiquidaciones(ids):Promise.resolve([]),
     sb.from("drivers").select("id,nombre,codigo,rol,estatus,proveedor_id").order("nombre"),
     sb.from("proveedores").select("*").order("nombre"),
     sb.from("validaciones_pendientes").select("*,rutas(id_ruta,entregados,paquetes_asignados,drivers(nombre),cedis(nombre,clientes(nombre)))").eq("estatus","pendiente").order("solicitado_en"),
@@ -151,16 +186,173 @@ async function cargaExtra(){
     sb.from("cambios_perfil").select("*").order("solicitado_en",{ascending:false}).limit(50)]);
   BAJ=bj.data||[];CAMB=cm.data||[];
   PEND=pe.data||[];
-  (l.data||[]).forEach(x=>LIQ[x.ruta_id]=x);DRV=d.data||[];PRV=p.data||[];
+  (l||[]).forEach(x=>LIQ[x.ruta_id]=x);DRV=d.data||[];PRV=p.data||[];
   window.INV=ROL==="master"?((await sb.from("staff_invitados").select("*").order("creado_en",{ascending:false})).data||[]):[];
 }
 const provDe=driverId=>{const d=DRV.find(y=>y.id===driverId);return d&&PRV.find(y=>y.id===d.proveedor_id)};
+async function cargarLiquidaciones(ids){
+  const rows=[];
+  for(let i=0;i<ids.length;i+=500){
+    rows.push(...await fetchPaged(()=>sb.from("liquidaciones").select("*").in("ruta_id",ids.slice(i,i+500))));
+  }
+  return rows;
+}
 function vistaPorValidar(){const l=porValidar();
   return `<table><tr><th>Fecha</th><th>Driver</th><th>Proveedor</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Asig.</th><th>Entreg.</th><th>Efectiv.</th><th></th></tr>`+
-  (l.map(x=>{const p=provDe(x.driver_id);return `<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${p?p.nombre+`<br><small>${esc(p.tipo_registro||"sin registro fiscal")}</small>`:'<span class="pill w">Sin proveedor</span>'}</td><td><b>${esc(x.cedis.clientes.nombre)}</b><br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta)}</td><td>${esc(x.paquetes_asignados)}</td><td>${esc(x.entregados)}</td><td>${pc(x.entregados/x.paquetes_asignados)}</td><td><button class="btn sm" data-val="${esc(x.id)}">Validar</button></td></tr>`}).join("")||`<tr><td colspan="9">No hay rutas por validar en este periodo (solo MELI, Coppel y Liverpool tienen tarifario cargado).</td></tr>`)+`</table>`}
+  (l.map(x=>{const p=provDe(x.driver_id);return `<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${p?esc(p.nombre)+`<br><small>${esc(p.tipo_registro||"sin registro fiscal")}</small>`:'<span class="pill w">Sin proveedor</span>'}</td><td><b>${esc(x.cedis.clientes.nombre)}</b><br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta)}</td><td>${esc(x.paquetes_asignados)}</td><td>${esc(x.entregados)}</td><td>${pc(x.entregados/x.paquetes_asignados)}</td><td><button class="btn ghost sm" data-det="${esc(x.id)}">Detalle</button> <button class="btn sm" data-val="${esc(x.id)}">Validar</button></td></tr>`}).join("")||`<tr><td colspan="9">No hay rutas por validar en este periodo (solo MELI, Coppel y Liverpool tienen tarifario cargado).</td></tr>`)+`</table>`}
+async function verDetalleRuta(id){
+  let ru=R.find(x=>String(x.id)===String(id));
+  if(!ru){
+    const {data,error}=await sb.from("rutas").select("*,drivers(nombre,codigo),cedis(*,clientes(nombre)),ruta_fallos(cantidad,causas_fallo(nombre)),ruta_incidencias(comentario,tipos_incidencia(nombre)),ruta_manifiestos(foto_path)").eq("id",id).maybeSingle();
+    if(error){toast("No se pudo cargar el detalle de la ruta: "+error.message);return}
+    ru=data;
+  }
+  if(!ru){toast("No se encontró el detalle de esta ruta");return}
+  let liq=LIQ[ru.id];
+  if(!liq&&veFin()){
+    const {data,error}=await sb.from("liquidaciones").select("*").eq("ruta_id",ru.id).maybeSingle();
+    if(error){toast("No se pudo cargar la liquidación de la ruta: "+error.message);return}
+    liq=data;
+  }
+  const proveedor=liq&&PRV.find(x=>x.id===liq.proveedor_id);
+  const manifiestos=ru.ruta_manifiestos||[],paths=manifiestos.map(x=>x.foto_path).filter(Boolean);
+  let fotos=[];
+  if(paths.length){
+    const {data,error}=await sb.storage.from("manifiestos").createSignedUrls(paths,3600);
+    if(error){toast("No se pudieron cargar las fotos del manifiesto: "+error.message);return}
+    fotos=data||[];
+    const fotoError=fotos.find(x=>x.error);
+    if(fotoError){toast("No se pudo abrir una foto del manifiesto: "+fotoError.error);return}
+  }
+  const fecha=x=>x?new Date(x).toLocaleString("es-MX",{dateStyle:"medium",timeStyle:"short"}):"—";
+  const fila=(label,value)=>`<div style="display:flex;justify-content:space-between;gap:14px;padding:7px 0;border-bottom:1px solid var(--line)"><span style="color:var(--mut)">${label}</span><b style="text-align:right">${value==null||value===""?"—":value}</b></div>`;
+  const fallos=(ru.ruta_fallos||[]).map(x=>fila(esc(x.causas_fallo?.nombre||"Causa sin nombre"),esc(x.cantidad))).join("")||'<div style="color:var(--mut)">Sin paquetes fallidos registrados.</div>';
+  const incidencias=(ru.ruta_incidencias||[]).map(x=>`<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>${esc(x.tipos_incidencia?.nombre||"Incidencia")}</b>${x.comentario?`<small style="display:block;margin-top:3px">${esc(x.comentario)}</small>`:""}</div>`).join("")||'<div style="color:var(--mut)">Sin incidencias registradas.</div>';
+  const galeria=fotos.map(x=>x.signedUrl?`<a href="${esc(x.signedUrl)}" target="_blank" rel="noopener"><img src="${esc(x.signedUrl)}" alt="Foto del manifiesto" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px"></a>`:"").join("");
+  const modal=$("modal");modal.classList.remove("hide");
+  modal.innerHTML=`<div class="box" style="max-height:90vh;overflow:auto">
+    <h2 style="margin:0 0 4px">Detalle de ruta ${esc(ru.id_ruta)}</h2>
+    <div style="color:var(--mut);font-size:13px">${esc(ru.drivers?.nombre||"Driver")} · ${esc(ru.drivers?.codigo||"")}</div>
+    <h3>Datos capturados</h3>
+    ${fila("Cliente",esc(ru.cedis?.clientes?.nombre))}
+    ${fila("CEDIS",esc(ru.cedis?.nombre))}
+    ${fila("Fecha y hora de check-in",fecha(ru.checkin_at))}
+    ${fila("Hora de llegada al CEDIS",ru.hora_llegada_cedis?hh(ru.hora_llegada_cedis):"—")}
+    ${fila("Zonas",esc((ru.zonas||[]).join(", ")))}
+    ${fila("Tipo de unidad",esc(ru.tipo_unidad))}
+    ${fila("Paquetes asignados",esc(ru.paquetes_asignados))}
+    ${fila("Entregados",esc(ru.entregados))}
+    ${fila("Fallidos",esc(ru.fallidos))}
+    ${fila("Efectividad",ru.paquetes_asignados?pc(ru.entregados/ru.paquetes_asignados):"—")}
+    ${fila("Check-out",fecha(ru.checkout_at))}
+    ${liq?`<h3>Datos de validación y liquidación</h3>
+    ${fila("Flotillero / proveedor",esc(proveedor?.nombre||"—"))}
+    ${fila("Registro fiscal",esc(liq.registro_fiscal))}
+    ${fila("Cuenta y esquema",esc([liq.cuenta,liq.esquema].filter(Boolean).join(" · ")))}
+    ${fila("Costo total",fm(liq.costo_total))}
+    ${fila("Retención",fm(liq.retencion))}
+    ${fila("IVA",fm(liq.iva))}
+    ${fila("Pago al proveedor",fm(liq.pago_driver))}
+    ${fila("Venta total",fm(liq.venta_total))}
+    ${fila("Utilidad",fm(liq.utilidad))}
+    ${fila("Nota de validación",esc(liq.nota))}`:""}
+    <h3>Paquetes fallidos por causa</h3>${fallos}
+    <h3>Incidencias reportadas</h3>${incidencias}
+    <h3>Fotos del manifiesto (${paths.length})</h3>
+    ${galeria?`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px">${galeria}</div>`:'<div style="color:var(--mut)">Sin fotos de manifiesto registradas.</div>'}
+    <div style="margin-top:14px"><button class="btn ghost" id="route-detail-close">Cerrar</button></div>
+  </div>`;
+  $("route-detail-close").onclick=()=>modal.classList.add("hide");
+}
 function vistaValidadas(){const l=Object.values(LIQ);
   return `<table><tr><th>Fecha</th><th>Driver</th><th>Proveedor</th><th>Cuenta · esquema</th><th>Efectiv.</th><th>Costo</th><th>Retención</th><th>IVA</th><th>Pago al proveedor</th><th>Venta</th><th>Utilidad</th><th>Registro</th><th></th></tr>`+
-  (l.map(x=>{const ru=R.find(y=>y.id===x.ruta_id),p=PRV.find(y=>y.id===x.proveedor_id);return `<tr><td>${ru?dd(ru.checkin_at):""}</td><td>${esc(ru?ru.drivers.nombre:"")}</td><td>${esc(p?p.nombre:"—")}</td><td>${esc(x.cuenta)}<br><small>${esc(x.esquema||"")}</small></td><td>${pc(x.efectividad)}</td><td>${fm(x.costo_total)}</td><td>${fm(x.retencion)}</td><td>${fm(x.iva)}</td><td><b>${fm(x.pago_driver)}</b></td><td>${fm(x.venta_total)}</td><td>${fm(x.utilidad)}<br><small>${pc(x.margen)}</small></td><td>${esc(x.registro_fiscal)}</td><td><button class="btn ghost sm" data-anu="${esc(x.ruta_id)}">Anular</button></td></tr>`}).join("")||`<tr><td colspan="13">No hay rutas validadas en este periodo.</td></tr>`)+`</table>`}
+  (l.map(x=>{const ru=R.find(y=>y.id===x.ruta_id),p=PRV.find(y=>y.id===x.proveedor_id);return `<tr><td>${ru?dd(ru.checkin_at):""}</td><td>${esc(ru?ru.drivers.nombre:"")}</td><td>${esc(p?p.nombre:"—")}</td><td>${esc(x.cuenta)}<br><small>${esc(x.esquema||"")}</small></td><td>${pc(x.efectividad)}</td><td>${fm(x.costo_total)}</td><td>${fm(x.retencion)}</td><td>${fm(x.iva)}</td><td><b>${fm(x.pago_driver)}</b></td><td>${fm(x.venta_total)}</td><td>${fm(x.utilidad)}<br><small>${pc(x.margen)}</small></td><td>${esc(x.registro_fiscal)}</td><td><button class="btn ghost sm" data-det="${esc(x.ruta_id)}">Detalle</button> <button class="btn ghost sm" data-anu="${esc(x.ruta_id)}">Anular</button></td></tr>`}).join("")||`<tr><td colspan="13">No hay rutas validadas en este periodo.</td></tr>`)+`</table>
+  <h3 style="margin:16px 8px 0">Historial de anulaciones</h3>${ANUERR?`<div class="errbox">No se pudo cargar el historial. Verifica que hayas ejecutado el SQL de anulaciones en Supabase. ${esc(ANUERR)}</div>`:
+  `<table><tr><th>Fecha</th><th>Ruta</th><th>Motivo</th><th>Usuario</th></tr>${ANU.map(x=>`<tr><td>${dd(x.anulada_en)} ${hh(x.anulada_en)}</td><td>${esc(x.ruta_id)}</td><td>${esc(x.motivo)}</td><td>${esc(x.anulada_por_email||"—")}</td></tr>`).join("")||'<tr><td colspan="4">No hay anulaciones en este periodo.</td></tr>'}</table>`}`}
+function filasFinancieras(rows){
+  const grupos=new Map();
+  for(const row of rows){
+    const key=row.key,entry=grupos.get(key)||{key,label:row.label,rutas:0,ventas:0,pagos:0,utilidad:0,penalizaciones:0,asignados:0,entregados:0,fallidos:0};
+    entry.rutas++;
+    entry.ventas+=Number(row.liq.venta_total)||0;
+    entry.pagos+=Number(row.liq.pago_driver)||0;
+    entry.utilidad+=Number(row.liq.utilidad)||0;
+    entry.penalizaciones+=Math.abs(Number(row.liq.dcto_pago)||0);
+    entry.asignados+=Number(row.ruta.paquetes_asignados)||0;
+    entry.entregados+=Number(row.ruta.entregados)||0;
+    entry.fallidos+=Number(row.ruta.fallidos)||0;
+    grupos.set(key,entry);
+  }
+  return [...grupos.values()];
+}
+function datosFinancieros(){
+  return Object.values(LIQ).map(liq=>({liq,ruta:R.find(x=>String(x.id)===String(liq.ruta_id))}))
+    .filter(x=>x.ruta)
+    .map(x=>({...x,cliente:x.ruta.cedis?.clientes?.nombre||"Sin cliente",ciudad:x.ruta.cedis?.ciudad||x.ruta.cedis?.ciudad_nombre||x.ruta.cedis?.municipio||"Sin ciudad registrada"}));
+}
+function periodoFecha(value,grain){
+  const d=new Date(value);if(Number.isNaN(d.getTime()))return {key:"sin-fecha",label:"Sin fecha"};
+  const iso=x=>`${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`;
+  if(grain==="dia")return {key:iso(d),label:d.toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"})};
+  if(grain==="semana"){
+    const start=new Date(d);start.setHours(0,0,0,0);start.setDate(start.getDate()-((start.getDay()+6)%7));
+    return {key:iso(start),label:`Semana del ${start.toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"})}`};
+  }
+  if(grain==="mes")return {key:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`,label:d.toLocaleDateString("es-MX",{month:"long",year:"numeric"})};
+  return {key:String(d.getFullYear()),label:String(d.getFullYear())};
+}
+const selectorPeriodo=(id,value)=>`<label style="display:inline-flex;align-items:center;gap:8px">Agrupar por <select id="${id}"><option value="dia" ${value==="dia"?"selected":""}>Día</option><option value="semana" ${value==="semana"?"selected":""}>Semana</option><option value="mes" ${value==="mes"?"selected":""}>Mes</option><option value="anio" ${value==="anio"?"selected":""}>Año</option></select></label>`;
+function tablaResumen(rows,fin=true){
+  const cols=fin?`<th>Venta</th><th>Pago proveedor</th><th>Utilidad</th><th>Penalizaciones</th>`:"";
+  const body=rows.map(x=>`<tr><td>${esc(x.label)}</td><td>${esc(x.rutas)}</td><td>${esc(x.asignados)}</td><td>${esc(x.entregados)}</td><td>${esc(x.fallidos||0)}</td><td>${x.asignados?pc(x.entregados/x.asignados):"—"}</td>${fin?`<td>${fm(x.ventas)}</td><td>${fm(x.pagos)}</td><td>${fm(x.utilidad)}</td><td>${fm(x.penalizaciones)}</td>`:""}</tr>`).join("");
+  return `<table><tr><th>Periodo / grupo</th><th>Rutas</th><th>Paquetes</th><th>Entregados</th><th>Fallidos</th><th>Efectividad</th>${cols}</tr>${body||`<tr><td colspan="${fin?10:6}">Sin datos para los filtros seleccionados.</td></tr>`}</table>`;
+}
+function vistaIndicadores(){
+  const rows=datosFinancieros(),periodos=new Map(),resumen=R.reduce((a,x)=>{a.rutas++;a.asignados+=Number(x.paquetes_asignados)||0;a.entregados+=Number(x.entregados)||0;a.fallidos+=Number(x.fallidos)||0;return a},{rutas:0,asignados:0,entregados:0,fallidos:0});
+  for(const ruta of R){
+    const p=periodoFecha(ruta.checkin_at,analyticsGrain),entry=periodos.get(p.key)||{key:p.key,label:p.label,rutas:0,asignados:0,entregados:0,fallidos:0,ventas:0,pagos:0,utilidad:0,penalizaciones:0};
+    entry.rutas++;entry.asignados+=Number(ruta.paquetes_asignados)||0;entry.entregados+=Number(ruta.entregados)||0;entry.fallidos+=Number(ruta.fallidos)||0;
+    const liq=LIQ[ruta.id];if(liq){entry.ventas+=Number(liq.venta_total)||0;entry.pagos+=Number(liq.pago_driver)||0;entry.utilidad+=Number(liq.utilidad)||0;entry.penalizaciones+=Math.abs(Number(liq.dcto_pago)||0)}
+    periodos.set(p.key,entry);
+  }
+  const trends=[...periodos.values()].sort((a,b)=>a.key.localeCompare(b.key));
+  const stats=(label,value)=>`<div class="kpi"><small>${label}</small><b>${value}</b></div>`;
+  return `<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h3>Indicadores del negocio</h3>${selectorPeriodo("analytics-period",analyticsGrain)}</div>
+    <div class="kpis">${stats("Rutas",resumen.rutas)}${stats("Paquetes asignados",resumen.asignados)}${stats("Entregados",resumen.entregados)}${stats("Fallidos",resumen.fallidos)}${stats("Efectividad",resumen.asignados?pc(resumen.entregados/resumen.asignados):"—")}${stats("Cancelaciones",C.length)}${veFin()?stats("Venta validada",fm(rows.reduce((s,x)=>s+(Number(x.liq.venta_total)||0),0))):""}${veFin()?stats("Utilidad",fm(rows.reduce((s,x)=>s+(Number(x.liq.utilidad)||0),0))):""}</div>
+    <h3>Indicadores por ${analyticsGrain==="dia"?"día":analyticsGrain==="semana"?"semana":analyticsGrain==="mes"?"mes":"año"}</h3>${tablaResumen(trends,veFin())}
+    <h3>Incidencias y excepciones</h3><div class="item"><span>Incidencias reportadas</span><b>${R.reduce((s,x)=>s+(x.ruta_incidencias||[]).length,0)}</b></div><div class="item"><span>Cancelaciones que requieren revisión</span><b>${C.filter(x=>x.ubicacion_validada==="fuera"||x.ubicacion_validada==="sin_ubicacion").length}</b></div><div class="item"><span>Rutas pendientes de validar</span><b>${veFin()?porValidar().length:"—"}</b></div>`;
+}
+function vistaFinanzas(){
+  if(!veFin())return '<div class="errbox">No tienes permisos para consultar información financiera.</div>';
+  const rows=datosFinancieros(),periodos=filasFinancieras(rows.map(x=>{const p=periodoFecha(x.ruta.checkin_at,financeGrain);return {...x,key:p.key,label:p.label}})).sort((a,b)=>a.key.localeCompare(b.key));
+  const clientes=filasFinancieras(rows.map(x=>({...x,key:x.cliente,label:x.cliente}))).sort((a,b)=>b.ventas-a.ventas);
+  const ciudades=filasFinancieras(rows.map(x=>({...x,key:x.ciudad,label:x.ciudad}))).sort((a,b)=>b.ventas-a.ventas);
+  const auditorias=rows.filter(x=>AUD[String(x.ruta.id)]).map(x=>{const audit=AUD[String(x.ruta.id)],persona=DRV.find(d=>String(d.id)===String(audit.validado_por));return {...x,key:String(audit.validado_por),label:persona?.nombre||audit.validado_por_email||"Usuario sin nombre"}})
+  const supervisores=filasFinancieras(auditorias).sort((a,b)=>b.ventas-a.ventas);
+  const sinAtribuir=rows.length-auditorias.length;
+  return `<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h3>Finanzas por cliente</h3>${selectorPeriodo("finance-period",financeGrain)}</div>
+    <div class="kpis">${[
+      ["Venta al cliente",rows.reduce((s,x)=>s+(Number(x.liq.venta_total)||0),0)],
+      ["Pago calculado a proveedores",rows.reduce((s,x)=>s+(Number(x.liq.pago_driver)||0),0)],
+      ["Utilidad",rows.reduce((s,x)=>s+(Number(x.liq.utilidad)||0),0)],
+      ["Penalizaciones acumuladas",rows.reduce((s,x)=>s+Math.abs(Number(x.liq.dcto_pago)||0),0)]
+    ].map(([label,value])=>`<div class="kpi"><small>${label}</small><b>${fm(value)}</b></div>`).join("")}</div>
+    <h3>General por ${financeGrain==="dia"?"día":financeGrain==="semana"?"semana":financeGrain==="mes"?"mes":"año"}</h3>${tablaResumen(periodos)}
+    <h3>Finanzas por cliente</h3>${tablaResumen(clientes)}
+    <h3>Ingreso y operación por ciudad</h3>${tablaResumen(ciudades)}
+    <h3>Venta atribuida por supervisor que validó</h3>${AUDERR?`<div class="errbox">No se pudo consultar la atribución. Ejecuta el SQL de auditoría de validaciones en Supabase. ${esc(AUDERR)}</div>`:sinAtribuir?`<div class="note">Hay ${sinAtribuir} rutas validadas sin atribución registrada. La auditoría solo se captura desde que se habilite el SQL y el nuevo flujo.</div>`:""}${tablaResumen(supervisores)}
+    <small>Los importes reflejan liquidaciones validadas dentro del rango de operación seleccionado. Penalizaciones acumuladas corresponden al descuento registrado en la liquidación.</small>`;
+}
+function vistaDesempeno(){
+  if(!veFin())return '<div class="errbox">No tienes permisos para consultar pagos o penalizaciones.</div>';
+  const rows=datosFinancieros();
+  const porProveedor=filasFinancieras(rows.map(x=>{const proveedor=PRV.find(p=>String(p.id)===String(x.liq.proveedor_id));return {...x,key:String(x.liq.proveedor_id||"sin-proveedor"),label:proveedor?.nombre||"Sin proveedor asignado"}})).sort((a,b)=>b.pagos-a.pagos);
+  const porDriver=filasFinancieras(rows.map(x=>({...x,key:String(x.ruta.driver_id),label:x.ruta.drivers?.nombre||"Sin nombre"}))).sort((a,b)=>b.pagos-a.pagos);
+  return `<h3>Desempeño de flotilla</h3><p>Montos por servicios liquidados en el periodo; el pago calculado no implica que el pago ya se haya realizado.</p>
+    <h3>Ingreso calculado por flotillero / proveedor</h3>${tablaResumen(porProveedor)}
+    <h3>Ingreso calculado y desempeño por driver</h3>${tablaResumen(porDriver)}
+    ${AUDERR?`<div class="errbox">No se pudo consultar la atribución de validaciones. ${esc(AUDERR)}</div>`:""}`;
+}
 const ESTC={por_validar:["Por validar","w"],en_revision:["En revisión","w"],aprobada:["Aprobada","ok"],rechazada:["Rechazada","bad"],aclaracion:["Aclaración pedida","w"],respondida:["Respondida por el driver","ok"],apelada:["Apelada por el driver","ok"],vencida:["Plazo vencido","bad"]};
 let CEV={},EVP={};
 const cuentaR=v=>{const ms=new Date(v)-Date.now();if(ms<=0)return null;const m=Math.floor(ms/60000);return Math.floor(m/60)+" h "+String(m%60).padStart(2,"0")+" min"};
@@ -329,29 +521,6 @@ function formTarifa(id){
     $("tf-ok").disabled=true;const {error}=await q;if(error){$("tf-ok").disabled=false;return bad(error.message)}
     if(!id&&RTD.length){for(const r of RTD){const x={...r};x.tipo_unidad=r._lu?row.tipo_unidad:null;x.esquema=r._le?row.esquema:null;delete x._lu;delete x._le;const g=await guardarRegla(x,cuenta,null);if(g.error){toast("Tarifa creada, pero una regla falló: "+g.error.message)}}}
     m.classList.add("hide");TF=null;TAR=null;toast(id?"Tarifa actualizada":"Tarifa agregada");cargaTF()}}
-let PAD={res:null,q:"",cnt:null,msg:""},PADROWS=null;
-function parseCSV(t){const rows=[];let r=[],c="",q=false;t=t.replace(/^\ufeff/,"");
-  for(let i=0;i<t.length;i++){const ch=t[i];if(q){if(ch==='"'){if(t[i+1]==='"'){c+='"';i++}else q=false}else c+=ch}
-    else if(ch==='"')q=true;else if(ch===","){r.push(c);c=""}else if(ch==="\n"||ch==="\r"){if(ch==="\r"&&t[i+1]==="\n")i++;r.push(c);c="";rows.push(r);r=[]}else c+=ch}
-  if(c!==""||r.length){r.push(c);rows.push(r)}return rows}
-const norm=s=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
-function mapearPadron(rows){let h=rows.findIndex(r=>r.some(c=>/correo|e-?mail/.test(norm(c))));if(h<0)return {error:"No encontré una columna de correo en el archivo."};
-  const H=rows[h].map(norm),col=(re)=>H.findIndex(x=>re.test(x));
-  const ix={email:col(/correo|e-?mail/),nombre:col(/chofer|operador|^nombre/),proveedor:col(/proveedor|transportista/),telefono:col(/tel/),registro:col(/regist|regimen|fiscal|factura/),estatus:col(/estatus|status/),cliente:col(/cliente/),ciudad:col(/ciudad|plaza/),unidad:col(/unidad|vehiculo/)};
-  const out=rows.slice(h+1).map(r=>{const o={};for(const k in ix)o[k]=ix[k]>=0?(r[ix[k]]||"").trim():"";return o}).filter(o=>/@/.test(o.email));
-  return {rows:out,cols:Object.keys(ix).filter(k=>ix[k]>=0)}}
-async function padronStats(){const r=await sb.from("padron_fleet").select("estatus").limit(20000);const a=r.data||[];PAD.cnt={total:a.length,activos:a.filter(x=>String(x.estatus).toUpperCase()==="ACTIVO").length};render()}
-async function padronBuscar(q){const s=q.trim();if(!s){PAD.res=null;render();return}const r=await sb.from("padron_fleet").select("*").or(`email.ilike.%${s}%,nombre.ilike.%${s}%,proveedor_nombre.ilike.%${s}%`).order("nombre").limit(50);PAD.res=r.data||[];render()}
-function vistaPadron(){
-  if(!PAD.cnt){padronStats();return '<div style="padding:16px">Cargando padrón…</div>'}
-  const sty='style="padding:9px;border:1px solid var(--line);border-radius:10px"';
-  const res=PAD.res?`<table><tr><th>Correo</th><th>Nombre</th><th>Proveedor</th><th>Cliente</th><th>Estatus</th><th></th></tr>${PAD.res.map(x=>`<tr><td>${esc(x.email)}</td><td>${esc(x.nombre||"—")}</td><td>${esc(x.proveedor_nombre||"—")}</td><td>${esc(x.cliente||"—")}</td><td><span class="pill ${String(x.estatus).toUpperCase()==="ACTIVO"?"ok":"bad"}">${esc(x.estatus)}</span></td><td><button class="btn ghost sm" data-pe="${esc(x.email)}" data-pv="${String(x.estatus).toUpperCase()==="ACTIVO"?"BAJA":"ACTIVO"}">${String(x.estatus).toUpperCase()==="ACTIVO"?"Dar de baja":"Reactivar"}</button></td></tr>`).join("")||'<tr><td colspan="6">Sin resultados.</td></tr>'}</table>`:"";
-  return `<h3 style="margin:12px 8px 0">Padrón de fleet</h3><div style="padding:0 8px"><span class="pill ok">${PAD.cnt.activos} activos</span> <span class="pill w">${PAD.cnt.total-PAD.cnt.activos} en baja</span> <small>Solo los correos de este padrón pueden crear cuenta de driver. Una baja desactiva la cuenta.</small></div>
-   <div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px;align-items:center"><input type="file" id="pd-f" accept=".csv,text/csv" ${sty}><button class="btn" id="pd-go" ${PADROWS&&PADROWS.length?"":"disabled"}>${PADROWS&&PADROWS.length?"Cargar "+PADROWS.length+" filas":"Cargar archivo"}</button></div>
-   <div id="pd-msg" style="padding:0 8px 6px"><small>${esc(PAD.msg||"Sube el CSV exportado de la hoja de la base de drivers. Detecto las columnas por su nombre (correo, chofer, proveedor, teléfono, registro fiscal, estatus, cliente, ciudad, unidad).")}</small></div>
-   <h3 style="margin:12px 8px 0">Alta individual</h3><div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px"><input id="pd-e" type="email" placeholder="correo del driver" ${sty}><input id="pd-n" placeholder="Nombre" ${sty}><input id="pd-p" placeholder="Proveedor / flotillero" ${sty}><button class="btn" id="pd-a">Agregar</button></div>
-   <h3 style="margin:12px 8px 0">Buscar</h3><div style="padding:8px"><input id="pd-q" placeholder="Correo, nombre o proveedor" value="${esc(PAD.q)}" ${sty} style="width:100%"></div>${res}`}
-async function padronEnviar(rows){let tot={nuevos:0,actualizados:0,omitidos:0};for(let i=0;i<rows.length;i+=500){const {data,error}=await sb.rpc("padron_cargar",{p_rows:rows.slice(i,i+500)});if(error)throw error;for(const k in tot)tot[k]+=data[k]||0}return tot}
 const NIVEL={master:"Cuenta maestra · acceso completo",ops:"Operaciones · acceso completo",coordinador:"Coordinador · operación y pagos, sin cobro ni utilidad",finanzas:"Finanzas · pagos, liquidaciones y utilidad",ih:"Supervisor · datos operativos, sin importes"};
 const CATALOGO={rutas:["Rutas","Cada ruta con driver, flotillero, cliente, CEDIS, paquetes, efectividad, estatus de validación, manifiestos y extras (maniobras, estadía, otros)."],
  cancelaciones:["Cancelaciones","Cancelaciones con ubicación, distancia al CEDIS, validación y estatus."],incidencias:["Incidencias","Incidencias reportadas por ruta, con comentario."],fallidos:["Fallidos por causa","Paquetes fallidos por causa y ruta."],
@@ -375,15 +544,25 @@ function vistaBajas(){
   const ck=x=>x?"✅":"⏳",puedeS=ROL==="ih",puedeC=["master","ops","coordinador"].includes(ROL);
   const f=BAJ.map(q=>{const d=DRV.find(y=>y.id===q.driver_id),p=PRV.find(y=>y.id===q.proveedor_id);
     const mia=q.estatus==="pendiente"&&((puedeS&&!q.aprob_supervisor)||(puedeC&&!q.aprob_coord));
-    return `<tr><td>${esc(d?d.nombre:q.driver_id)}</td><td>${esc(p?p.nombre:"—")}</td><td>${esc(q.motivo)}<br><small>${dd(q.solicitado_en)}</small></td><td>Supervisor ${ck(q.aprob_supervisor)}<br>Coordinador ${ck(q.aprob_coord)}</td><td>${q.estatus==="pendiente"?"<span class='pill w'>Pendiente</span>":q.estatus==="aprobada"?"<span class='pill ok'>Aprobada</span>":"<span class='pill bad'>Rechazada</span>"}</td><td>${mia?`<button class="btn sm" data-bja="${esc(q.id)}">Autorizar</button> <button class="btn ghost sm" data-bjr="${esc(q.id)}">Rechazar</button>`:""}</td></tr>`}).join("");
-  return `<h3 style="margin:12px 8px 0">Solicitudes de baja de drivers</h3><small style="padding:0 8px">La baja desvincula al driver del flotillero y requiere la autorización del supervisor y del coordinador.</small><table><tr><th>Driver</th><th>Flotillero</th><th>Motivo</th><th>Autorizaciones</th><th>Estatus</th><th></th></tr>${f||'<tr><td colspan="6">Sin solicitudes.</td></tr>'}</table>`}
-async function resolverBaja(id,ok){const {data,error}=await sb.rpc("resolver_baja",{p_id:id,p_aprobar:ok,p_nota:null});
+    return `<tr><td>${esc(d?d.nombre:q.driver_id)}</td><td>${esc(p?p.nombre:"—")}</td><td>${esc(q.motivo)}<br><small>${dd(q.solicitado_en)}</small></td><td>Supervisor ${ck(q.aprob_supervisor)}<br>Coordinador ${ck(q.aprob_coord)}</td><td>${q.estatus==="pendiente"?"<span class='pill w'>Pendiente</span>":q.estatus==="aprobada"?"<span class='pill ok'>Desactivado</span>":"<span class='pill bad'>Rechazada</span>"}</td><td>${mia?`<button class="btn sm" data-bja="${esc(q.id)}">Autorizar desactivación</button> <button class="btn ghost sm" data-bjr="${esc(q.id)}">Rechazar</button>`:""}</td></tr>`}).join("");
+  return `<h3 style="margin:12px 8px 0">Solicitudes de desactivación de drivers</h3><small style="padding:0 8px">Al completar las autorizaciones, el driver se desactiva sin eliminar su perfil, historial ni relación con el flotillero.</small><table><tr><th>Driver</th><th>Flotillero</th><th>Motivo</th><th>Autorizaciones</th><th>Estatus</th><th></th></tr>${f||'<tr><td colspan="6">Sin solicitudes.</td></tr>'}</table>`}
+async function resolverBaja(id,ok){const {data,error}=await sb.rpc("resolver_desactivacion_driver",{p_id:id,p_aprobar:ok,p_nota:null});
   if(error){toast(error.message);return}await cargaExtra();render();toast(ok?"Autorización registrada ("+data+")":"Solicitud rechazada")}
 function vistaAprobar(){
-  const f=PEND.map(q=>{const r=q.rutas||{};return `<tr><td>${esc(r.id_ruta||q.ruta_id)}</td><td>${esc(r.drivers?r.drivers.nombre:"")}</td><td>${esc(r.cedis?r.cedis.clientes.nombre+" · "+r.cedis.nombre:"")}</td><td>${esc(r.entregados)}/${esc(r.paquetes_asignados)}</td><td>No aplicar penalización al pago<br><small>${esc(q.motivo)}</small></td><td>${esCoord()?`<button class="btn sm" data-ap="${esc(q.id)}">Aprobar</button> <button class="btn ghost sm" data-rc="${esc(q.id)}">Rechazar</button>`:'<span class="pill w">En espera</span>'}</td></tr>`}).join("");
+  const f=PEND.map(q=>{const r=q.rutas||{};return `<tr><td>${esc(r.id_ruta||q.ruta_id)}</td><td>${esc(r.drivers?r.drivers.nombre:"")}</td><td>${esc(r.cedis?r.cedis.clientes.nombre+" · "+r.cedis.nombre:"")}</td><td>${esc(r.entregados)}/${esc(r.paquetes_asignados)}</td><td>No aplicar penalización al pago<br><small>${esc(q.motivo)}</small></td><td><button class="btn ghost sm" data-det="${esc(q.ruta_id)}">Detalle</button> ${esCoord()?`<button class="btn sm" data-ap="${esc(q.id)}">Aprobar</button> <button class="btn ghost sm" data-rc="${esc(q.id)}">Rechazar</button>`:'<span class="pill w">En espera</span>'}</td></tr>`}).join("");
   return `<h3 style="margin:12px 8px 0">Excepciones por aprobar</h3><table><tr><th>Ruta</th><th>Driver</th><th>Cliente · CEDIS</th><th>Entreg.</th><th>Solicitud</th><th></th></tr>${f||'<tr><td colspan="6">Nada pendiente.</td></tr>'}</table>`}
-async function resolverVal(id,ok){const {error}=await sb.rpc("resolver_validacion",{p_id:id,p_aprobar:ok,p_nota:null});
-  if(error){toast(error.message);return}await cargaExtra();render();toast(ok?"Aprobada: ruta validada y pago generado":"Solicitud rechazada")}
+async function registrarAuditoriaValidacion(rutaId){
+  return sb.rpc("registrar_validacion_liquidacion",{p_ruta_id:Number(rutaId)});
+}
+async function resolverVal(id,ok){
+  const solicitud=PEND.find(x=>String(x.id)===String(id));
+  const {error}=await sb.rpc("resolver_validacion",{p_id:id,p_aprobar:ok,p_nota:null});
+  if(error){toast(error.message);return}
+  let auditError=null;
+  if(ok&&solicitud?.ruta_id){const audit=await registrarAuditoriaValidacion(solicitud.ruta_id);auditError=audit.error}
+  await cargaExtra();render();
+  toast(auditError?"Aprobada, pero no se registró el supervisor que validó: "+auditError.message:ok?"Aprobada: ruta validada y pago generado":"Solicitud rechazada");
+}
 function vistaEquipo(){
   const st='style="padding:9px;border:1px solid var(--line);border-radius:10px"';
   const eq=DRV.filter(d=>["master","ops","coordinador","ih","finanzas"].includes(d.rol)).map(d=>`<tr><td>${esc(d.nombre)}</td><td>${ROLES_TXT[d.rol]}</td><td>${esc(d.estatus)}</td></tr>`).join("");
@@ -414,15 +593,13 @@ function vistaProveedores(){
     <h3 style="margin:12px 8px 0">Proveedores</h3><table><tr><th>Proveedor</th><th>Tipo</th><th>Registro fiscal</th><th>Titular (ve los pagos)</th></tr>${pv||'<tr><td colspan="4">Aún no hay proveedores.</td></tr>'}</table>
     <h3 style="margin:16px 8px 0">Drivers</h3><table><tr><th>Driver</th><th>Rol</th><th>Proveedor</th><th></th></tr>${dr}</table>`}
 function enlazar(){
+  const ap=$("analytics-period");if(ap)ap.onchange=()=>{analyticsGrain=ap.value;render()};
+  const fp=$("finance-period");if(fp)fp.onchange=()=>{financeGrain=fp.value;render()};
+  document.querySelectorAll("[data-det]").forEach(b=>b.onclick=()=>verDetalleRuta(b.dataset.det));
   document.querySelectorAll("[data-val]").forEach(b=>b.onclick=()=>abrirValidar(+b.dataset.val));
   document.querySelectorAll("[data-anu]").forEach(b=>b.onclick=()=>anular(+b.dataset.anu));
   document.querySelectorAll("[data-gd]").forEach(b=>b.onclick=()=>guardarDriver(b.dataset.gd));
-  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-cpa]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpa,true));document.querySelectorAll("[data-cpr]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpr,false));document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-rev]").forEach(b=>b.onclick=()=>revisarCan(+b.dataset.rev));const pdf=$("pd-f");if(pdf){pdf.onchange=async e=>{const f=e.target.files[0];if(!f)return;const m=mapearPadron(parseCSV(await f.text()));
-    if(m.error){PAD.msg=m.error;PADROWS=null;render();return}PADROWS=m.rows;PAD.msg=`${m.rows.length} filas con correo. Columnas detectadas: ${m.cols.join(", ")}.`;render()}
-  $("pd-go").onclick=async()=>{if(!PADROWS)return;$("pd-go").disabled=true;try{const t=await padronEnviar(PADROWS);PAD.msg=`Listo: ${t.nuevos} nuevos, ${t.actualizados} actualizados, ${t.omitidos} omitidos.`;PADROWS=null;PAD.cnt=null;toast("Padrón actualizado");render()}catch(x){PAD.msg="Error: "+(x.message||x);render()}};
-  $("pd-a").onclick=async()=>{const e=$("pd-e").value.trim();if(!e){toast("Escribe el correo");return}try{const t=await padronEnviar([{email:e,nombre:$("pd-n").value,proveedor:$("pd-p").value,estatus:"ACTIVO"}]);toast(t.omitidos?"Correo no válido":"Driver agregado al padrón");PAD.cnt=null;render()}catch(x){toast(x.message)}};
-  $("pd-q").onchange=e=>{PAD.q=e.target.value;padronBuscar(PAD.q)};
-  document.querySelectorAll("[data-pe]").forEach(b=>b.onclick=async()=>{const {error}=await sb.rpc("padron_cargar",{p_rows:[{email:b.dataset.pe,estatus:b.dataset.pv}]});if(error){toast(error.message);return}toast(b.dataset.pv==="BAJA"?"Driver dado de baja":"Driver reactivado");PAD.cnt=null;padronBuscar(PAD.q)})}
+  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-cpa]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpa,true));document.querySelectorAll("[data-cpr]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpr,false));document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-rev]").forEach(b=>b.onclick=()=>revisarCan(+b.dataset.rev));
   document.querySelectorAll("[data-tfv]").forEach(b=>b.onclick=()=>{TFV=b.dataset.tfv;render()});
   document.querySelectorAll("[data-re]").forEach(b=>b.onclick=()=>formRegla(+b.dataset.re));
   const rgn=$("rg-n");if(rgn)rgn.onclick=()=>formRegla(null);const rfc=$("rg-fc");if(rfc){rfc.onchange=()=>{RGF.cuenta=rfc.value;render()};$("rg-ft").onchange=e=>{RGF.tipo=e.target.value;render()}}
@@ -439,12 +616,26 @@ async function crearProveedor(){const n=$("np-n").value.trim();if(!n){toast("Esc
   if(error){toast(error.message);return}await cargaExtra();render();toast("Proveedor creado")}
 async function anular(rutaId){
   const pg=await sb.from("pagos").select("estatus").eq("ruta_id",rutaId).eq("concepto","servicio");
+  if(pg.error){toast(pg.error.message);return}
   if((pg.data||[]).some(x=>x.estatus==="pagado")){toast("Este pago ya está marcado como pagado; no se puede anular");return}
-  if(!confirm("¿Anular la validación de esta ruta? Se borran su liquidación y su pago pendiente."))return;
-  const a=await sb.from("pagos").delete().eq("ruta_id",rutaId).eq("concepto","servicio").eq("estatus","pendiente");
-  if(a.error){toast(a.error.message);return}
-  const b=await sb.from("liquidaciones").delete().eq("ruta_id",rutaId);if(b.error){toast(b.error.message);return}
-  await cargaExtra();render();toast("Validación anulada")}
+  const modal=$("modal");modal.classList.remove("hide");
+  modal.innerHTML=`<div class="box"><h2 style="margin:0 0 8px">Anular validación</h2>
+    <p>Indica el motivo. El registro quedará guardado en el historial de anulaciones.</p>
+    <label for="anulacion-motivo">Motivo de anulación</label>
+    <textarea id="anulacion-motivo" rows="4" maxlength="2000" placeholder="Escribe el motivo"></textarea>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+      <button class="btn ghost" id="anulacion-cancelar">Cancelar</button>
+      <button class="btn" id="anulacion-confirmar">Confirmar anulación</button>
+    </div></div>`;
+  $("anulacion-cancelar").onclick=()=>modal.classList.add("hide");
+  $("anulacion-confirmar").onclick=async()=>{
+    const motivo=$("anulacion-motivo").value.trim();
+    if(!motivo){toast("Escribe el motivo de la anulación");$("anulacion-motivo").focus();return}
+    const boton=$("anulacion-confirmar");boton.disabled=true;
+    const {error}=await sb.rpc("anular_liquidacion",{p_ruta_id:String(rutaId),p_motivo:motivo});
+    if(error){toast(error.message);boton.disabled=false;return}
+    modal.classList.add("hide");await load();toast("Validación anulada y motivo guardado");
+  }}
 async function cargarTarifas(){if(TAR)return;const {data}=await sb.from("tarifas").select("id,cuenta,conc,ubicacion,ciudad,tipo_unidad,esquema,zona,variable,pago_base,tarifa_cliente,vigencia_desde,vigencia_hasta").order("ubicacion").order("tipo_unidad").order("esquema").order("zona");TAR=data||[]}
 function sugeridas(ru,todas){
   const cuenta=cuentaDe(ru.cedis.clientes.nombre),fecha=new Date(ru.checkin_at).toLocaleDateString("en-CA");
@@ -481,11 +672,6 @@ async function abrirValidar(id){
     <label>Tipo de ruta</label><select id="m-zona"><option value="">Todas</option><option value="LOCAL">Local</option><option value="1">Foránea 1</option><option value="2">Foránea 2</option><option value="3">Foránea 3</option><option value="4">Foránea 4</option></select>
     <label>Tarifa aplicable</label><select id="m-tar"></select>
     <div style="font-size:12px;color:var(--mut);margin-top:4px"><label style="display:inline;margin:0"><input type="checkbox" id="m-todas"> Ver todas las tarifas de la cuenta</label> <span id="m-nota-t" style="color:#946200"></span></div>
-    <label>Registro fiscal del proveedor ${p?`(${esc(p.nombre)})`:"(sin proveedor asignado)"}</label>
-    <select id="m-reg"><option value="">Elige…</option><option ${p&&p.tipo_registro==="FACTURA"?"selected":""}>FACTURA</option><option ${p&&p.tipo_registro==="SIN FACTURA"?"selected":""}>SIN FACTURA</option></select>
-    <label>Flotillero / proveedor de esta ruta</label>
-    <select id="m-prov"><option value="">${esc(p?p.nombre+" (el de la base)":"Sin proveedor")}</option>${PRV.filter(x=>!p||x.id!==p.id).map(x=>`<option value="${esc(x.id)}">${esc(x.nombre)}</option>`).join("")}</select>
-    <label id="m-pd-l" style="display:none;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="m-pd"> Cambiarlo también en el perfil del driver</label>
     <label style="display:flex;gap:8px;align-items:flex-start;color:var(--ink)"><input type="checkbox" id="m-ex" style="margin-top:2px"> No aplicar la penalización al pago del driver${esCoord()?"":" (requiere aprobación del coordinador; escribe el motivo en la nota)"}</label>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label>Ajuste al pago (+ o −)</label><input type="number" id="m-ap" value="0" step="0.01"></div><div><label>Ajuste al cobro (+ o −)</label><input type="number" id="m-ac" value="0" step="0.01"></div></div>
     <label>Nota (opcional)</label><textarea id="m-nota" rows="2"></textarea>
@@ -493,20 +679,25 @@ async function abrirValidar(id){
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button class="btn ghost" id="m-calc">Calcular</button><button class="btn" id="m-ok" disabled>Validar y generar pago</button><button class="btn ghost" id="m-x">Cancelar</button></div></div>`;
   pintar();
   $("m-todas").onchange=pintar;
-  $("m-zona").onchange=pintar;$("m-prov").onchange=()=>{$("m-pd-l").style.display=$("m-prov").value?"flex":"none"};
-  ["m-tar","m-reg","m-ex","m-ap","m-ac","m-prov","m-pd"].forEach(i=>$(i).addEventListener("input",reset));
+  $("m-zona").onchange=pintar;
+  ["m-tar","m-ex","m-ap","m-ac"].forEach(i=>$(i).addEventListener("input",reset));
   $("m-x").onclick=()=>m.classList.add("hide");
-  const args=()=>({p_ruta_id:id,p_tarifa_id:+$("m-tar").value,p_registro:$("m-reg").value,p_excepcion:$("m-ex").checked,p_ajuste_pago:+$("m-ap").value||0,p_ajuste_cobro:+$("m-ac").value||0});
-  const extra=()=>({p_proveedor_id:$("m-prov").value?+$("m-prov").value:null,p_actualizar_driver:$("m-pd").checked});
+  const args=()=>({p_ruta_id:id,p_tarifa_id:+$("m-tar").value,p_registro:p?.tipo_registro||"",p_excepcion:$("m-ex").checked,p_ajuste_pago:+$("m-ap").value||0,p_ajuste_cobro:+$("m-ac").value||0});
+  const extra=()=>({p_proveedor_id:p?.id||null,p_actualizar_driver:false});
   $("m-calc").onclick=async()=>{
+    if(!p||!p.tipo_registro){$("m-prev").innerHTML='<div class="errbox">Falta asignar flotillero y registro fiscal en la base de flota. No se puede validar hasta corregir esos datos.</div>';return}
     if(!$("m-tar").value){$("m-prev").innerHTML='<div class="errbox">Elige una tarifa.</div>';return}
     const r=await sb.rpc("calcular_liquidacion",args());
     if(r.error){$("m-prev").innerHTML=`<div class="errbox">${esc(r.error.message)}</div>`;$("m-ok").disabled=true;return}
     $("m-prev").innerHTML=tablaRes(r.data);$("m-ok").disabled=false};
   $("m-ok").onclick=async()=>{
+    if(!p||!p.tipo_registro){$("m-prev").innerHTML='<div class="errbox">Falta asignar flotillero y registro fiscal en la base de flota. No se puede validar hasta corregir esos datos.</div>';return}
     $("m-ok").disabled=true;
     const r=await sb.rpc("validar_ruta",{...args(),...extra(),p_nota:$("m-nota").value.trim()||null});
     if(r.error){$("m-prev").innerHTML+=`<div class="errbox">${esc(r.error.message)}</div>`;return}
-    m.classList.add("hide");await cargaExtra();render();toast(r.data===0?"Enviada al coordinador para aprobación":"Ruta validada y pago generado")};
+    let auditError=null;
+    if(r.data!==0){const audit=await registrarAuditoriaValidacion(id);auditError=audit.error}
+    m.classList.add("hide");await cargaExtra();render();
+    toast(r.data===0?"Enviada al coordinador para aprobación":auditError?"Ruta validada, pero no se registró el supervisor que la validó: "+auditError.message:"Ruta validada y pago generado")};
 }
 boot();
