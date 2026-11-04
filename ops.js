@@ -1,6 +1,6 @@
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);const $=id=>document.getElementById(id);
-let R=[],C=[],tab="r",photos={},LIQ={},DRV=[],PRV=[],TAR=null,ANU=[],ANUERR="",AUD={},AUDERR="",analyticsGrain="dia",financeGrain="dia";
+let R=[],C=[],tab="r",photos={},LIQ={},DRV=[],PRV=[],TAR=null,ANU=[],ANUERR="",AUD={},AUDERR="",DOCOPS=[],DOCOPSERR="",PNR_OPS=[],PNR_OPS_ERR="",analyticsGrain="dia",financeGrain="dia";
 const fd=m=>m==null?"—":(m<1000?m+" m":(m/1000).toFixed(1)+" km");
 const hh=s=>s?new Date(s).toTimeString().slice(0,5):"—";
 const dd=s=>new Date(s).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
@@ -25,7 +25,7 @@ $("abtn").onclick=async()=>{
   if(!dominioOk(email)){$("amsg").innerHTML='<div class="errbox">Solo personal de Chazki: usa tu correo @chazki.com.</div>';return}
   const r=await sb.auth.signInWithPassword({email,password});
   if(r.error){$("amsg").innerHTML='<div class="errbox">Correo o contraseña incorrectos.</div>';return}boot()};
-const TABS={master:"rvalbkcifpedtnxyz",ops:"rvalbkcifpdtnxyz",coordinador:"rvalbkcifpdtxyz",finanzas:"rlcpdxyz",ih:"rvabkcifdx"};
+const TABS={master:"rvalbkcifpedtnxyzgq",ops:"rvalbkcifpdtnxyzgq",coordinador:"rvalbkcifpdtxyzq",finanzas:"rlcpdxyzq",ih:"rvabkcifdx"};
 const puede=t=>(TABS[ROL]||"").includes(t);
 const veFin=()=>["master","ops","coordinador","finanzas"].includes(ROL);
 const cargaFin=()=>veFin()||ROL==="ih";
@@ -40,6 +40,8 @@ const NAV_INFO={
   c:["Cancelaciones","⊘","Revisa cancelaciones reportadas por los drivers."],
   i:["Incidencias","!","Consulta incidentes reportados durante las rutas."],
   f:["Fallidos por causa","↘","Analiza paquetes no entregados por motivo."],
+  g:["Documentos de drivers","▧","Importa documentos de Flota y autoriza actualizaciones."],
+  q:["PNR y penalizaciones","⚖","Registra reclamos, revisa evidencias y consulta descuentos."],
   x:["Indicadores del negocio","▥","Consulta indicadores operativos del periodo."],
   y:["Finanzas por cliente","$","Consulta ventas, pagos, utilidad y penalizaciones."],
   z:["Desempeño de flotilla","♙","Compara resultados de flotilleros y drivers."],
@@ -56,7 +58,7 @@ function seleccionarTab(b){
   const [title,,description]=NAV_INFO[tab]||["Operación","",""];
   $("page-title").textContent=title;
   $("page-description").textContent=description;
-  if(["l","x","y","z"].includes(tab)){load();return}
+  if(["l","x","y","z","g","q"].includes(tab)){load();return}
   render();
 }
 function aplicarRol(){
@@ -131,6 +133,8 @@ async function load(){
   await cargaEventos();await cargaExtra();
   if(tab==="l")await cargarAnulaciones();
   if(veFin()&&["x","y","z"].includes(tab))await cargarAuditorias();
+  if(esOps()&&tab==="g")await cargarDocumentosOps();
+  if(tab==="q")await cargarPnrsOps();
   render();
 }
 async function cargarAnulaciones(){
@@ -150,20 +154,82 @@ async function cargarAuditorias(){
     for(const row of data)if(!AUD[String(row.ruta_id)])AUD[String(row.ruta_id)]=row;
   }catch(error){AUDERR=error.message||String(error)}
 }
+async function cargarPnrsOps(){
+  PNR_OPS=[];PNR_OPS_ERR="";
+  try{
+    PNR_OPS=await fetchPaged(()=>sb.from("pnr_reclamos")
+      .select("*,drivers(nombre,codigo),pnr_reclamo_eventos(*),pnr_descuentos(*)")
+      .order("creado_en",{ascending:false}).limit(1000));
+    const paths=PNR_OPS.flatMap(x=>(x.pnr_reclamo_eventos||[]).flatMap(e=>e.adjuntos||[]));
+    if(paths.length){
+      const {data,error}=await sb.storage.from("pnr-evidence").createSignedUrls(paths,3600);
+      if(error)throw error;
+      const urls=Object.fromEntries((data||[]).filter(x=>x.signedUrl).map(x=>[x.path,x.signedUrl]));
+      PNR_OPS=PNR_OPS.map(x=>({...x,pnr_reclamo_eventos:(x.pnr_reclamo_eventos||[]).map(e=>({...e,urls:(e.adjuntos||[]).map(path=>({path,url:urls[path]})).filter(x=>x.url)}))}));
+    }
+  }catch(error){PNR_OPS_ERR=error.message||String(error)}
+}
+const PNR_OPS_STATE={
+  esperando_driver:["Pendiente de respuesta del driver","w"],
+  revision:["En revisión","w"],
+  esperando_soporte:["Soporte adicional solicitado","bad"],
+  cerrada_sin_cargo:["Cerrado · sin descuento","ok"],
+  cerrada_con_cargo:["Cerrado · con descuento","bad"]
+};
+const pnrOpsDate=value=>value?new Date(value).toLocaleString("es-MX",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
+const pnrOpsMoney=value=>fm(Number(value||0));
+function vistaPnrsOps(){
+  const puedeResolver=["master","ops","coordinador"].includes(ROL);
+  const drivers=DRV.filter(d=>d.rol==="driver");
+  const form=puedeResolver?`<h3 style="margin:12px 8px 0">Registrar reclamo</h3>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;padding:8px">
+      <label>PNR<input id="pnr-new-ref" maxlength="120" placeholder="Número de reclamo"></label>
+      <label>Driver<select id="pnr-new-driver"><option value="">Selecciona un driver…</option>${drivers.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)} · ${esc(d.codigo||"")}</option>`).join("")}</select></label>
+      <label>Cliente<input id="pnr-new-client" maxlength="200" placeholder="Nombre del cliente"></label>
+      <label>Ruta (opcional)<input id="pnr-new-route" maxlength="120" placeholder="ID o número de ruta"></label>
+      <label>Importe del reclamo ($)<input id="pnr-new-amount" type="number" min="0.01" step="0.01"></label>
+    </div>
+    <label style="padding:0 8px">Detalles del reclamo<textarea id="pnr-new-detail" rows="3" maxlength="5000" placeholder="Describe la entrega no reconocida y la información relevante"></textarea></label>
+    <label style="padding:0 8px">Imágenes del reclamo (máximo 5)<input id="pnr-new-files" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
+    <div id="pnr-new-error" style="padding:0 8px"></div><div style="padding:0 8px"><button class="btn" id="pnr-new-save">Crear PNR y notificar al driver</button></div>`
+    :'<div class="note">Acceso de consulta. La captura y resolución de reclamos corresponde a Operaciones.</div>';
+  const rows=PNR_OPS.map(claim=>{
+    const [label,style]=PNR_OPS_STATE[claim.estado]||["Estatus desconocido","w"];
+    const events=(claim.pnr_reclamo_eventos||[]).slice().sort((a,b)=>new Date(a.creado_en)-new Date(b.creado_en));
+    const discount=(claim.pnr_descuentos||[])[0];
+    let actions="";
+    if(puedeResolver&&claim.estado==="revision"){
+      actions=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn sm" data-pnr-action="aceptar" data-pnr-id="${esc(claim.id)}">Aceptar evidencia</button>${claim.intentos===1?`<button class="btn ghost sm" data-pnr-action="solicitar_soporte" data-pnr-id="${esc(claim.id)}">Solicitar más soporte</button>`:`<button class="btn bad sm" data-pnr-action="rechazar" data-pnr-id="${esc(claim.id)}">Cerrar y descontar</button>`}</div>`;
+    }
+    return `<article class="card" style="border:1px solid var(--line);box-shadow:none">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><b>PNR ${esc(claim.pnr)} · ${esc(claim.drivers?.nombre||claim.driver_id)}</b><span class="pill ${style}">${esc(label)}</span></div>
+      <div class="note">Cliente: <b>${esc(claim.cliente)}</b>${claim.ruta_id?` · Ruta: ${esc(claim.ruta_id)}`:""} · Importe: <b>${esc(pnrOpsMoney(claim.monto))}</b><br>Creado: ${esc(pnrOpsDate(claim.creado_en))}${claim.vence_en?` · Respuesta vence: <b>${esc(pnrOpsDate(claim.vence_en))}</b>`:""}</div>
+      ${discount?`<div class="item"><span>Descuento acumulado</span><b>${esc(pnrOpsMoney(discount.monto_aplicado))} aplicado · ${esc(pnrOpsMoney(discount.saldo_pendiente))} por aplicar a liquidaciones</b></div>`:""}
+      <details><summary style="cursor:pointer;font-weight:700">Ver información y línea del tiempo (${events.length} movimientos)</summary>
+      <div style="white-space:pre-wrap;margin:10px 0">${esc(claim.detalle)}</div>
+      ${events.map(event=>`<div class="item" style="display:block"><b>${esc(pnrEventLabelOps(event.tipo))}</b><small style="display:block">${esc(pnrOpsDate(event.creado_en))}${event.actor_email?" · "+esc(event.actor_email):""}</small>${event.mensaje?`<div style="white-space:pre-wrap;margin-top:5px">${esc(event.mensaje)}</div>`:""}${(event.urls||[]).length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${event.urls.map((file,i)=>`<a href="${esc(file.url)}" target="_blank" rel="noopener">Imagen ${i+1}</a>`).join("")}</div>`:""}</div>`).join("")||'<div class="note">Sin movimientos.</div>'}</details>${actions}
+    </article>`;
+  }).join("");
+  return `${PNR_OPS_ERR?`<div class="errbox">No se pudieron cargar los PNR. Ejecuta el SQL de configuración en Supabase y verifica el acceso. ${esc(PNR_OPS_ERR)}</div>`:""}
+    ${form}<h3 style="margin:16px 8px 0">PNR registrados (${PNR_OPS.length})</h3>${rows||'<div class="note">Todavía no hay reclamos.</div>'}`;
+}
+function pnrEventLabelOps(type){
+  return ({creado:"Reclamo generado",respuesta_driver:"Primera respuesta del driver",solicitud_soporte:"Se solicitó soporte adicional",evidencia_adicional:"Soporte adicional recibido",evidencia_aceptada:"Evidencia aceptada · caso cerrado",evidencia_rechazada:"Evidencia insuficiente · descuento aplicado",vencido:"Plazo vencido · descuento aplicado",descuento_aplicado:"Descuento aplicado a liquidación"})[type]||type;
+}
 function render(){
   const cer=R.filter(x=>x.estado==="cerrada"),asg=R.reduce((s,x)=>s+x.paquetes_asignados,0),ent=cer.reduce((s,x)=>s+x.entregados,0),fal=cer.reduce((s,x)=>s+x.fallidos,0);
   const incs=R.reduce((s,x)=>s+x.ruta_incidencias.length,0);
   $("kpis").innerHTML=[["Rutas",R.length],["En ruta",R.filter(x=>x.estado==="en_ruta").length],["Paquetes asignados",asg],["Entregados",ent],["Fallidos",fal],["Efectividad",(ent+fal)?Math.round(ent/(ent+fal)*100)+"%":"—"],["Cancelaciones",C.length],["Canc. a revisar",C.filter(x=>x.ubicacion_validada==="fuera"||x.ubicacion_validada==="sin_ubicacion").length],["Incidencias",incs]].concat(veFin()?[["Por validar",porValidar().length],["Pago validado",fm(sumLiq("pago_driver"))]]:[]).map(([k,v])=>`<div class="kpi"><small>${k}</small><b>${v}</b></div>`).join("");
   let h="";
-  if(tab==="r")h=`<table><tr><th>Fecha</th><th>Driver</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Zonas</th><th>Llegada</th><th>Asig.</th><th>Entreg.</th><th>Fall.</th><th>Manif.</th><th>Estado</th></tr>`+
-    (R.map(x=>`<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}<br><small>${esc(x.drivers.codigo||"")}</small></td><td><b>${esc(x.cedis.clientes.nombre)}</b>${x.drivers.cliente_default_id&&x.drivers.cliente_default_id!==x.cedis.cliente_id?` <span class="pill w">Otra cuenta</span>`:""}<br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta)}</td><td>${esc(x.zonas.join(", "))}</td><td>${hh(x.hora_llegada_cedis)}</td><td>${esc(x.paquetes_asignados)}</td><td>${esc(x.entregados??"—")}</td><td>${esc(x.fallidos??"—")}</td><td>${x.ruta_manifiestos&&x.ruta_manifiestos.length?`<button class="btn ghost sm" data-mf="${esc(x.id)}">📎 ${esc(x.ruta_manifiestos.length)}</button>`:(x.tipo_unidad==="3.5T"?'<span class="pill bad">Sin fotos</span>':"—")}</td><td><span class="pill ${x.estado==="cerrada"?"ok":"w"}">${x.estado==="cerrada"?"Cerrada "+hh(x.checkout_at):"En ruta"}</span></td></tr>`).join("")||`<tr><td colspan="11">Sin rutas en este periodo.</td></tr>`)+`</table>`;
+  if(tab==="r")h=`<table><tr><th>Fecha</th><th>Driver</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Zonas</th><th>Llegada</th><th>Auxiliar</th><th>Asig.</th><th>Entreg.</th><th>Fall.</th><th>Manif.</th><th>Estado</th></tr>`+
+    (R.map(x=>`<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}<br><small>${esc(x.drivers.codigo||"")}</small></td><td><b>${esc(x.cedis.clientes.nombre)}</b>${x.drivers.cliente_default_id&&x.drivers.cliente_default_id!==x.cedis.cliente_id?` <span class="pill w">Otra cuenta</span>`:""}<br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta)}</td><td>${esc(x.zonas.join(", "))}</td><td>${hh(x.hora_llegada_cedis)}</td><td>${x.auxiliar_requerido?`<span class="pill ${x.viaja_con_auxiliar?"ok":"w"}">${x.viaja_con_auxiliar?"Con auxiliar":"Solo"}</span>`:"No aplica"}</td><td>${esc(x.paquetes_asignados)}</td><td>${esc(x.entregados??"—")}</td><td>${esc(x.fallidos??"—")}</td><td>${x.ruta_manifiestos&&x.ruta_manifiestos.length?`<button class="btn ghost sm" data-mf="${esc(x.id)}">📎 ${esc(x.ruta_manifiestos.length)}</button>`:(x.tipo_unidad==="3.5T"?'<span class="pill bad">Sin fotos</span>':"—")}</td><td><span class="pill ${x.estado==="cerrada"?"ok":"w"}">${x.estado==="cerrada"?"Cerrada "+hh(x.checkout_at):"En ruta"}</span></td></tr>`).join("")||`<tr><td colspan="12">Sin rutas en este periodo.</td></tr>`)+`</table>`;
   if(tab==="c")h=`<table><tr><th>Fecha y hora</th><th>Driver</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Pin</th><th>Validación de ubicación</th><th>Evidencia</th><th>Estatus</th></tr>`+
     (C.map(x=>`<tr><td>${dd(x.capturado_at)} ${hh(x.capturado_at)}</td><td>${esc(x.drivers.nombre)}</td><td><b>${esc(x.cedis.clientes.nombre)}</b><br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta||"—")}</td><td>${x.lat==null?"—":`<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${esc(x.lat)},${esc(x.lng)}">${x.lat.toFixed(4)}, ${x.lng.toFixed(4)}</a>`}</td><td>${x.ubicacion_validada==="dentro"?`<span class="pill ok">Dentro · ${fd(x.distancia_cedis_m)}</span>`:x.ubicacion_validada==="fuera"?`<span class="pill bad">Fuera · ${fd(x.distancia_cedis_m)}</span>`:x.ubicacion_validada==="sin_ubicacion"?'<span class="pill bad">Sin ubicación del driver</span>':'<span class="pill w">CEDIS sin coordenadas</span>'}</td><td>${photos[x.foto_path]?`<img class="th" src="${photos[x.foto_path]}" data-u="${photos[x.foto_path]}">`:"—"}</td><td>${estCan(x)}</td></tr>`).join("")||`<tr><td colspan="8">Sin cancelaciones en este periodo.</td></tr>`)+`</table>`;
   if(tab==="i"){const rows=R.flatMap(x=>x.ruta_incidencias.map(i=>({x,i})));h=`<table><tr><th>Fecha</th><th>Driver</th><th>Cliente · CEDIS</th><th>Incidencia</th><th>Comentario</th></tr>`+
     (rows.map(({x,i})=>`<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${esc(x.cedis.clientes.nombre)} · ${esc(x.cedis.nombre)}</td><td><span class="pill bad">${esc(i.tipos_incidencia.nombre)}</span></td><td>${esc(i.comentario||"—")}</td></tr>`).join("")||`<tr><td colspan="5">Sin incidencias en este periodo.</td></tr>`)+`</table>`}
   if(tab==="f"){const m={};R.forEach(x=>x.ruta_fallos.forEach(f=>{m[f.causas_fallo.nombre]=(m[f.causas_fallo.nombre]||0)+f.cantidad}));const e=Object.entries(m).sort((a,b)=>b[1]-a[1]);
   h=`<table><tr><th>Causa</th><th>Paquetes</th></tr>`+(e.map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")||`<tr><td colspan="2">Sin fallidos en este periodo.</td></tr>`)+`</table>`}
-  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();if(tab==="t")h=vistaTarifario();if(tab==="x")h=vistaIndicadores();if(tab==="y")h=vistaFinanzas();if(tab==="z")h=vistaDesempeno();
+  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();if(tab==="t")h=vistaTarifario();if(tab==="x")h=vistaIndicadores();if(tab==="y")h=vistaFinanzas();if(tab==="z")h=vistaDesempeno();if(tab==="g")h=vistaDocumentosOps();if(tab==="q")h=vistaPnrsOps();
   $("view").innerHTML=h;enlazar();
   document.querySelectorAll("img.th").forEach(i=>i.onclick=()=>{$("lbimg").src=i.dataset.u;$("lb").classList.remove("hide")});
 }
@@ -197,6 +263,57 @@ async function cargarLiquidaciones(ids){
   }
   return rows;
 }
+async function cargarDocumentosOps(){
+  DOCOPS=[];DOCOPSERR="";
+  try{DOCOPS=await fetchPaged(()=>sb.from("driver_documents").select("*,drivers(nombre,codigo,rol)").order("creado_en",{ascending:false}))}
+  catch(error){DOCOPSERR=error.message||String(error);return}
+  const paths=DOCOPS.map(x=>x.storage_path).filter(Boolean);
+  if(paths.length){
+    const {data:urls,error:urlError}=await sb.storage.from("driver-documents").createSignedUrls(paths,3600);
+    if(urlError){DOCOPSERR="No se pudieron abrir los archivos: "+urlError.message;return}
+    DOCOPS=DOCOPS.map(x=>({...x,url:(urls||[]).find(y=>y.path===x.storage_path)?.signedUrl||null}));
+  }
+}
+const DOC_OPS_TIPOS=[["seguro","Seguro del vehículo"],["licencia","Licencia de conducir"],["tarjeta","Tarjeta de circulación"],["ine","INE"]];
+function vistaDocumentosOps(){
+  if(!esOps())return '<div class="errbox">Solo Operaciones puede importar o autorizar documentos.</div>';
+  const drivers=DRV.filter(d=>d.rol==="driver");
+  const all=DOCOPS.map(d=>`<tr><td>${esc(d.drivers?.nombre||d.driver_id)}<br><small>${esc(d.drivers?.codigo||"")}</small></td><td>${esc(DOC_OPS_TIPOS.find(x=>x[0]===d.tipo)?.[1]||d.tipo)}</td><td>${esc(d.origen==="flota"?"Importado de Flota":"Driver")}</td><td>${new Date(`${d.vigencia}T00:00:00`).toLocaleDateString("es-MX")}</td><td><span class="pill ${d.estado==="aprobado"?"ok":d.estado==="pendiente"?"w":d.estado==="rechazado"?"bad":"w"}">${esc(d.estado)}</span>${d.nota?`<br><small>${esc(d.nota)}</small>`:""}</td><td>${d.url?`<a href="${esc(d.url)}" target="_blank" rel="noopener">Ver archivo</a>`:"—"}${d.estado==="pendiente"?`<br><button class="btn sm" data-doc-approve="${esc(d.id)}">Aprobar</button> <button class="btn ghost sm" data-doc-reject="${esc(d.id)}">Rechazar</button>`:""}</td></tr>`).join("");
+  return `<h3 style="margin:12px 8px 0">Importar documentos existentes de Flota</h3>
+    <div class="note">Las carpetas de Drive son privadas y no se leen directamente. Para la carga inicial, selecciona el archivo descargado de la carpeta de la agencia, indica su vigencia y guárdalo en el expediente privado del driver.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;padding:8px">
+      <label>Driver<select id="doc-flota-driver"><option value="">Selecciona un driver…</option>${drivers.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)} · ${esc(d.codigo||"")}</option>`).join("")}</select></label>
+      <label>Documento<select id="doc-flota-type">${DOC_OPS_TIPOS.map(([k,n])=>`<option value="${k}">${n}</option>`).join("")}</select></label>
+      <label>Vigencia<input id="doc-flota-date" type="date"></label>
+      <label>Archivo de Flota<input id="doc-flota-file" type="file" accept="image/jpeg,image/png,image/webp,application/pdf"></label>
+    </div><div id="doc-flota-error" style="padding:0 8px"></div><div style="padding:0 8px"><button class="btn" id="doc-flota-save">Importar documento aprobado</button></div>
+    <h3 style="margin:16px 8px 0">Solicitudes y documentos (${DOCOPS.length})</h3>${DOCOPSERR?`<div class="errbox">${esc(DOCOPSERR)}</div>`:""}
+    <table><tr><th>Driver</th><th>Documento</th><th>Origen</th><th>Vigencia</th><th>Estado</th><th>Archivo / autorización</th></tr>${all||'<tr><td colspan="6">Sin documentos registrados.</td></tr>'}</table>`;
+}
+async function importarDocumentoFlota(){
+  const errorBox=$("doc-flota-error"),button=$("doc-flota-save"),driverId=$("doc-flota-driver").value,tipo=$("doc-flota-type").value,vigencia=$("doc-flota-date").value,file=$("doc-flota-file").files[0];
+  errorBox.innerHTML="";
+  if(!driverId||!vigencia||!file){errorBox.innerHTML='<div class="errbox">Selecciona driver, vigencia y archivo.</div>';return}
+  if(file.size>10*1024*1024||!(file.type==="application/pdf"||["image/jpeg","image/png","image/webp"].includes(file.type))){errorBox.innerHTML='<div class="errbox">Usa un PDF o imagen JPEG, PNG o WebP de máximo 10 MB.</div>';return}
+  button.disabled=true;
+  const ext=(file.name.split(".").pop()||"bin").toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,8)||"bin";
+  const storagePath=`${driverId}/${tipo}/${crypto.randomUUID()}.${ext}`;
+  const {error:uploadError}=await sb.storage.from("driver-documents").upload(storagePath,file,{contentType:file.type,upsert:false});
+  if(uploadError){button.disabled=false;errorBox.innerHTML=`<div class="errbox">${esc(uploadError.message)}</div>`;return}
+  const {error}=await sb.rpc("registrar_documento_flota",{p_driver_id:driverId,p_tipo:tipo,p_storage_path:storagePath,p_vigencia:vigencia});
+  if(error){
+    const removed=await sb.storage.from("driver-documents").remove([storagePath]);
+    button.disabled=false;errorBox.innerHTML=`<div class="errbox">${esc(error.message)}${removed.error?` · No se pudo limpiar el archivo temporal: ${esc(removed.error.message)}`:""}</div>`;return;
+  }
+  await cargarDocumentosOps();render();toast("Documento de Flota importado");
+}
+async function resolverDocumento(id,aprobar){
+  let nota=null;
+  if(!aprobar){nota=prompt("Motivo del rechazo (opcional):");if(nota===null)return}
+  const {error}=await sb.rpc("resolver_documento_driver",{p_id:id,p_aprobar:aprobar,p_nota:nota});
+  if(error){toast(error.message);return}
+  await cargarDocumentosOps();render();toast(aprobar?"Documento aprobado":"Documento rechazado");
+}
 function vistaPorValidar(){const l=porValidar();
   return `<table><tr><th>Fecha</th><th>Driver</th><th>Proveedor</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Asig.</th><th>Entreg.</th><th>Efectiv.</th><th></th></tr>`+
   (l.map(x=>{const p=provDe(x.driver_id);return `<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${p?esc(p.nombre)+`<br><small>${esc(p.tipo_registro||"sin registro fiscal")}</small>`:'<span class="pill w">Sin proveedor</span>'}</td><td><b>${esc(x.cedis.clientes.nombre)}</b><br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta)}</td><td>${esc(x.paquetes_asignados)}</td><td>${esc(x.entregados)}</td><td>${pc(x.entregados/x.paquetes_asignados)}</td><td><button class="btn ghost sm" data-det="${esc(x.id)}">Detalle</button> <button class="btn sm" data-val="${esc(x.id)}">Validar</button></td></tr>`}).join("")||`<tr><td colspan="9">No hay rutas por validar en este periodo (solo MELI, Coppel y Liverpool tienen tarifario cargado).</td></tr>`)+`</table>`}
@@ -224,6 +341,13 @@ async function verDetalleRuta(id){
     const fotoError=fotos.find(x=>x.error);
     if(fotoError){toast("No se pudo abrir una foto del manifiesto: "+fotoError.error);return}
   }
+  const auxPaths=[ru.evidencia_auxiliar_checkin_path,ru.evidencia_auxiliar_checkout_path].filter(Boolean);
+  let auxFotos={};
+  if(auxPaths.length){
+    const {data,error}=await sb.storage.from("ruta-auxiliares").createSignedUrls(auxPaths,3600);
+    if(error){toast("No se pudieron cargar las fotos del auxiliar: "+error.message);return}
+    auxFotos=Object.fromEntries((data||[]).filter(x=>x.signedUrl).map(x=>[x.path,x.signedUrl]));
+  }
   const fecha=x=>x?new Date(x).toLocaleString("es-MX",{dateStyle:"medium",timeStyle:"short"}):"—";
   const fila=(label,value)=>`<div style="display:flex;justify-content:space-between;gap:14px;padding:7px 0;border-bottom:1px solid var(--line)"><span style="color:var(--mut)">${label}</span><b style="text-align:right">${value==null||value===""?"—":value}</b></div>`;
   const fallos=(ru.ruta_fallos||[]).map(x=>fila(esc(x.causas_fallo?.nombre||"Causa sin nombre"),esc(x.cantidad))).join("")||'<div style="color:var(--mut)">Sin paquetes fallidos registrados.</div>';
@@ -240,6 +364,10 @@ async function verDetalleRuta(id){
     ${fila("Hora de llegada al CEDIS",ru.hora_llegada_cedis?hh(ru.hora_llegada_cedis):"—")}
     ${fila("Zonas",esc((ru.zonas||[]).join(", ")))}
     ${fila("Tipo de unidad",esc(ru.tipo_unidad))}
+    ${fila("Modalidad de ruta",ru.auxiliar_requerido?(ru.viaja_con_auxiliar?"Con auxiliar":"La hace solo"):"No aplica")}
+    ${ru.auxiliar_requerido?`<h3>Evidencia del auxiliar</h3><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px">${[
+      ["Check-in",ru.evidencia_auxiliar_checkin_path],["Check-out",ru.evidencia_auxiliar_checkout_path]
+    ].map(([label,path])=>auxFotos[path]?`<a href="${esc(auxFotos[path])}" target="_blank" rel="noopener"><img src="${esc(auxFotos[path])}" alt="Evidencia auxiliar ${label}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px"><small>${label}</small></a>`:`<div><small>${label}: sin foto disponible</small></div>`).join("")}</div>`:""}
     ${fila("Paquetes asignados",esc(ru.paquetes_asignados))}
     ${fila("Entregados",esc(ru.entregados))}
     ${fila("Fallidos",esc(ru.fallidos))}
@@ -595,6 +723,11 @@ function vistaProveedores(){
 function enlazar(){
   const ap=$("analytics-period");if(ap)ap.onchange=()=>{analyticsGrain=ap.value;render()};
   const fp=$("finance-period");if(fp)fp.onchange=()=>{financeGrain=fp.value;render()};
+  const importDoc=$("doc-flota-save");if(importDoc)importDoc.onclick=importarDocumentoFlota;
+  const pnrSave=$("pnr-new-save");if(pnrSave)pnrSave.onclick=crearPnROps;
+  document.querySelectorAll("[data-pnr-action]").forEach(b=>b.onclick=()=>resolverPnROps(b.dataset.pnrId,b.dataset.pnrAction));
+  document.querySelectorAll("[data-doc-approve]").forEach(b=>b.onclick=()=>resolverDocumento(b.dataset.docApprove,true));
+  document.querySelectorAll("[data-doc-reject]").forEach(b=>b.onclick=()=>resolverDocumento(b.dataset.docReject,false));
   document.querySelectorAll("[data-det]").forEach(b=>b.onclick=()=>verDetalleRuta(b.dataset.det));
   document.querySelectorAll("[data-val]").forEach(b=>b.onclick=()=>abrirValidar(+b.dataset.val));
   document.querySelectorAll("[data-anu]").forEach(b=>b.onclick=()=>anular(+b.dataset.anu));
@@ -607,6 +740,45 @@ function enlazar(){
    $("tf-q").onchange=e=>{TFL.q=e.target.value;render()};const n=$("tf-n");if(n)n.onclick=()=>formTarifa(null)}
   document.querySelectorAll("[data-te]").forEach(b=>b.onclick=()=>formTarifa(+b.dataset.te));
   document.querySelectorAll("[data-dl]").forEach(b=>b.onclick=()=>descargar(b.dataset.dl,b));document.querySelectorAll("[data-mf]").forEach(b=>b.onclick=()=>verManif(+b.dataset.mf));const eo=$("eq-ok");if(eo)eo.onclick=asignarRol;
+}
+async function crearPnROps(){
+  const button=$("pnr-new-save"),errorBox=$("pnr-new-error");
+  const pnr=$("pnr-new-ref").value.trim(),driverId=$("pnr-new-driver").value,cliente=$("pnr-new-client").value.trim();
+  const ruta=$("pnr-new-route").value.trim(),detalle=$("pnr-new-detail").value.trim(),monto=Number($("pnr-new-amount").value);
+  const files=[...$("pnr-new-files").files];
+  errorBox.innerHTML="";
+  if(!pnr||!driverId||!cliente||!detalle||!Number.isFinite(monto)||monto<=0){errorBox.innerHTML='<div class="errbox">Completa PNR, driver, cliente, detalle e importe válido.</div>';return}
+  if(files.length>5||files.some(file=>file.size>10*1024*1024||!["image/jpeg","image/png","image/webp"].includes(file.type))){errorBox.innerHTML='<div class="errbox">Adjunta hasta 5 imágenes JPEG, PNG o WebP de máximo 10 MB cada una.</div>';return}
+  button.disabled=true;const paths=[];let created=false;
+  try{
+    const {data:{user},error:userError}=await sb.auth.getUser();if(userError)throw userError;
+    if(!user)throw new Error("Tu sesión expiró. Vuelve a iniciar sesión.");
+    for(const file of files){
+      const ext=file.type==="image/jpeg"?"jpg":file.type==="image/png"?"png":"webp";
+      const path=`${user.id}/${crypto.randomUUID()}.${ext}`;
+      const {error}=await sb.storage.from("pnr-evidence").upload(path,file,{contentType:file.type,upsert:false});
+      if(error)throw error;paths.push(path);
+    }
+    const {error}=await sb.rpc("crear_reclamo_pnr",{p_pnr:pnr,p_driver_id:driverId,p_cliente:cliente,p_ruta_id:ruta||null,p_detalle:detalle,p_monto:monto,p_adjuntos:paths});
+    if(error)throw error;
+    created=true;
+    await load();toast("PNR creado; el plazo de 24 horas comenzó");
+  }catch(error){
+    let cleanupError=null;
+    if(!created&&paths.length){const result=await sb.storage.from("pnr-evidence").remove(paths);cleanupError=result.error}
+    errorBox.innerHTML=`<div class="errbox">${created?"El PNR quedó creado, pero no se pudo actualizar la vista: ":""}${esc(error.message||error)}${cleanupError?` · No se pudieron limpiar archivos temporales: ${esc(cleanupError.message)}`:""}</div>`;
+    button.disabled=false;
+  }
+}
+async function resolverPnROps(id,accion){
+  const promptText=accion==="solicitar_soporte"?"Indica qué evidencia adicional necesita el driver:":accion==="rechazar"?"Describe por qué la segunda evidencia es insuficiente:":"Nota de resolución (opcional):";
+  const mensaje=prompt(promptText);
+  if(mensaje===null)return;
+  if(accion!=="aceptar"&&!mensaje.trim()){toast("Escribe una nota para continuar");return}
+  const {error}=await sb.rpc("resolver_reclamo_pnr",{p_reclamo_id:id,p_accion:accion,p_mensaje:mensaje.trim()||null});
+  if(error){toast(error.message);return}
+  await load();
+  toast(accion==="aceptar"?"Evidencia aceptada; reclamo cerrado":accion==="solicitar_soporte"?"Solicitud de soporte enviada; nuevo plazo de 24 horas":"Reclamo cerrado y descuento programado para las próximas liquidaciones");
 }
 async function guardarDriver(id){const rol=document.querySelector(`[data-rol="${id}"]`).value,pv=document.querySelector(`[data-prov="${id}"]`).value;
   const {error}=await sb.from("drivers").update({rol,proveedor_id:pv?+pv:null}).eq("id",id);

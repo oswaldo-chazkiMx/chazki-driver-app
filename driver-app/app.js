@@ -1,0 +1,951 @@
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);
+const $=id=>document.getElementById(id);
+const LOCAL_DB="chazki-driver-offline";
+let OFFLINE_MODE=!navigator.onLine, syncBusy=false, syncCancelBusy=false;
+function openLocalDb(){
+  return new Promise((resolve,reject)=>{
+    if(!("indexedDB" in window)){reject(new Error("Este dispositivo no permite guardar registros sin conexión."));return}
+    const request=indexedDB.open(LOCAL_DB,2);
+    request.onupgradeneeded=()=>{const db=request.result;if(!db.objectStoreNames.contains("cache"))db.createObjectStore("cache",{keyPath:"key"});if(!db.objectStoreNames.contains("routes"))db.createObjectStore("routes",{keyPath:"key"});if(!db.objectStoreNames.contains("cancellations"))db.createObjectStore("cancellations",{keyPath:"key"})};
+    request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error||new Error("No se pudo abrir el almacenamiento local."));
+  });
+}
+async function localGet(store,key){
+  const db=await openLocalDb();
+  return new Promise((resolve,reject)=>{const tx=db.transaction(store,"readonly"),request=tx.objectStore(store).get(key);request.onsuccess=()=>resolve(request.result||null);request.onerror=()=>reject(request.error||new Error("No se pudo leer el almacenamiento local."));tx.oncomplete=()=>db.close();tx.onerror=()=>{db.close();reject(tx.error||new Error("No se pudo leer el almacenamiento local."))}});
+}
+async function localPut(store,value){
+  const db=await openLocalDb();
+  return new Promise((resolve,reject)=>{const tx=db.transaction(store,"readwrite");tx.objectStore(store).put(value);tx.oncomplete=()=>{db.close();resolve()};tx.onerror=()=>{db.close();reject(tx.error||new Error("No se pudo guardar en el dispositivo."))};tx.onabort=()=>{db.close();reject(tx.error||new Error("No se pudo guardar en el dispositivo."))}});
+}
+async function localDelete(store,key){
+  const db=await openLocalDb();
+  return new Promise((resolve,reject)=>{const tx=db.transaction(store,"readwrite");tx.objectStore(store).delete(key);tx.oncomplete=()=>{db.close();resolve()};tx.onerror=()=>{db.close();reject(tx.error||new Error("No se pudo actualizar el almacenamiento local."))}});
+}
+async function localGetAll(store){
+  const db=await openLocalDb();
+  return new Promise((resolve,reject)=>{const tx=db.transaction(store,"readonly"),request=tx.objectStore(store).getAll();request.onsuccess=()=>resolve(request.result||[]);request.onerror=()=>reject(request.error||new Error("No se pudieron leer los registros pendientes."));tx.oncomplete=()=>db.close();tx.onerror=()=>{db.close();reject(tx.error||new Error("No se pudieron leer los registros pendientes."))}});
+}
+const routeLocalKey=()=>`route:${ME.id}`;
+const networkError=e=>!navigator.onLine||e instanceof TypeError||/network|fetch|offline|connection|socket/i.test(String(e&&(e.message||e)));
+function setNetStatus(message,offline=OFFLINE_MODE){
+  const el=$("net-status");if(!el)return;
+  el.textContent=message||"";el.classList.toggle("offline",offline);el.classList.toggle("hide",!message);
+}
+function setThemeByHour(){
+  const hour=new Date().getHours(),night=hour<6||hour>=18;
+  document.body.dataset.theme=night?"night":"day";
+  const meta=document.querySelector('meta[name="theme-color"]');if(meta)meta.content=night?"#111827":"#4b2fd0";
+}
+setThemeByHour();setInterval(setThemeByHour,60000);
+const fmt=n=>"$"+Number(n).toLocaleString("es-MX",{maximumFractionDigits:0});
+const err=(el,e)=>{$(el).innerHTML=e?`<div class="errbox">${esc((e.message||e))}</div>`:""};
+function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),2600)}
+$("hdate").textContent=new Date().toLocaleDateString("es-MX",{weekday:"long",day:"numeric",month:"long"});
+const VTIPOS=[["🛵","Moto"],["🚗","Sedan"],["🚙","Small"],["🚐","Large"],["🚚","Pickup"],["🚛","Van"]];
+
+let ME=null,DRIVER=null,VEHICULO=null,CLI=[],CAUSAS=[],INCID=[],vt=null,ACC={puede_ver_ganancias:true,es_flotillero:false};
+const S={stage:0,zonas:[],route:null,fallos:{},inc:null,incSel:new Set()};
+
+// ---------- Autenticación ----------
+let signup=false;
+function authMode(s){signup=s;$("agroup-nombre").classList.toggle("hide",!s);$("abtn").textContent=s?"Crear cuenta":"Entrar";
+  $("aswitch").textContent=s?"Ya tengo cuenta":"Crear cuenta nueva";$("amode-sub").textContent=s?"Crea tu cuenta de driver":"Inicia sesión con tu correo";
+  $("apass").autocomplete=s?"new-password":"current-password";$("amsg").innerHTML=""}
+$("aswitch").onclick=()=>authMode(!signup);
+$("abtn").onclick=async()=>{
+  const email=$("aemail").value.trim(),password=$("apass").value;
+  if(!email||password.length<8){$("amsg").innerHTML='<div class="errbox">Escribe tu correo y una contraseña de al menos 8 caracteres.</div>';return}
+  $("abtn").disabled=true;$("amsg").innerHTML="";
+  let r;
+  if(signup){const nombre=$("anombre").value.trim();if(!nombre){$("abtn").disabled=false;$("amsg").innerHTML='<div class="errbox">Escribe tu nombre completo.</div>';return}
+    r=await sb.auth.signUp({email,password,options:{data:{nombre}}});
+    if(!r.error&&!r.data.session){$("abtn").disabled=false;$("amsg").innerHTML='<div class="okbox">Cuenta creada. Revisa tu correo y confirma tu cuenta; después inicia sesión.</div>';authMode(false);return}
+  }else r=await sb.auth.signInWithPassword({email,password});
+  $("abtn").disabled=false;
+  if(r.error){$("amsg").innerHTML=`<div class="errbox">${esc(r.error.message==="Invalid login credentials"?"Correo o contraseña incorrectos.":/Database error saving new user/i.test(r.error.message)?"Tu correo no está en la base de fleet de Chazki. Pide a tu supervisor que te dé de alta y vuelve a intentarlo.":r.error.message)}</div>`;return}
+  boot();
+};
+$("blogout").onclick=async()=>{await sb.auth.signOut();location.reload()};
+
+// ---------- Arranque ----------
+async function boot(){
+  const {data:{session}}=await sb.auth.getSession();
+  $("loading").classList.add("hide");
+  if(!session){$("auth").classList.remove("hide");return}
+  $("auth").classList.add("hide");ME=session.user;
+  let cached=null;
+  try{cached=await localGet("cache",ME.id)}catch(e){if(!navigator.onLine)throw e}
+  if(!navigator.onLine){
+    if(!cached){$("auth").classList.remove("hide");$("amsg").innerHTML='<div class="errbox">Conéctate una vez e inicia sesión para preparar el modo sin conexión.</div>';OFFLINE_MODE=true;setNetStatus("Sin conexión. No hay datos guardados para este dispositivo.",true);return}
+    ({driver:DRIVER,clients:CLI,causes:CAUSAS,incidents:INCID,access:ACC}=cached);VEHICULO=cached.vehicle||null;
+    if(String(DRIVER.estatus||"").toLowerCase()!=="activo"){$("auth").classList.remove("hide");$("amsg").innerHTML='<div class="errbox">Tu cuenta de driver está inactiva. Conéctate a internet y contacta a tu flotillero para solicitar la reactivación.</div>';return}
+    OFFLINE_MODE=true;
+    $("hname").textContent=DRIVER.nombre.split(" ")[0];if(ACC.es_flotillero)$("navdr").classList.remove("hide");
+    fillClientes($("cli"));fillClientes($("ccli"));prefillCliente();
+    $("incchips").innerHTML=INCID.map(c=>`<span class="chip" data-i="${esc(c.id)}">${esc(c.nombre)}</span>`).join("");
+    renderStepper();await restoreOfflineRoute();await loadCan();
+    PNR_ERROR="Conéctate a internet para consultar PNR, enviar evidencias y ver penalizaciones.";drawPnrs();
+    setNetStatus("Sin conexión · el check-in, check-out y las fotos se guardarán en este dispositivo.",true);
+    return;
+  }
+  try{
+    const [d,cl,ca,ic]=await Promise.all([
+      sb.from("drivers").select("*").eq("id",ME.id).single(),
+      sb.from("clientes").select("id,nombre,cedis(id,nombre,lat,lng,radio_m)").eq("activo",true).order("nombre"),
+      sb.from("causas_fallo").select("*").order("orden"),
+      sb.from("tipos_incidencia").select("*").order("orden")]);
+    const failed=[d.error,cl.error,ca.error,ic.error].find(Boolean);if(failed)throw failed;
+    DRIVER=d.data;CLI=cl.data||[];CAUSAS=ca.data||[];INCID=ic.data||[];
+  }catch(e){
+    if(!networkError(e)||!cached)throw e;
+    ({driver:DRIVER,clients:CLI,causes:CAUSAS,incidents:INCID,access:ACC}=cached);VEHICULO=cached.vehicle||null;
+    if(String(DRIVER.estatus||"").toLowerCase()!=="activo"){$("auth").classList.remove("hide");$("amsg").innerHTML='<div class="errbox">Tu cuenta de driver está inactiva. Conéctate a internet y contacta a tu flotillero para solicitar la reactivación.</div>';return}
+    OFFLINE_MODE=true;
+    $("hname").textContent=DRIVER.nombre.split(" ")[0];if(ACC.es_flotillero)$("navdr").classList.remove("hide");
+    fillClientes($("cli"));fillClientes($("ccli"));prefillCliente();
+    $("incchips").innerHTML=INCID.map(c=>`<span class="chip" data-i="${esc(c.id)}">${esc(c.nombre)}</span>`).join("");
+    renderStepper();await restoreOfflineRoute();await loadCan();
+    setNetStatus("Conexión intermitente · el check-in, check-out y las fotos se guardarán en este dispositivo.",true);
+    return;
+  }
+  if(!DRIVER){toast("No se encontró tu perfil de driver");return}
+  if(String(DRIVER.estatus||"").toLowerCase()!=="activo"){
+    $("auth").classList.remove("hide");
+    $("amsg").innerHTML='<div class="errbox">Tu cuenta de driver está inactiva. Contacta a tu flotillero para solicitar la reactivación.</div>';
+    await sb.auth.signOut();return;
+  }
+  $("hname").textContent=DRIVER.nombre.split(" ")[0];
+  fillClientes($("cli"));fillClientes($("ccli"));prefillCliente();
+  $("incchips").innerHTML=INCID.map(c=>`<span class="chip" data-i="${esc(c.id)}">${esc(c.nombre)}</span>`).join("");
+  renderStepper();
+  const ac=await sb.rpc("mi_acceso_ganancias");if(ac.error&&networkError(ac.error)){OFFLINE_MODE=true;ACC=cached?cached.access:ACC}else if(ac.error)throw ac.error;else if(ac.data)ACC=ac.data;
+  await localPut("cache",{key:ME.id,driver:DRIVER,clients:CLI,causes:CAUSAS,incidents:INCID,access:ACC});
+  if(OFFLINE_MODE){
+    $("hname").textContent=DRIVER.nombre.split(" ")[0];if(ACC.es_flotillero)$("navdr").classList.remove("hide");
+    await restoreOfflineRoute();await loadCan();PNR_ERROR="Conéctate a internet para consultar PNR, enviar evidencias y ver penalizaciones.";drawPnrs();
+    setNetStatus("Conexión intermitente · el check-in, check-out y las fotos se guardarán en este dispositivo.",true);
+    return;
+  }
+  try{await Promise.all([loadPerfil(),loadGan(),loadCan(),loadPnrs(),resumeRoute()])}
+  catch(e){if(!networkError(e))throw e;OFFLINE_MODE=true;await restoreOfflineRoute();await loadCan();setNetStatus("Conexión intermitente · el check-in, check-out y las fotos se guardarán en este dispositivo.",true);return}
+  if(navigator.onLine)await syncPendingCancellations();
+  suscribirAvisos();
+  if(ACC.es_flotillero){$("navdr").classList.remove("hide");loadDrivers()}
+  setNetStatus("");
+}
+
+// ---------- Navegación ----------
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x===b));
+  document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("on",t.id==="t-"+b.dataset.t));window.scrollTo(0,0)});
+
+// ---------- Cliente / CEDIS ----------
+// El cliente de la base de fleet solo se precarga: el driver puede elegir cualquier otro
+function prefillCliente(){
+  const id=DRIVER&&DRIVER.cliente_default_id;if(!id||!CLI.some(c=>c.id===id))return;
+  ["cli","ccli"].forEach(sid=>{const sel=$(sid);sel.value=String(id);fillCedis($(sid==="cli"?"cedis":"ccedis"),id)});
+  const n=cliName(id);$("cli-hint").textContent=`Tu cliente habitual es ${n}. Puedes elegir otro si hoy trabajas en otra cuenta.`;
+  checkIn();checkCan();
+}
+function fillClientes(sel){sel.innerHTML='<option value="">Selecciona cliente…</option>'+CLI.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join("")}
+function fillCedis(sel,cid){const c=CLI.find(x=>String(x.id)===String(cid));const l=c?c.cedis.slice().sort((a,b)=>a.nombre.localeCompare(b.nombre)):[];
+  sel.innerHTML='<option value="">Selecciona CEDIS…</option>'+l.map(e=>`<option value="${esc(e.id)}">${esc(e.nombre)}</option>`).join("");if(l.length===1)sel.selectedIndex=1}
+function detectar(n){
+  const box=$("detbox"+n),btn=$("det"+n),cs=n===1?"cli":"ccli",es=n===1?"cedis":"ccedis";
+  if(!navigator.geolocation){box.innerHTML='<div class="note">Tu dispositivo no permite detectar la ubicación. Elige el CEDIS manualmente.</div>';return}
+  btn.disabled=true;box.innerHTML='<div class="note">Detectando ubicación…</div>';
+  navigator.geolocation.getCurrentPosition(pos=>{
+    btn.disabled=false;const {latitude:la,longitude:lo}=pos.coords;let best=null;
+    CLI.forEach(c=>c.cedis.forEach(e=>{if(e.lat==null||e.lng==null)return;const d=distM(la,lo,+e.lat,+e.lng);if(!best||d<best.d)best={d,c,e}}));
+    if(!best||best.d>3000){box.innerHTML='<div class="note">No detecté un CEDIS cerca de ti. Elígelo manualmente.</div>';return}
+    box.innerHTML=`<div class="okbox" style="margin-top:8px">Detecté <b>${esc(best.c.nombre)} · ${esc(best.e.nombre)}</b> (a ${best.d>=1000?(best.d/1000).toFixed(1)+" km":best.d+" m"}).<br>¿Es correcto?<div style="display:flex;gap:8px;margin-top:8px"><button class="btn sm" type="button" id="det-si${n}">Sí, es correcto</button><button class="btn ghost sm" type="button" id="det-no${n}">No, lo elijo yo</button></div></div>`;
+    $("det-si"+n).onclick=()=>{$(cs).value=String(best.c.id);$(cs).dispatchEvent(new Event("change"));$(es).value=String(best.e.id);$(es).dispatchEvent(new Event("change"));$(es).dispatchEvent(new Event("input"));box.innerHTML=`<div class="note">✔ ${esc(best.c.nombre)} · ${esc(best.e.nombre)}</div>`};
+    $("det-no"+n).onclick=()=>{box.innerHTML='<div class="note">Elige el cliente y el CEDIS manualmente.</div>'};
+  },()=>{btn.disabled=false;box.innerHTML='<div class="note">No pude obtener tu ubicación (revisa el permiso). Elige el CEDIS manualmente.</div>'},{enableHighAccuracy:true,timeout:12000,maximumAge:30000});
+}
+$("det1").onclick=()=>detectar(1);$("det2").onclick=()=>detectar(2);
+const cedObj=(cid,eid)=>{const c=CLI.find(x=>String(x.id)===String(cid));return c?c.cedis.find(y=>String(y.id)===String(eid)):null};
+function distM(a,b,c,d){const R=6371000,r=x=>x*Math.PI/180,h=Math.sin(r(c-a)/2)**2+Math.cos(r(a))*Math.cos(r(c))*Math.sin(r(d-b)/2)**2;return Math.round(2*R*Math.asin(Math.sqrt(h)))}
+const fmtDist=m=>m<1000?m+" m":(m/1000).toFixed(1)+" km";
+const cliName=id=>(CLI.find(x=>String(x.id)===String(id))||{}).nombre||"";
+const cedObjById=id=>CLI.flatMap(c=>c.cedis.map(e=>({...e,cliente_id:c.id,cliente_nombre:c.nombre}))).find(e=>String(e.id)===String(id));
+const cedNameById=id=>cedObjById(id)?.nombre||"";
+const cedName=(cid,eid)=>{const c=CLI.find(x=>String(x.id)===String(cid));const e=c&&c.cedis.find(y=>String(y.id)===String(eid));return e?e.nombre:""};
+$("cli").onchange=()=>{fillCedis($("cedis"),$("cli").value);checkIn()};
+function resetFoto(){if(canBlob){canBlob=null;$("cv").classList.add("hide");$("cmeta").innerHTML='<span style="color:var(--bad)">Cambiaste el CEDIS: vuelve a tomar la foto para validar tu ubicación.</span>'}}
+$("ccli").onchange=()=>{fillCedis($("ccedis"),$("ccli").value);resetFoto();checkCan()};
+$("ccedis").onchange=()=>{resetFoto();checkCan()};
+
+// ---------- Ruta ----------
+function renderStepper(){const n=["Check-in","Fin de ruta","Incidencias","Check-out"];
+  $("stepper").innerHTML=n.map((x,i)=>`<div class="${i<S.stage?"done":i===S.stage?"cur":""}"><i></i>${x}</div>`).join("")}
+function unlock(id,on){$(id).classList.toggle("lock",!on)}
+function setStage(n){
+  S.stage=n;renderStepper();unlock("s2",n===1);unlock("s3",n===2);unlock("s4",n===3);
+  if(n>=1&&S.route){$("s1").classList.add("hide");$("sresume").classList.remove("hide");const r=S.route;
+    $("sresume").innerHTML=`<h2>✅ Ruta en curso</h2><div class="kv"><span>Cliente</span><b>${esc(r.cli)}</b></div><div class="kv"><span>CEDIS</span><b>${esc(r.cedis)}</b></div>
+    <div class="kv"><span>ID de ruta</span><b>${esc(r.rid)}</b></div><div class="kv"><span>Paquetes</span><b>${esc(r.pk)}</b></div>
+    <div class="kv"><span>Zonas</span><b>${esc(r.zonas.join(", "))}</b></div><div class="kv"><span>Modalidad</span><b>${r.auxiliarRequerido?(r.viajaConAuxiliar?"Con auxiliar":"Solo"):"No aplica"}</b></div><div class="kv"><span>Llegada a CEDIS</span><b>${esc(r.hora)}</b></div>`;
+    $("hstate").className="pill ok";$("hstate").textContent="En ruta"}
+}
+async function resumeRoute(){
+  const saved=await localGet("routes",routeLocalKey());
+  if(saved){
+    await restoreOfflineRoute(saved);
+    if(navigator.onLine)await syncPendingRoute();
+    return;
+  }
+  const {data}=await sb.from("rutas").select("*,cedis(id,nombre,cliente_id)").eq("driver_id",ME.id).eq("estado","en_ruta").order("checkin_at",{ascending:false}).limit(1);
+  if(!data||!data.length)return;const r=data[0];
+  S.route={unidad:r.tipo_unidad,auxiliarRequerido:r.auxiliar_requerido===true,viajaConAuxiliar:r.viaja_con_auxiliar===true,dbId:r.id,cli:cliName(r.cedis.cliente_id),cliId:r.cedis.cliente_id,cedis:r.cedis.nombre,cedisId:r.cedis.id,pk:r.paquetes_asignados,rid:r.id_ruta,zonas:r.zonas,
+    hora:new Date(r.hora_llegada_cedis).toTimeString().slice(0,5),checkin:new Date(r.checkin_at)};
+  await localPut("routes",{key:routeLocalKey(),driverId:ME.id,status:"active",serverRouteId:r.id,
+    routeInfo:{unidad:r.tipo_unidad,auxiliarRequerido:S.route.auxiliarRequerido,viajaConAuxiliar:S.route.viajaConAuxiliar,cli:S.route.cli,cliId:S.route.cliId,cedis:S.route.cedis,cedisId:S.route.cedisId,pk:S.route.pk,rid:S.route.rid,zonas:S.route.zonas,hora:S.route.hora,checkin:S.route.checkin.toISOString()},
+    routePayload:{driver_id:ME.id,cedis_id:r.cedis.id,id_ruta:r.id_ruta,paquetes_asignados:r.paquetes_asignados,zonas:r.zonas,hora_llegada_cedis:r.hora_llegada_cedis,tipo_unidad:r.tipo_unidad,auxiliar_requerido:S.route.auxiliarRequerido,viaja_con_auxiliar:S.route.viajaConAuxiliar,evidencia_auxiliar_checkin_path:r.evidencia_auxiliar_checkin_path||null,evidencia_auxiliar_checkout_path:r.evidencia_auxiliar_checkout_path||null,checkin_at:r.checkin_at},checkout:null,manifests:[],remoteManifests:[]});
+  prefillCan();setStage(1);updFin();if(requiereManif())await loadManif();
+}
+async function restoreOfflineRoute(record){
+  if(!record)return;
+  const r=record.routeInfo;
+  S.route={...r,viajaConAuxiliar:r.viajaConAuxiliar===true,dbId:record.serverRouteId||null,localKey:record.key,checkin:new Date(r.checkin)};
+  S.zonas=[...r.zonas];prefillCan();setStage(1);updFin();
+  if(record.checkout){
+    S.result={ent:record.checkout.ent, fal:record.checkout.fal};
+    S.inc=record.checkout.hubo_incidencias;
+    S.incSel=new Set(record.checkout.incidencias.map(x=>String(x.incidencia_id)));
+    S.routeLocalCheckout=record.checkout;
+    showRouteDone(true);
+  }else if(requiereManif()){
+    MANIF=[...(record.remoteManifests||[]).map(m=>({...m,local:false,url:""})),...(record.manifests||[]).map(m=>({...m,local:true}))];
+    drawManif();enableOut();
+  }
+}
+async function syncAuxiliaryEvidence(record,stage){
+  if(!record.routePayload.viaja_con_auxiliar)return;
+  const isCheckin=stage==="checkin",field=isCheckin?"evidencia_auxiliar_checkin_path":"evidencia_auxiliar_checkout_path";
+  const holder=isCheckin?record.auxiliary:record.checkout;
+  const blobKey=isCheckin?"checkinBlob":"auxiliaryBlob",pathKey=isCheckin?"checkinPath":"auxiliaryEvidencePath";
+  if(!holder)throw new Error(`Falta la evidencia fotográfica del auxiliar en el ${isCheckin?"check-in":"check-out"}.`);
+  let path=holder[pathKey]||record.routePayload[field]||null;
+  if(!path&&holder[blobKey]){
+    const stamp=Date.parse(record.routeInfo.checkin);
+    path=`${ME.id}/${stamp}/${stage}.jpg`;
+    holder[pathKey]=path;
+    if(isCheckin)record.routePayload[field]=path;else record.checkout[field]=path;
+    await localPut("routes",record);
+  }
+  if(holder[blobKey]){
+    const {error}=await sb.storage.from("ruta-auxiliares").upload(path,holder[blobKey],{contentType:"image/jpeg",upsert:true});
+    if(error)throw error;
+    holder[blobKey]=null;
+    if(isCheckin)record.routePayload[field]=path;else record.checkout[field]=path;
+    await localPut("routes",record);
+  }
+  if(!path)throw new Error(`No se guardó la foto requerida del auxiliar en el ${isCheckin?"check-in":"check-out"}.`);
+}
+async function syncPendingRoute(){
+  if(syncBusy||!ME||!navigator.onLine)return false;
+  const key=routeLocalKey();let record;
+  try{record=await localGet("routes",key)}catch(e){setNetStatus(e.message,true);return false}
+  if(!record){OFFLINE_MODE=false;setNetStatus("");return true}
+  syncBusy=true;
+  try{
+    await syncAuxiliaryEvidence(record,"checkin");
+    if(!record.serverRouteId){
+      const {data:existing,error:lookupError}=await sb.from("rutas").select("id")
+        .eq("driver_id",record.routePayload.driver_id)
+        .eq("id_ruta",record.routePayload.id_ruta)
+        .eq("checkin_at",record.routePayload.checkin_at)
+        .maybeSingle();
+      if(lookupError)throw lookupError;
+      let route=existing;
+      if(!route){
+        const inserted=await sb.from("rutas").insert(record.routePayload).select("id").single();
+        if(inserted.error)throw inserted.error;
+        route=inserted.data;
+      }
+      record.serverRouteId=route.id;record.status="active";await localPut("routes",record);
+      if(S.route)S.route.dbId=route.id;
+    }
+    for(let i=0;i<(record.manifests||[]).length;i++){
+      const photo=record.manifests[i];
+      if(!photo.photoPath){
+        const path=`${ME.id}/${record.serverRouteId}/offline-${photo.id}.jpg`;
+        const {error}=await sb.storage.from("manifiestos").upload(path,photo.blob,{contentType:"image/jpeg",upsert:true});
+        if(error)throw error;
+        photo.photoPath=path;await localPut("routes",record);
+      }
+      if(!photo.rowSaved){
+        const {data:existing,error:lookupError}=await sb.from("ruta_manifiestos").select("id")
+          .eq("ruta_id",record.serverRouteId).eq("foto_path",photo.photoPath).maybeSingle();
+        if(lookupError)throw lookupError;
+        if(!existing){
+          const {error}=await sb.from("ruta_manifiestos").insert({ruta_id:record.serverRouteId,foto_path:photo.photoPath});
+          if(error)throw error;
+        }
+        photo.rowSaved=true;await localPut("routes",record);
+      }
+    }
+    if(record.manifests&&record.manifests.length){record.manifests=[];await localPut("routes",record)}
+    if(record.checkout){
+      await syncAuxiliaryEvidence(record,"checkout");
+      if(record.checkout.fallos.length){const rows=record.checkout.fallos.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_fallos").upsert(rows);if(error)throw error}
+      if(record.checkout.incidencias.length){const rows=record.checkout.incidencias.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_incidencias").upsert(rows);if(error)throw error}
+      const {error}=await sb.from("rutas").update({estado:"cerrada",checkout_at:record.checkout.checkoutAt,
+        entregados:record.checkout.ent,fallidos:record.checkout.fal,hubo_incidencias:record.checkout.hubo_incidencias,
+        evidencia_auxiliar_checkout_path:record.checkout.evidencia_auxiliar_checkout_path||null,...record.checkout.extras}).eq("id",record.serverRouteId);
+      if(error)throw error;
+      await localDelete("routes",key);S.routeLocalCheckout=record.checkout;showRouteDone(false);
+    }else{
+      record.status="active";await localPut("routes",record);
+      if(S.route)S.route.dbId=record.serverRouteId;
+      if(requiereManif())await loadManif();
+    }
+    OFFLINE_MODE=false;setNetStatus("");
+    return true;
+  }catch(e){
+    if(networkError(e)){OFFLINE_MODE=true;setNetStatus("Conexión intermitente · hay registros guardados en este dispositivo y se enviarán al recuperar la red.",true)}
+    else{const target=record.checkout?"outerr":"inerr";err(target,e);setNetStatus("No se pudo sincronizar. Tus datos siguen guardados en este dispositivo.",true)}
+    return false;
+  }finally{syncBusy=false}
+}
+function routeDoneMarkup(pending){
+  const r=S.route,res=S.result,t=S.routeLocalCheckout?new Date(S.routeLocalCheckout.checkoutAt):new Date();
+  const incs=S.incSel.size?[...S.incSel].map(i=>(INCID.find(x=>String(x.id)===String(i))||{}).nombre).filter(Boolean):[];
+  ["s2","s3","s4","sresume"].forEach(x=>$(x).classList.add("hide"));$("sdone").classList.remove("hide");
+  $("sdone").innerHTML=`<div class="${pending?"alerta w":"okbox"}"><b>${pending?"📴 Ruta guardada en este dispositivo":"🏁 Ruta finalizada"}</b><br>${pending?"Se enviará automáticamente al recuperar conexión.":""}<br>${esc(r.cli)} · ${esc(r.cedis)} · ${esc(r.rid)}</div>
+  <div class="kv"><span>Entregados</span><b>${esc(res.ent)}</b></div><div class="kv"><span>Fallidos</span><b>${esc(res.fal)}</b></div>
+  <div class="kv"><span>Efectividad</span><b>${Math.round(res.ent/r.pk*100)}%</b></div>
+  <div class="kv"><span>Incidencias</span><b>${incs.length?incs.join(", "):"Ninguna"}</b></div>
+  <div class="kv"><span>Check-out</span><b>${t.toTimeString().slice(0,5)}</b></div><button class="btn" id="bnew">Iniciar nueva ruta</button>`;
+  $("hstate").className=`pill ${pending?"w":"ok"}`;$("hstate").textContent=pending?"Pendiente de envío":"Ruta cerrada";
+  $("bnew").onclick=()=>location.reload();
+}
+function showRouteDone(pending=false){routeDoneMarkup(pending)}
+function prefillCan(){const r=S.route;$("ccli").value=r.cliId;fillCedis($("ccedis"),r.cliId);$("ccedis").value=r.cedisId}
+
+$("zinp").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();addZona()}});
+$("zinp").addEventListener("blur",addZona);
+function addZona(){const v=$("zinp").value.trim();if(v&&!S.zonas.includes(v))S.zonas.push(v);$("zinp").value="";$("zchips").innerHTML=S.zonas.map((z,i)=>`<span class="chip on" data-i="${i}">${esc(z)} ✕</span>`).join("");checkIn()}
+$("zchips").onclick=e=>{const i=e.target.dataset.i;if(i!==undefined){S.zonas.splice(+i,1);addZona()}};
+$("bnow").onclick=()=>{$("hora").value=new Date().toTimeString().slice(0,5);checkIn()};
+["pk","rid","hora","cedis"].forEach(id=>$(id).addEventListener("input",checkIn));
+const esCoppel=()=>/^COPPEL/i.test(cliName($("cli").value)||"");
+function syncUnidad(){const on=esCoppel();$("unidad-w").classList.toggle("hide",!on);if(on&&!$("unidad").value&&/BT/i.test(cliName($("cli").value)))$("unidad").value="3.5T";if(!on)$("unidad").value=""}
+$("unidad").onchange=()=>checkIn();
+document.querySelector("#cedis").addEventListener("change",checkIn);
+const textoAux=v=>String(v||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
+function requiereAuxiliarRuta(){
+  const cliente=textoAux(cliName($("cli").value)+" "+cedName($("cli").value,$("cedis").value));
+  const ruta=textoAux([cedName($("cli").value,$("cedis").value),$("rid").value,...S.zonas,$("unidad").value,VEHICULO?.tipo,VEHICULO?.marca_modelo,DRIVER?.tipo_vehiculo,DRIVER?.tipo_unidad,DRIVER?.esquema].join(" "));
+  return /MERCADO\s*LIBRE|\bMELI\b|\bML\b|LIVERPOOL|WALMART/.test(cliente)
+    || /SMALL|LARGE|3[.,]?\s*5|(?:^|\W)BT(?:$|\W)|CIRCUIT/.test(ruta);
+}
+function syncAuxiliary(){
+  const required=requiereAuxiliarRuta();
+  $("aux-checkin").classList.toggle("hide",!required);
+  $("aux-checkin-proof").classList.toggle("hide",!required||$("aux-mode").value!=="auxiliar");
+  if(!required){$("aux-mode").value="";$("aux-in-file").value="";$("aux-in-preview").classList.add("hide")}
+}
+function previewAuxPhoto(inputId,previewId){
+  $(inputId).addEventListener("change",()=>{
+    const file=$(inputId).files[0],preview=$(previewId);
+    if(file){preview.src=URL.createObjectURL(file);preview.classList.remove("hide")}
+    else{preview.removeAttribute("src");preview.classList.add("hide")}
+    if(inputId==="aux-in-file")checkIn();else enableOut();
+  });
+}
+async function procesarFotoAuxiliar(inputId){
+  const file=$(inputId).files[0];
+  if(!file)throw new Error("Toma la foto obligatoria con tu auxiliar.");
+  if(!file.type.startsWith("image/")||file.size>10*1024*1024)throw new Error("Usa una imagen de máximo 10 MB.");
+  const blob=await comprimir(file);
+  if(!blob)throw new Error("No se pudo procesar la foto del auxiliar.");
+  return blob;
+}
+previewAuxPhoto("aux-in-file","aux-in-preview");previewAuxPhoto("aux-out-file","aux-out-preview");
+$("aux-mode").onchange=checkIn;
+function checkIn(){syncUnidad();syncAuxiliary();const required=requiereAuxiliarRuta(),auxMode=$("aux-mode").value;
+  const auxiliaryOk=!required||auxMode==="solo"||(auxMode==="auxiliar"&&$("aux-in-file").files.length>0);
+  const ok=$("cli").value&&$("cedis").value&&(!esCoppel()||$("unidad").value)&&+$("pk").value>0&&$("rid").value.trim()&&S.zonas.length&&$("hora").value&&auxiliaryOk;
+  $("bin").disabled=!ok;$("inhint").textContent=ok?"Todo listo. Presiona Check IN para iniciar tu ruta.":"Completa todos los campos para habilitar el check-in."}
+$("bin").onclick=async()=>{
+  $("bin").disabled=true;err("inerr",null);
+  const hoy=new Date().toLocaleDateString("en-CA");
+  const checkinAt=new Date(),llegada=new Date(`${hoy}T${$("hora").value}`).toISOString(),withAux=requiereAuxiliarRuta()&&$("aux-mode").value==="auxiliar";
+  let checkinBlob=null;
+  try{if(withAux)checkinBlob=await procesarFotoAuxiliar("aux-in-file")}
+  catch(e){err("inerr",e);$("bin").disabled=false;return}
+  const tipoUnidad=esCoppel()?$("unidad").value:(VEHICULO?.tipo||DRIVER?.tipo_unidad||null);
+  const routeRequiresAuxiliary=requiereAuxiliarRuta();
+  const routePayload={driver_id:ME.id,cedis_id:+$("cedis").value,id_ruta:$("rid").value.trim(),paquetes_asignados:+$("pk").value,zonas:[...S.zonas],hora_llegada_cedis:llegada,tipo_unidad:tipoUnidad,auxiliar_requerido:routeRequiresAuxiliary,viaja_con_auxiliar:withAux,evidencia_auxiliar_checkin_path:null,evidencia_auxiliar_checkout_path:null,checkin_at:checkinAt.toISOString()};
+  const routeInfo={cli:cliName($("cli").value),cliId:$("cli").value,cedis:cedName($("cli").value,$("cedis").value),cedisId:$("cedis").value,pk:+$("pk").value,rid:$("rid").value.trim(),zonas:[...S.zonas],hora:$("hora").value,checkin:checkinAt.toISOString(),unidad:routePayload.tipo_unidad,auxiliarRequerido:routeRequiresAuxiliary,viajaConAuxiliar:withAux};
+  const record={key:routeLocalKey(),driverId:ME.id,status:"checkin_pending",serverRouteId:null,routeInfo,routePayload,auxiliary:{checkinBlob,checkinPath:null},checkout:null,manifests:[]};
+  try{await localPut("routes",record)}
+  catch(e){err("inerr",e);$("bin").disabled=false;return}
+  let synced=false;
+  if(navigator.onLine)synced=await syncPendingRoute();else{OFFLINE_MODE=true;setNetStatus("Sin conexión · check-in y evidencia guardados en este dispositivo; se enviarán al recuperar la red.",true)}
+  const saved=await localGet("routes",routeLocalKey());
+  S.route={...routeInfo,dbId:saved?.serverRouteId||null,localKey:record.key,checkin:checkinAt};
+  prefillCan();setStage(1);$("ent").value="";$("fal").value="";updFin();
+  $("hstate").className=`pill ${synced?"ok":"w"}`;$("hstate").textContent=synced?"En ruta":"Check-in pendiente de enviar";
+  if(synced){toast("Check-in registrado · ¡Buena ruta!");$("aux-in-file").value="";$("aux-in-preview").classList.add("hide")}
+  else{setNetStatus("Sin conexión o sincronización pendiente · check-in y evidencia guardados en este dispositivo.",true);toast("Check-in guardado en este dispositivo")}
+};
+
+["ent","fal"].forEach(id=>$(id).addEventListener("input",updFin));
+function sumC(){return Object.values(S.fallos).reduce((a,b)=>a+b,0)}
+function updFin(){
+  const pk=S.route?S.route.pk:0,e=+$("ent").value||0,f=+$("fal").value||0,filled=$("ent").value!==""&&$("fal").value!=="";
+  let ok=filled&&e+f===pk;
+  $("s2note").innerHTML=filled?(e+f===pk?`<span style="color:var(--ok)">✔ Cuadra con los ${pk} paquetes asignados</span>`:`<span style="color:var(--bad)">Entregados + fallidos = ${e+f}; debes cuadrar con ${pk}</span>`):`Asignados: <b>${pk}</b>`;
+  $("causes").classList.toggle("hide",!(f>0));$("ftot").textContent=f;
+  if(f>0){drawCauses();const s=sumC();ok=ok&&s===f;$("csum").innerHTML=s===f?`<span style="color:var(--ok)">✔ Causas completas (${s}/${f})</span>`:`<span style="color:var(--bad)">Asignadas ${s} de ${f}</span>`}else S.fallos={};
+  $("b2").disabled=!ok;
+}
+function drawCauses(){$("clist").innerHTML=CAUSAS.map(c=>`<div class="cause"><span>${esc(c.nombre)}</span><div class="qty"><button data-c="${esc(c.id)}" data-d="-1">−</button><span>${S.fallos[c.id]||0}</span><button data-c="${esc(c.id)}" data-d="1">+</button></div></div>`).join("")}
+$("clist").onclick=e=>{const b=e.target.closest("button");if(!b)return;const i=b.dataset.c,d=+b.dataset.d,f=+$("fal").value||0;
+  if(d>0&&sumC()>=f)return;S.fallos[i]=Math.max(0,(S.fallos[i]||0)+d);updFin()};
+$("b2").onclick=()=>{S.result={ent:+$("ent").value,fal:+$("fal").value};setStage(2);$("s3").scrollIntoView({behavior:"smooth"})};
+
+$("inc-no").onclick=()=>{S.inc=false;$("inclist").classList.add("hide");mark();enableOut()};
+$("inc-si").onclick=()=>{S.inc=true;$("inclist").classList.remove("hide");mark();enableOut()};
+function mark(){$("inc-no").className="btn "+(S.inc===false?"ok":"ghost");$("inc-si").className="btn "+(S.inc===true?"bad":"ghost")}
+$("incchips").onclick=e=>{const i=e.target.dataset.i;if(i===undefined)return;S.incSel.has(i)?S.incSel.delete(i):S.incSel.add(i);e.target.classList.toggle("on");enableOut()};
+const CLI_EXTRAS=["FULLER","PRIVALIA","SODEXO","SMURFIT","TTAIO"];
+const llevaExtras=()=>S.route&&CLI_EXTRAS.includes(String(S.route.cli||"").toUpperCase().replace(/[^A-Z0-9]/g,""));
+const requiereManif=()=>S.route&&S.route.unidad==="3.5T"&&/^COPPEL/i.test(S.route.cli||"");
+let MANIF=[],manifCargado=false;
+let MANIF_URLS=[];
+async function loadManif(){
+  manifCargado=true;
+  const record=await localGet("routes",routeLocalKey()),local=(record&&record.manifests||[]).map(m=>({...m,local:true}));
+  let remote=[];
+  if(S.route.dbId&&navigator.onLine){
+    const {data,error}=await sb.from("ruta_manifiestos").select("id,foto_path").eq("ruta_id",S.route.dbId).order("id");
+    if(error){if(!networkError(error)){err("manif-err",error);return}OFFLINE_MODE=true}
+    else{
+      if(record){record.remoteManifests=(data||[]).map(x=>({id:x.id,foto_path:x.foto_path}));await localPut("routes",record)}
+      const paths=(data||[]).map(x=>x.foto_path),signed=paths.length?(await sb.storage.from("manifiestos").createSignedUrls(paths,3600)):null;
+      if(signed&&signed.error){if(!networkError(signed.error)){err("manif-err",signed.error);return}OFFLINE_MODE=true}
+      remote=(data||[]).map(x=>({...x,url:((signed&&signed.data)||[]).find(y=>y.path===x.foto_path)?.signedUrl}));
+    }
+  }
+  MANIF=[...remote,...local];drawManif();enableOut()
+}
+function drawManif(){
+  MANIF_URLS.forEach(url=>URL.revokeObjectURL(url));MANIF_URLS=[];
+  $("manif-grid").innerHTML=MANIF.map(m=>{
+    const src=m.local&&m.blob?URL.createObjectURL(m.blob):m.url||"";
+    if(m.local&&m.blob)MANIF_URLS.push(src);
+    return `<div style="position:relative">${src?`<img src="${esc(src)}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px">`:'<div class="doc" style="justify-content:center;height:100%;background:var(--bg);border-radius:10px">🖼️<small>Foto ya enviada</small></div>'}<button type="button" data-mx="${esc(m.id)}" style="position:absolute;top:4px;right:4px;border:0;border-radius:99px;width:24px;height:24px;background:#000a;color:#fff">✕</button></div>`;
+  }).join("");
+  $("manif-add").textContent=`📷 Agregar fotos (${esc(MANIF.length)}/10)`;$("manif-add").disabled=MANIF.length>=10;
+  $("manif-grid").querySelectorAll("[data-mx]").forEach(b=>b.onclick=async()=>{
+    const m=MANIF.find(x=>String(x.id)===b.dataset.mx);if(!m)return;
+    if(m.local){
+      const record=await localGet("routes",routeLocalKey());record.manifests=record.manifests.filter(x=>x.id!==m.id);await localPut("routes",record);MANIF=MANIF.filter(x=>x!==m);drawManif();enableOut();return;
+    }
+    if(!navigator.onLine){err("manif-err",new Error("No se pueden eliminar fotos sincronizadas sin conexión."));return}
+    const removed=await sb.storage.from("manifiestos").remove([m.foto_path]);if(removed.error){err("manif-err",removed.error);return}
+    const deleted=await sb.from("ruta_manifiestos").delete().eq("id",m.id);if(deleted.error){err("manif-err",deleted.error);return}
+    await loadManif();
+  })}
+async function comprimir(file){const bmp=await createImageBitmap(file);const k=Math.min(1,1600/Math.max(bmp.width,bmp.height));const c=document.createElement("canvas");c.width=Math.round(bmp.width*k);c.height=Math.round(bmp.height*k);c.getContext("2d").drawImage(bmp,0,0,c.width,c.height);return new Promise(r=>c.toBlob(r,"image/jpeg",0.8))}
+$("manif-add").onclick=()=>$("manif-file").click();
+$("manif-file").onchange=async e=>{
+  err("manif-err",null);const fs=[...e.target.files].slice(0,10-MANIF.length);e.target.value="";if(!fs.length)return;$("manif-add").disabled=true;
+  try{
+    const record=await localGet("routes",routeLocalKey());if(!record)throw new Error("No existe un registro local de la ruta para guardar las fotos.");
+    for(const f of fs){const blob=await comprimir(f);if(!blob)throw new Error("No se pudo procesar una de las fotos.");record.manifests.push({id:crypto.randomUUID(),blob,name:f.name,createdAt:new Date().toISOString(),photoPath:null,rowSaved:false})}
+    await localPut("routes",record);MANIF=(record.manifests||[]).map(m=>({...m,local:true}));drawManif();enableOut();
+    if(navigator.onLine){const ok=await syncPendingRoute();if(ok)await loadManif()}
+    else setNetStatus("Sin conexión · foto guardada en este dispositivo y pendiente de envío.",true);
+  }catch(x){err("manif-err",x)}
+  $("manif-add").disabled=MANIF.length>=10;
+};
+function enableOut(){const rm=!!requiereManif(),aux=!!S.route?.viajaConAuxiliar;$("manif").classList.toggle("hide",!rm);if(rm&&!manifCargado&&S.route)loadManif();$("extras").classList.toggle("hide",!llevaExtras());$("aux-checkout-proof").classList.toggle("hide",!aux);const auxOk=!aux||$("aux-out-file").files.length>0;const ok=(S.inc===false||(S.inc===true&&S.incSel.size>0))&&(!rm||MANIF.length>0)&&auxOk;if(S.stage>=2)setStage((S.inc===false||(S.inc===true&&S.incSel.size>0))?3:2);$("bout").disabled=!(ok&&S.stage>=3)}
+$("bout").onclick=async()=>{
+  $("bout").disabled=true;err("outerr",null);const r=S.route,res=S.result;
+  let record;
+  try{record=await localGet("routes",routeLocalKey());if(!record)throw new Error("No existe una copia local de esta ruta. No se cerró para evitar perder el registro.")}catch(e){err("outerr",e);$("bout").disabled=false;return}
+  let auxiliaryBlob=null;
+  try{if(r.viajaConAuxiliar)auxiliaryBlob=await procesarFotoAuxiliar("aux-out-file")}
+  catch(e){err("outerr",e);$("bout").disabled=false;return}
+  const checkoutAt=new Date().toISOString();
+  const fl=Object.entries(S.fallos).filter(([,q])=>q>0).map(([c,q])=>({causa_id:+c,cantidad:q}));
+  const ic=S.inc?[...S.incSel].map(i=>({incidencia_id:+i,comentario:$("inctxt").value.trim()||null})):[];
+  record.status="checkout_pending";
+  record.checkout={checkoutAt,ent:res.ent,fal:res.fal,hubo_incidencias:!!S.inc,fallos:fl,incidencias:ic,auxiliaryBlob,auxiliaryEvidencePath:null,
+    extras:llevaExtras()?{maniobras:$("x-man").value.trim()||null,estadia:$("x-est").value.trim()||null,otros:$("x-otr").value.trim()||null}:{}};
+  try{await localPut("routes",record)}catch(e){err("outerr",e);$("bout").disabled=false;return}
+  S.routeLocalCheckout=record.checkout;
+  let synced=false;
+  if(navigator.onLine)synced=await syncPendingRoute();
+  else{OFFLINE_MODE=true;setNetStatus("Sin conexión · check-out guardado en este dispositivo; se enviará al recuperar la red.",true)}
+  showRouteDone(!synced);
+};
+
+// ---------- Cancelación ----------
+let canBlob=null,canMeta=null;
+$("bcam").onclick=()=>$("cfile").click();
+$("cfile").onchange=e=>{const f=e.target.files[0];if(!f)return;const img=new Image();img.onload=()=>stamp(img);img.src=URL.createObjectURL(f);e.target.value=""};
+function getLoc(){return new Promise(res=>{if(!navigator.geolocation)return res(null);const t=setTimeout(()=>res(null),8000);
+  try{navigator.geolocation.getCurrentPosition(p=>{clearTimeout(t);res({lat:p.coords.latitude,lng:p.coords.longitude})},()=>{clearTimeout(t);res(null)},{timeout:7000,enableHighAccuracy:true})}catch(e){clearTimeout(t);res(null)}})}
+async function stamp(img){
+  $("cmeta").textContent="Obteniendo ubicación…";err("canerr",null);
+  const loc=await getLoc();
+  const d=new Date(),iw=img.naturalWidth||img.width,ih=img.naturalHeight||img.height,w=Math.min(1000,iw),h=Math.round(ih*w/iw);
+  const cv=$("cv");cv.width=w;cv.height=h;const x=cv.getContext("2d");x.drawImage(img,0,0,w,h);
+  const cli=cliName($("ccli").value)||"—",ced=cedName($("ccli").value,$("ccedis").value)||"—";
+  const co=cedObj($("ccli").value,$("ccedis").value);let val={estado:loc?"sin_coordenadas":"sin_ubicacion",dist:null};
+  if(loc&&co&&co.lat!=null&&co.lng!=null){const dm=distM(loc.lat,loc.lng,co.lat,co.lng);val={estado:dm<=co.radio_m?"dentro":"fuera",dist:dm,radio:co.radio_m}}
+  const dia=d.toLocaleDateString("es-MX",{weekday:"long"}),fecha=d.toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"}),hora=d.toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
+  const lines=["CANCELADO POR EL CLIENTE",`${cli} · ${ced}`,`${dia} ${fecha} · ${hora}`,loc?`GPS: ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}`:"GPS: ubicación no disponible",val.estado==="sin_ubicacion"?"Ubicación sin validar: se revisará":val.estado==="sin_coordenadas"?"Ubicación del CEDIS: sin validar":`A ${fmtDist(val.dist)} del CEDIS · ${val.estado==="dentro"?"DENTRO":"FUERA"} del radio`,`Driver: ${esc(DRIVER.nombre)} · ${esc(DRIVER.codigo||"")}`];
+  const fs=Math.max(14,Math.round(w/34)),pad=fs*.7,bh=lines.length*fs*1.35+pad*2;
+  x.fillStyle="rgba(0,0,0,.62)";x.fillRect(0,h-bh,w,bh);x.textAlign="left";
+  lines.forEach((l,i)=>{x.font=(i===0?"bold ":"")+fs+"px sans-serif";x.fillStyle=i===0?"#ffb4b6":"#fff";x.fillText(l,pad,h-bh+pad+fs*1.1+i*fs*1.35)});
+  x.save();x.translate(w/2,h/2);x.rotate(-.4);x.font="bold "+Math.round(w/9)+"px sans-serif";x.fillStyle="rgba(255,255,255,.18)";x.textAlign="center";x.fillText("CHAZKI",0,0);x.restore();
+  cv.classList.remove("hide");
+  canBlob=await new Promise(r=>cv.toBlob(r,"image/jpeg",.78));canMeta={loc,d,val};
+  const vm=val.estado==="dentro"?`<span style="color:var(--ok)">✔ Estás a ${fmtDist(val.dist)} del CEDIS: ubicación validada</span>`:
+    val.estado==="fuera"?`<span style="color:var(--bad)">⚠ Estás a ${fmtDist(val.dist)} del CEDIS (máximo ${fmtDist(val.radio)}). Si el CEDIS es otro, cámbialo y toma la foto de nuevo. Si lo registras así, Operaciones lo revisará.</span>`:
+    val.estado==="sin_ubicacion"?`<span style="color:var(--bad)">⚠ No se pudo detectar tu ubicación. Puedes registrar la cancelación igual: la foto lleva la marca de agua con fecha y hora, y Operaciones la revisará. Si puedes, activa el GPS y toma la foto otra vez.</span>`:
+    `<span style="color:var(--mut)">Este CEDIS aún no tiene ubicación registrada; se registra sin validar.</span>`;
+  $("cmeta").innerHTML=`📍 ${loc?loc.lat.toFixed(5)+", "+loc.lng.toFixed(5):"ubicación no disponible"} · ${dia} ${fecha} ${hora}<br>${vm}`;checkCan();
+}
+function checkCan(){$("bcan").disabled=canUsedToday||canLimitUnknown||!(canBlob&&$("ccli").value&&$("ccedis").value)}
+$("bcan").onclick=async()=>{
+  $("bcan").disabled=true;err("canerr",null);
+  try{
+    const record={key:crypto.randomUUID(),driver_id:ME.id,ruta_id:S.route?S.route.dbId:null,cedis_id:+$("ccedis").value,id_ruta:S.route?.rid||null,
+      lat:canMeta.loc?canMeta.loc.lat:null,lng:canMeta.loc?canMeta.loc.lng:null,capturado_at:canMeta.d.toISOString(),blob:canBlob};
+    await localPut("cancellations",record);
+    canUsedToday=true;updateCancelAvailability();
+    canBlob=null;$("cv").classList.add("hide");$("cmeta").textContent="";checkCan();
+    if(navigator.onLine&&await syncPendingCancellations())toast("Cancelación registrada y enviada a Operaciones");
+    else{OFFLINE_MODE=true;setNetStatus("Sin conexión o red intermitente · cancelación y foto guardadas en este dispositivo, pendientes de envío.",true);toast("Cancelación guardada en este dispositivo")}
+    await loadCan();
+  }catch(error){err("canerr",error);$("bcan").disabled=false}
+};
+let CAN2=[],CAN_SERVER=[],NOT=[],canUsedToday=false,canLimitUnknown=true;
+const cuentaReg=v=>{const ms=new Date(v)-Date.now();if(ms<=0)return null;const m=Math.floor(ms/60000);return `${Math.floor(m/60)} h ${String(m%60).padStart(2,"0")} min`};
+const estC=x=>((x.estatus==="aclaracion"||x.estatus==="rechazada")&&x.plazo_vence&&new Date(x.plazo_vence)<Date.now())?"vencida":x.estatus;
+const diaCancelacion=v=>{
+  const d=new Date(v);if(Number.isNaN(d.getTime()))return"";
+  const parts=new Intl.DateTimeFormat("en-CA",{timeZone:"America/Mexico_City",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(d);
+  const values=Object.fromEntries(parts.map(x=>[x.type,x.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+function updateCancelAvailability(){
+  const box=$("can-limit"),locked=canUsedToday||canLimitUnknown;
+  box.classList.toggle("hide",!locked);
+  box.textContent=canUsedToday
+    ?"Ya registraste una cancelación hoy. Solo se permite una cancelación por día."
+    :"No se pudo verificar si ya registraste una cancelación hoy. Conéctate a internet y actualiza antes de continuar.";
+  ["ccli","ccedis","det2","bcam","cfile"].forEach(id=>$(id).disabled=locked);
+  checkCan();
+}
+async function loadCan(){
+  let serverRows=null;
+  if(navigator.onLine){
+    const {data,error}=await sb.rpc("mis_cancelaciones_estatus");
+    if(!error){serverRows=data||[];CAN_SERVER=serverRows;canLimitUnknown=false;err("canerr",null);
+      try{await localPut("cache",{key:`cancellations:${ME.id}`,rows:serverRows,cachedAt:new Date().toISOString()})}
+      catch(cacheError){err("canerr",cacheError)}
+    }else if(networkError(error)){
+      OFFLINE_MODE=true;
+      const cached=await localGet("cache",`cancellations:${ME.id}`);
+      CAN_SERVER=cached?.rows||[];canLimitUnknown=!cached;
+    }else{err("canerr",error);CAN_SERVER=[];canLimitUnknown=true}
+  }else{
+    const cached=await localGet("cache",`cancellations:${ME.id}`);
+    CAN_SERVER=cached?.rows||[];canLimitUnknown=!cached;
+  }
+  const pending=(await localGetAll("cancellations")).filter(x=>String(x.driver_id)===String(ME.id));
+  CAN2=[...CAN_SERVER,...pending.map(x=>({id:x.key,fecha:x.capturado_at,cliente:cedObjById(x.cedis_id)?.cliente_nombre||"Cliente",cedis:cedNameById(x.cedis_id)||"CEDIS",id_ruta:x.id_ruta,estatus:"pendiente",es_mia:true,local:true}))];
+  const today=diaCancelacion(new Date());
+  const myRows=CAN_SERVER.filter(x=>x.es_mia===true||(!("es_mia" in x)&&(!x.driver_id||String(x.driver_id)===String(ME.id))));
+  canUsedToday=myRows.some(x=>diaCancelacion(x.fecha||x.capturado_at)===today)||pending.some(x=>String(x.driver_id)===String(ME.id)&&diaCancelacion(x.capturado_at)===today);
+  updateCancelAvailability();
+  drawCan()
+}
+async function syncPendingCancellations(){
+  if(syncCancelBusy||!ME||!navigator.onLine)return false;
+  syncCancelBusy=true;
+  try{
+    const pending=(await localGetAll("cancellations")).filter(x=>String(x.driver_id)===String(ME.id));
+    for(const record of pending){
+      const path=`${ME.id}/offline-${record.key}.jpg`;
+      const {error:uploadError}=await sb.storage.from("cancelaciones").upload(path,record.blob,{contentType:"image/jpeg",upsert:true});
+      if(uploadError)throw uploadError;
+      const {data:existing,error:lookupError}=await sb.from("cancelaciones").select("id")
+        .eq("driver_id",record.driver_id).eq("capturado_at",record.capturado_at).eq("foto_path",path).maybeSingle();
+      if(lookupError)throw lookupError;
+      if(!existing){
+        const {driver_id,ruta_id,cedis_id,id_ruta,lat,lng,capturado_at}=record;
+        const {error}=await sb.from("cancelaciones").insert({driver_id,ruta_id,cedis_id,id_ruta,lat,lng,capturado_at,foto_path:path});
+        if(error)throw error;
+      }
+      await localDelete("cancellations",record.key);
+    }
+    return true;
+  }catch(error){
+    if(networkError(error)){OFFLINE_MODE=true;setNetStatus("Conexión intermitente · la cancelación y su foto siguen guardadas en este dispositivo.",true)}
+    else{err("canerr",error);setNetStatus("No se pudo sincronizar la cancelación. La foto sigue guardada en este dispositivo.",true)}
+    return false;
+  }finally{syncCancelBusy=false}
+}
+function drawCan(){const L=CAN2.filter(x=>x.es_mia).slice(0,10);
+  $("canlist").innerHTML=L.length?L.map(r=>{const d=new Date(r.fecha),k=estC(r),esp=(r.estatus==="aclaracion"||r.estatus==="rechazada")&&k!==("vencida"),q=r.plazo_vence?cuentaReg(r.plazo_vence):null;
+    const caja=r.local?'<div class="note" style="margin-top:6px;color:#946200">Guardada en este dispositivo; pendiente de sincronización.</div>':esp?`<div class="note" style="margin-top:8px;background:#fff4d6;color:#7a4b00;padding:10px;border-radius:10px"><b>${r.estatus==="aclaracion"?"Chazki te pide una aclaración":"Chazki rechazó tu cancelación"}</b><br>${esc(r.ultimo_mensaje||"")}<br><b>⏱ Te quedan ${q}</b> para ${r.estatus==="aclaracion"?"responder":"apelar"}.<br><button class="btn sm" type="button" data-resp="${esc(r.id)}" style="margin-top:8px">${r.estatus==="aclaracion"?"Responder":"Apelar"}</button></div>`:(k==="vencida"?`<div class="note" style="margin-top:6px;color:#b42318">El plazo de 12 horas venció${r.estatus==="rechazada"?"; la decisión queda firme.":" sin respuesta."}</div>`:"");
+    return `<div class="item" style="display:block"><div style="display:flex;justify-content:space-between;gap:8px"><div><b>${esc(r.cliente)}</b> · ${esc(r.cedis)}<small>${d.toLocaleDateString("es-MX",{weekday:"long",day:"2-digit",month:"2-digit"})} · ${d.toTimeString().slice(0,5)}${esc(r.id_ruta?" · Ruta "+r.id_ruta:"")}</small></div>${pillE(k)}</div>${caja}</div>`}).join(""):'<div class="note">Aún no hay cancelaciones.</div>';
+  document.querySelectorAll("[data-resp]").forEach(b=>b.onclick=()=>abrirRespuesta(+b.dataset.resp))}
+setInterval(()=>{if(CAN2.length)drawCan()},30000);
+function abrirSheet(h){$("sheet").innerHTML=`<div class="sheetbox">${h}</div>`;$("sheet").classList.remove("hide");$("sheet").onclick=e=>{if(e.target.id==="sheet")$("sheet").classList.add("hide")}}
+function abrirRespuesta(id){const r=CAN2.find(x=>x.id===id);if(!r)return;const apela=r.estatus==="rechazada";
+  abrirSheet(`<h2 style="margin:0 0 6px">${apela?"Apelar rechazo":"Responder aclaración"}</h2><div class="note" style="margin-top:0"><b>Mensaje de Chazki:</b><br>${esc(r.ultimo_mensaje||"")}</div><div class="note">⏱ Te quedan ${cuentaReg(r.plazo_vence)||"0 min"}</div>
+   <label>${apela?"Explica por qué la cancelación debe aprobarse":"Tu aclaración"}</label><textarea id="rs-t" rows="4"></textarea>
+   <label>Foto de apoyo (opcional)</label><input type="file" id="rs-f" accept="image/*"><div id="rs-e"></div>
+   <div style="display:flex;gap:8px;margin-top:12px"><button class="btn" id="rs-ok">Enviar</button><button class="btn ghost" id="rs-x">Cancelar</button></div>`);
+  $("rs-x").onclick=()=>$("sheet").classList.add("hide");
+  $("rs-ok").onclick=async()=>{const t=$("rs-t").value.trim();if(!t){$("rs-e").innerHTML='<div class="errbox">Escribe tu respuesta</div>';return}
+    $("rs-ok").disabled=true;let path=null;const f=$("rs-f").files[0];
+    try{if(f){const blob=await comprimir(f);path=`${esc(ME.id)}/aclaracion-${id}-${Date.now()}.jpg`;const up=await sb.storage.from("cancelaciones").upload(path,blob,{contentType:"image/jpeg"});if(up.error)throw up.error}
+      const {error}=await sb.rpc("responder_cancelacion",{p_id:id,p_texto:t,p_foto_path:path});if(error)throw error}
+    catch(e){$("rs-ok").disabled=false;$("rs-e").innerHTML=`<div class="errbox">${esc(e.message||e)}</div>`;return}
+    $("sheet").classList.add("hide");toast(apela?"Apelación enviada ✔":"Aclaración enviada ✔");await loadCan();loadEstatus()}}
+// ---------- Avisos ----------
+async function loadNotifs(){const {data}=await sb.from("notificaciones").select("*").order("creada_en",{ascending:false}).limit(30);NOT=data||[];drawBell()}
+function drawBell(){const n=NOT.filter(x=>!x.leida_en).length;$("bellc").textContent=n>9?"9+":n;$("bellc").classList.toggle("hide",!n)}
+function abrirAvisos(){const f=x=>new Date(x).toLocaleString("es-MX",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"});
+  const perm=("Notification" in window&&Notification.permission==="default")?'<button class="btn ghost sm" id="nt-perm" type="button" style="margin-bottom:8px">Activar avisos del navegador</button>':"";
+  abrirSheet(`<h2 style="margin:0 0 8px">🔔 Avisos</h2>${perm}${NOT.length?NOT.map(n=>`<div class="item" data-nt="${esc(n.id)}" style="display:block;${n.leida_en?"opacity:.6":"background:#f3f0ff;border-radius:10px;padding:10px"}"><b>${esc(n.titulo)}</b>${n.cuerpo?`<small style="display:block">${esc(n.cuerpo)}</small>`:""}<small style="display:block;color:var(--mut)">${f(n.creada_en)}${n.vence_en&&new Date(n.vence_en)>Date.now()?" · vence en "+cuentaReg(n.vence_en):""}</small></div>`).join(""):'<div class="note">Sin avisos.</div>'}`);
+  const pr=$("nt-perm");if(pr)pr.onclick=async()=>{await Notification.requestPermission();abrirAvisos()};
+  document.querySelectorAll("[data-nt]").forEach(el=>el.onclick=()=>{const n=NOT.find(x=>x.id==el.dataset.nt);$("sheet").classList.add("hide");if(n&&n.ref_tipo==="cancelacion")document.querySelector("nav button[data-t=can]").click();if(n&&n.ref_tipo==="cambio_perfil")document.querySelector("nav button[data-t=per]").click()});
+  sb.rpc("marcar_notificaciones_leidas",{p_ids:null}).then(()=>{NOT.forEach(n=>n.leida_en=n.leida_en||new Date().toISOString());drawBell()})}
+$("bell").onclick=abrirAvisos;
+function suscribirAvisos(){loadNotifs();setInterval(loadNotifs,60000);
+  setInterval(()=>{if(navigator.onLine)loadPnrs()},60000);
+  sb.channel("avisos-"+ME.id).on("postgres_changes",{event:"INSERT",schema:"public",table:"notificaciones",filter:"usuario=eq."+ME.id},p=>{NOT.unshift(p.new);drawBell();toast("🔔 "+p.new.titulo);
+    if("Notification" in window&&Notification.permission==="granted")try{new Notification(p.new.titulo,{body:p.new.cuerpo||""})}catch(e){}
+    if(p.new.tipo&&p.new.tipo.startsWith("cancelacion"))loadCan().then(loadEstatus)}).subscribe()}
+
+// ---------- Ganancias ----------
+let PAGOS=[],gp="sem";
+async function loadGan(){
+  // Un driver que pertenece a un flotillero no ve los pagos: los ve su transportista
+  if(!ACC.puede_ver_ganancias){$("t-gan").innerHTML='<div class="card"><h2>💰 Tus pagos</h2><div class="note" style="font-size:14px;margin-top:0">Los pagos de tus servicios los recibe y consulta tu transportista. Si tienes dudas sobre un pago, habla con él.</div></div><div class="card"><h2>Mis rutas y cancelaciones</h2><div id="gest"></div></div>';$("t-gan").insertAdjacentHTML("afterbegin",'<div id="gkpi-w"><div class="card" id="gkpi"></div></div>');loadEstatus();return}
+  loadEstatus();
+  const d=new Date();d.setDate(d.getDate()-62);
+  const sel=ACC.es_flotillero?"*,drivers(nombre),rutas(id_ruta)":"*";
+  const q=sb.from("pagos").select(sel).gte("fecha",d.toLocaleDateString("en-CA")).order("fecha",{ascending:false});
+  const {data}=ACC.es_flotillero?await q:await q.eq("driver_id",ME.id);PAGOS=data||[];drawG()}
+let RUTAS_K=[],CANS_K=[],kp="sem",PNRS=[],PNR_DISCOUNTS={},PNR_ERROR="",PNR_SEEN=false;
+function rangoK(p,prev){const n=new Date();let a,b;
+  if(p==="sem"){a=monday(n);if(prev)a.setDate(a.getDate()-7);b=new Date(a);b.setDate(b.getDate()+7)}
+  else{a=new Date(n.getFullYear(),n.getMonth()-(prev?1:0),1);b=new Date(a.getFullYear(),a.getMonth()+1,1)}return [a,b]}
+function statsK(p,prev){const [a,b]=rangoK(p,prev),ok=x=>{const d=new Date(x);return d>=a&&d<b};
+  const R=RUTAS_K.filter(x=>ok(x.fecha)&&x.estatus!=="en_curso"),C=CANS_K.filter(x=>ok(x.fecha));
+  const asg=R.reduce((s,x)=>s+(x.asignados||0),0),ent=R.reduce((s,x)=>s+(x.entregados||0),0),fal=R.reduce((s,x)=>s+(x.fallidos||0),0);
+  const dias=new Set(R.map(x=>new Date(x.fecha).toDateString())).size;
+  const tt=R.filter(x=>x.checkout).map(x=>new Date(x.checkout)-new Date(x.fecha)).filter(x=>x>0);
+  return {R,C,asg,ent,fal,dias,ef:asg?ent/asg:null,prom:tt.length?tt.reduce((s,x)=>s+x,0)/tt.length:null,apr:R.filter(x=>x.estatus==="aprobada").length,inc:R.filter(x=>x.incidencias).length}}
+function drawKpi(){const box=$("gkpi");if(!box)return;const s=statsK(kp,false),q=statsK(kp,true);
+  const pct=v=>v==null?"—":Math.round(v*100)+"%",hm=ms=>{if(ms==null)return"—";const m=Math.round(ms/60000);return Math.floor(m/60)+" h "+String(m%60).padStart(2,"0")+" min"};
+  const dl=(a,b,pts)=>{if(a==null||b==null)return"";const d=pts?Math.round((a-b)*100):a-b;if(!d)return'<small style="color:var(--mut)">= que el periodo anterior</small>';const up=d>0;return `<small style="color:${up?"#0f7a3d":"#b42318"}">${up?"▲":"▼"} ${Math.abs(d)}${pts?" pts":""} vs. anterior</small>`};
+  const ef=s.ef,col=ef==null?"var(--mut)":ef>=0.9?"#0f7a3d":ef>=0.8?"#946200":"#b42318";
+  const T=(l,v,x="",c="")=>`<div style="background:#f6f7fb;border-radius:12px;padding:10px"><div style="font-size:12px;color:var(--mut)">${l}</div><div style="font-size:22px;font-weight:800;${c?"color:"+c:""}">${v}</div>${x}</div>`;
+  let por="";if(ACC&&ACC.es_flotillero){const m={};s.R.forEach(x=>{const k=x.driver||"—";(m[k]=m[k]||{n:0,a:0,e:0}).n++;m[k].a+=x.asignados||0;m[k].e+=x.entregados||0});
+    por=`<h3 style="margin:14px 0 4px">Por driver</h3>`+(Object.entries(m).map(([k,v])=>`<div class="item"><span>${esc(k)}</span><b>${esc(v.n)} ${v.n===1?"ruta":"rutas"} · ${pct(v.a?v.e/v.a:null)}</b></div>`).join("")||'<div class="note">Sin rutas en este periodo.</div>')}
+  box.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">📊 Desempeño</h2><div class="seg" id="kseg" style="margin:0;width:150px"><button class="${kp==="sem"?"on":""}" data-k="sem">Semana</button><button class="${kp==="mes"?"on":""}" data-k="mes">Mes</button></div></div>
+   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">${T("Efectividad",pct(ef),dl(s.ef,q.ef,true),col)}${T("Rutas",s.R.length,dl(s.R.length,q.R.length,false))}${T("Entregados",s.ent,`<small style="color:var(--mut)">de ${esc(s.asg)} asignados</small>`)}${T("Fallidos",s.fal)}${T("Cancelaciones",s.C.length)}${T("Aprobadas",s.apr,`<small style="color:var(--mut)">de ${esc(s.R.length)} rutas</small>`)}</div>
+   <div class="item" style="margin-top:8px"><span>Días trabajados</span><b>${esc(s.dias)}</b></div><div class="item"><span>Tiempo promedio por ruta</span><b>${hm(s.prom)}</b></div><div class="item"><span>Rutas con incidencias</span><b>${esc(s.inc)}</b></div>${por}`;
+  box.querySelectorAll("#kseg button").forEach(b=>b.onclick=()=>{kp=b.dataset.k;drawKpi()})}
+let DRVS=[],BAJAS=[],dp="sem",dopen={},dform=null;
+async function loadDrivers(){
+  const [d,r,c,b]=await Promise.all([sb.from("drivers").select("id,nombre,codigo,estatus,telefono").neq("id",ME.id).order("nombre"),sb.rpc("mis_rutas_estatus"),sb.rpc("mis_cancelaciones_estatus"),sb.from("bajas_solicitudes").select("*").order("solicitado_en",{ascending:false})]);
+  DRVS=d.data||[];RUTAS_K=r.data||RUTAS_K;CANS_K=c.data||CANS_K;BAJAS=b.data||[];drawDrivers()}
+function drawDrivers(){
+  const box=$("drbox");if(!box)return;const pct=v=>v==null?"—":Math.round(v*100)+"%";
+  const [a,z]=rangoK(dp,false),ok=x=>{const t=new Date(x);return t>=a&&t<z};
+  const f=x=>new Date(x).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
+  const cards=DRVS.map(d=>{
+    const R=RUTAS_K.filter(x=>x.driver_id===d.id),Rp=R.filter(x=>ok(x.fecha)&&x.estatus!=="en_curso"),C=CANS_K.filter(x=>x.driver===d.nombre&&ok(x.fecha));
+    const asg=Rp.reduce((s,x)=>s+(x.asignados||0),0),ent=Rp.reduce((s,x)=>s+(x.entregados||0),0),fal=Rp.reduce((s,x)=>s+(x.fallidos||0),0);
+    const bj=BAJAS.find(x=>x.driver_id===d.id),pend=bj&&bj.estatus==="pendiente",rech=bj&&bj.estatus==="rechazada",activo=String(d.estatus||"").toLowerCase()==="activo";
+    const ck=(v)=>v?"✅":"⏳";
+    const estado=pend?`<div class="note" style="margin-top:8px;background:#e3ecff;color:#1d4ed8;padding:8px;border-radius:10px"><b>Desactivación solicitada</b> · ${f(bj.solicitado_en)}<br>Supervisor ${ck(bj.aprob_supervisor)} · Coordinador ${ck(bj.aprob_coord)}</div>`:(!activo?`<div class="note" style="margin-top:8px;color:#b42318">Driver desactivado · su historial se conserva</div>`:(rech?`<div class="note" style="margin-top:8px;color:#b42318">Última solicitud de desactivación: rechazada (${f(bj.resuelto_en)})</div>`:""));
+    const lista=dopen[d.id]?(R.slice(0,8).map(x=>`<div class="item"><div><b>Ruta ${esc(x.id_ruta)}</b><small>${f(x.fecha)} · ${esc(x.cliente)} · ${x.entregados==null?"—":x.entregados}/${esc(x.asignados)}</small></div>${pillE(x.estatus)}</div>`).join("")||'<div class="note">Sin rutas recientes.</div>'):"";
+    const form=dform===d.id?`<div style="margin-top:10px"><label>Motivo de la desactivación</label><textarea id="bj-m" rows="2" placeholder="Indica por qué se desactivará al driver"></textarea><div id="bj-e" class="note" style="color:#b42318"></div><div style="display:flex;gap:8px;margin-top:8px"><button class="btn" data-bjok="${esc(d.id)}">Enviar solicitud</button><button class="btn ghost" data-bjx="1">Cancelar</button></div><div class="note" style="margin-top:6px">Requiere autorización del supervisor y del coordinador de Chazki. Se conserva el perfil y todo su historial.</div></div>`:"";
+    return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h2 style="margin:0">${esc(d.nombre)}</h2><small style="color:var(--mut)">${esc(d.codigo||"")}${esc(d.telefono?" · "+d.telefono:"")}</small></div>${pillE(activo?"aprobada":"rechazada").replace(/Aprobada/,"Activo").replace(/Rechazada/,"Inactivo")}</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px;text-align:center"><div><b style="font-size:18px">${esc(Rp.length)}</b><br><small>Rutas</small></div><div><b style="font-size:18px">${pct(asg?ent/asg:null)}</b><br><small>Efect.</small></div><div><b style="font-size:18px">${fal}</b><br><small>Fallidos</small></div><div><b style="font-size:18px">${esc(C.length)}</b><br><small>Cancel.</small></div></div>
+      <div style="display:flex;gap:8px;margin-top:10px"><button class="btn ghost" data-dv="${esc(d.id)}">${dopen[d.id]?"Ocultar rutas":"Ver rutas"}</button>${pend?"":activo?`<button class="btn ghost" data-bj="${esc(d.id)}" style="color:#b42318">Solicitar desactivación</button>`:`<button class="btn ghost" data-reactivar="${esc(d.id)}">Reactivar driver</button>`}</div>${estado}${lista}${form}</div>`}).join("");
+  box.innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">🚚 Mis drivers (${esc(DRVS.length)})</h2><div class="seg" id="dseg" style="margin:0;width:150px"><button class="${dp==="sem"?"on":""}" data-p="sem">Semana</button><button class="${dp==="mes"?"on":""}" data-p="mes">Mes</button></div></div></div>${esc(cards||'<div class="card"><div class="note">Aún no tienes drivers en tu flotilla.</div></div>')}`;
+  box.querySelectorAll("#dseg button").forEach(b=>b.onclick=()=>{dp=b.dataset.p;drawDrivers()});
+  box.querySelectorAll("[data-dv]").forEach(b=>b.onclick=()=>{dopen[b.dataset.dv]=!dopen[b.dataset.dv];drawDrivers()});
+  box.querySelectorAll("[data-bj]").forEach(b=>b.onclick=()=>{dform=b.dataset.bj;drawDrivers()});
+  box.querySelectorAll("[data-bjx]").forEach(b=>b.onclick=()=>{dform=null;drawDrivers()});
+  box.querySelectorAll("[data-reactivar]").forEach(b=>b.onclick=async()=>{b.disabled=true;const {error}=await sb.rpc("reactivar_driver",{p_driver_id:b.dataset.reactivar});if(error){toast(error.message);b.disabled=false;return}await loadDrivers()});
+  box.querySelectorAll("[data-bjok]").forEach(b=>b.onclick=async()=>{const m=$("bj-m").value.trim();if(!m){$("bj-e").textContent="Escribe el motivo";return}
+    b.disabled=true;const {error}=await sb.rpc("solicitar_baja_driver",{p_driver_id:b.dataset.bjok,p_motivo:m});if(error){$("bj-e").textContent=error.message;b.disabled=false;return}
+    dform=null;await loadDrivers()})}
+const EST={por_validar:["Por validar","#946200","#fff4d6"],en_revision:["En revisión","#1d4ed8","#e3ecff"],aprobada:["Aprobada","#0f7a3d","#dff5e6"],rechazada:["Rechazada","#b42318","#fde4e1"],en_curso:["En curso","#555b7a","#ececf4"],aclaracion:["Aclaración solicitada","#7a4b00","#ffe9b8"],respondida:["Respondida · en revisión","#1d4ed8","#e3ecff"],apelada:["Apelada · en revisión","#1d4ed8","#e3ecff"],vencida:["Plazo vencido","#b42318","#fde4e1"]};
+const pillE=k=>{const e=EST[k]||EST.por_validar;return `<span style="background:${e[2]};color:${e[1]};font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;white-space:nowrap">${e[0]}</span>`};
+async function loadEstatus(){
+  const box=$("gest");if(!box)return;
+  const [r,c]=await Promise.all([sb.rpc("mis_rutas_estatus"),sb.rpc("mis_cancelaciones_estatus")]);
+  RUTAS_K=r.data||[];CANS_K=c.data||[];drawKpi();
+  const fl=ACC.es_flotillero,f=x=>new Date(x).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
+  const rows=(r.data||[]).map(x=>`<div class="item"><div><b>Ruta ${esc(x.id_ruta)}</b><small>${f(x.fecha)} · ${esc(x.cliente)} · ${esc(x.cedis)}${esc(fl?" · "+x.driver:"")} · ${x.entregados==null?"—":x.entregados}/${esc(x.asignados)}</small></div>${pillE(x.estatus)}</div>`).join("");
+  const can=(c.data||[]).map(x=>`<div class="item"><div><b>Cancelación${esc(x.id_ruta?" · Ruta "+x.id_ruta:"")}</b><small>${f(x.fecha)} · ${esc(x.cliente)} · ${esc(x.cedis)}${esc(fl?" · "+x.driver:"")}</small></div>${pillE(estC(x))}</div>`).join("");
+  box.innerHTML=`<h3 style="margin:4px 0">Rutas</h3>${rows||'<div class="note">Aún no tienes rutas.</div>'}<h3 style="margin:14px 0 4px">Cancelaciones</h3>${can||'<div class="note">Aún no tienes cancelaciones.</div>'}`}
+const parseF=s=>{const [y,m,d]=s.split("-");return new Date(+y,m-1,+d)};
+const monday=d=>{const x=new Date(d);x.setHours(0,0,0,0);x.setDate(x.getDate()-((x.getDay()+6)%7));return x};
+function drawG(){
+  const hoy=new Date(),lm=monday(hoy);let xs,vals,sel;
+  if(gp==="sem"){xs=["L","M","X","J","V","S","D"];vals=Array(7).fill(0);sel=PAGOS.filter(p=>monday(parseF(p.fecha)).getTime()===lm.getTime());sel.forEach(p=>vals[(parseF(p.fecha).getDay()+6)%7]+=+p.monto)}
+  else{const y=hoy.getFullYear(),m=hoy.getMonth();xs=["S1","S2","S3","S4","S5"];vals=Array(5).fill(0);sel=PAGOS.filter(p=>{const f=parseF(p.fecha);return f.getFullYear()===y&&f.getMonth()===m});sel.forEach(p=>vals[Math.min(4,Math.floor((parseF(p.fecha).getDate()-1)/7))]+=+p.monto)}
+  const tot=vals.reduce((a,b)=>a+b,0),mx=Math.max(...vals,1);
+  $("glabel").textContent=gp==="sem"?"Ganancias de la semana":"Ganancias del mes";$("gtot").textContent=fmt(tot);
+  $("gsub").textContent=`${sel.filter(p=>p.concepto==="servicio").length} servicios pagados`;
+  $("bars").innerHTML=vals.map((v,i)=>`<div><span>${v?fmt(v):""}</span><b style="height:${Math.max(3,v/mx*100)}%"></b>${xs[i]}</div>`).join("");
+  const by=c=>sel.filter(p=>p.concepto===c).reduce((a,p)=>a+ +p.monto,0);
+  $("gdes").innerHTML=[["Servicios","servicio"],["Bonos","bono"],["Propinas","propina"],["Ajustes","ajuste"]].map(([l,c])=>`<div class="item"><span>${l}</span><b>${fmt(by(c))}</b></div>`).join("");
+  $("gflota").classList.toggle("hide",!ACC.es_flotillero);
+  if(ACC.es_flotillero){const m={};sel.forEach(p=>{const n=p.drivers?p.drivers.nombre:"—";m[n]=(m[n]||0)+ +p.monto});
+    $("gflo").innerHTML=Object.entries(m).sort((a,b)=>b[1]-a[1]).map(([n,v])=>`<div class="item"><span>${n}</span><b>${fmt(v)}</b></div>`).join("")||'<div class="note">Sin pagos en este periodo.</div>'}
+  $("gpag").innerHTML=PAGOS.length?PAGOS.slice(0,ACC.es_flotillero?15:8).map(p=>`<div class="item"><div>${p.concepto[0].toUpperCase()+p.concepto.slice(1)}${esc(ACC.es_flotillero&&p.drivers?" · "+p.drivers.nombre:"")}<small>${parseF(p.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short"})}${esc(p.rutas?" · Ruta "+p.rutas.id_ruta:"")}</small></div><div style="text-align:right"><b>${fmt(p.monto)}</b><small><span class="pill ${p.estatus==="pagado"?"ok":"w"}">${esc(p.estatus)}</span></small></div></div>`).join(""):'<div class="note">Aún no tienes pagos registrados.</div>';
+}
+document.querySelectorAll("#gseg button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#gseg button").forEach(x=>x.classList.toggle("on",x===b));gp=b.dataset.p;drawG()});
+
+const PNR_ESTADOS={
+  esperando_driver:["Pendiente de tu respuesta","w"],
+  revision:["En revisión por Operaciones","w"],
+  esperando_soporte:["Soporte adicional solicitado","bad"],
+  cerrada_sin_cargo:["Cerrado · sin descuento","ok"],
+  cerrada_con_cargo:["Cerrado · descuento aplicado","bad"]
+};
+const fechaPnR=value=>value?new Date(value).toLocaleString("es-MX",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
+const fmtPnR=value=>"$"+Number(value||0).toLocaleString("es-MX",{minimumFractionDigits:2,maximumFractionDigits:2});
+async function loadPnrs(){
+  if(!navigator.onLine){PNR_ERROR="El seguimiento de PNR requiere conexión a internet.";drawPnrs();return}
+  const [claims,discounts]=await Promise.all([
+    sb.from("pnr_reclamos").select("*,pnr_reclamo_eventos(*)").eq("driver_id",ME.id).order("creado_en",{ascending:false}),
+    sb.from("pnr_descuentos").select("reclamo_id,saldo_pendiente,monto_aplicado").eq("driver_id",ME.id)
+  ]);
+  if(claims.error){PNR_ERROR="No se pudieron cargar tus reclamos. Verifica que Operaciones haya habilitado el módulo PNR: "+claims.error.message;PNRS=[];drawPnrs();return}
+  if(discounts.error){PNR_ERROR="No se pudo cargar el estado de tus descuentos: "+discounts.error.message;PNR_DISCOUNTS={}}
+  else PNR_DISCOUNTS=Object.fromEntries((discounts.data||[]).map(x=>[x.reclamo_id,x]));
+  const previousPnrs=PNRS;PNRS=claims.data||[];PNR_ERROR="";
+  if(PNR_SEEN){
+    const known=new Set(previousPnrs.map(x=>x.id));
+    const incoming=PNRS.filter(x=>!known.has(x.id));
+    if(incoming.length){
+      toast(incoming.length===1?"🔔 Tienes un nuevo reclamo PNR. Revisa tu plazo de respuesta.":`🔔 Tienes ${incoming.length} nuevos reclamos PNR.`);
+      if("Notification" in window&&Notification.permission==="granted")try{new Notification("Nuevo reclamo PNR",{body:"Revisa los detalles y responde dentro de las 24 horas."})}catch(e){}
+    }
+  }
+  PNR_SEEN=true;
+  const paths=PNRS.flatMap(x=>(x.pnr_reclamo_eventos||[]).flatMap(e=>e.adjuntos||[]));
+  if(paths.length){
+    const {data,error}=await sb.storage.from("pnr-evidence").createSignedUrls(paths,3600);
+    if(error){PNR_ERROR="No se pudieron abrir algunas evidencias: "+error.message}
+    else{
+      const urls=Object.fromEntries((data||[]).filter(x=>x.signedUrl).map(x=>[x.path,x.signedUrl]));
+      PNRS=PNRS.map(x=>({...x,pnr_reclamo_eventos:(x.pnr_reclamo_eventos||[]).map(e=>({...e,urls:(e.adjuntos||[]).map(path=>({path,url:urls[path]})).filter(x=>x.url)}))}));
+    }
+  }
+  drawPnrs();
+}
+function drawPnrs(){
+  const errorBox=$("pnr-error"),list=$("pnr-list");
+  if(!errorBox||!list)return;
+  err("pnr-error",PNR_ERROR?new Error(PNR_ERROR):null);
+  list.innerHTML=PNRS.length?PNRS.map(claim=>{
+    const [label,style]=PNR_ESTADOS[claim.estado]||["Estatus desconocido","w"];
+    const events=(claim.pnr_reclamo_eventos||[]).slice().sort((a,b)=>new Date(a.creado_en)-new Date(b.creado_en));
+    const canRespond=["esperando_driver","esperando_soporte"].includes(claim.estado)&&claim.vence_en&&new Date(claim.vence_en)>Date.now();
+    const discount=PNR_DISCOUNTS[claim.id];
+    return `<article class="card" style="border:1px solid var(--line);box-shadow:none">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><b>PNR ${esc(claim.pnr)}</b><span class="pill ${style}">${esc(label)}</span></div>
+      <div class="note">Cliente: <b>${esc(claim.cliente)}</b>${claim.ruta_id?` · Ruta: ${esc(claim.ruta_id)}`:""}<br>Recibido: ${esc(fechaPnR(claim.creado_en))} · Importe del reclamo: <b>${esc(fmtPnR(claim.monto))}</b><br>${canRespond?`Responde antes del: <b>${esc(fechaPnR(claim.vence_en))}</b>`:claim.estado==="esperando_driver"||claim.estado==="esperando_soporte"?"El plazo venció; el reclamo se cerrará automáticamente.":""}</div>
+      ${discount?`<div class="item"><span>Descuento del reclamo</span><b>${esc(fmtPnR(discount.monto_aplicado))} aplicado · ${esc(fmtPnR(discount.saldo_pendiente))} pendiente de próximas liquidaciones</b></div>`:""}
+      <h3>Línea del tiempo</h3>${events.map(event=>`<div class="item" style="display:block"><b>${esc(pnrEventLabel(event.tipo))}</b><small style="display:block">${esc(fechaPnR(event.creado_en))}${event.actor_email?" · "+esc(event.actor_email):""}</small>${event.mensaje?`<div style="white-space:pre-wrap;margin-top:5px">${esc(event.mensaje)}</div>`:""}${(event.urls||[]).length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${event.urls.map((file,i)=>`<a href="${esc(file.url)}" target="_blank" rel="noopener">Evidencia ${i+1}</a>`).join("")}</div>`:""}</div>`).join("")||'<div class="note">Aún no hay movimientos.</div>'}
+      ${canRespond?`<label for="pnr-msg-${esc(claim.id)}">${claim.estado==="esperando_soporte"?"Respuesta con soporte adicional":"Tu respuesta o apelación"}</label>
+      <textarea id="pnr-msg-${esc(claim.id)}" rows="3" maxlength="5000" placeholder="Explica lo ocurrido y agrega la información relevante"></textarea>
+      <label for="pnr-files-${esc(claim.id)}">Imágenes de evidencia (opcional, máximo 5)</label><input id="pnr-files-${esc(claim.id)}" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+      <button class="btn" data-pnr-send="${esc(claim.id)}">Enviar respuesta</button>`:""}
+    </article>`;
+  }).join(""):'<div class="note">No tienes PNR ni penalizaciones registrados.</div>';
+  list.querySelectorAll("[data-pnr-send]").forEach(button=>button.onclick=()=>responderPnR(button.dataset.pnrSend,button));
+}
+function pnrEventLabel(type){
+  return ({creado:"Reclamo generado por Operaciones",respuesta_driver:"Primera respuesta del driver",solicitud_soporte:"Operaciones solicitó soporte adicional",evidencia_adicional:"Soporte adicional enviado",evidencia_aceptada:"Evidencia aceptada · reclamo cerrado sin cargo",evidencia_rechazada:"Evidencia insuficiente · reclamo cerrado con cargo",vencido:"Plazo vencido · reclamo cerrado con cargo",descuento_aplicado:"Descuento aplicado a liquidación"})[type]||type;
+}
+async function responderPnR(id,button){
+  const message=$("pnr-msg-"+id).value.trim(),files=[...$("pnr-files-"+id).files];
+  if(!message&&!files.length){$("pnr-error").innerHTML='<div class="errbox">Escribe una respuesta o adjunta al menos una imagen.</div>';return}
+  if(files.length>5||files.some(file=>file.size>10*1024*1024||!["image/jpeg","image/png","image/webp"].includes(file.type))){
+    $("pnr-error").innerHTML='<div class="errbox">Adjunta hasta 5 imágenes JPEG, PNG o WebP de máximo 10 MB cada una.</div>';return
+  }
+  button.disabled=true;err("pnr-error",null);const paths=[];let submitted=false;
+  try{
+    for(const file of files){
+      const ext=file.type==="image/jpeg"?"jpg":file.type==="image/png"?"png":"webp";
+      const path=`${ME.id}/${crypto.randomUUID()}.${ext}`;
+      const {error}=await sb.storage.from("pnr-evidence").upload(path,file,{contentType:file.type,upsert:false});
+      if(error)throw error;paths.push(path);
+    }
+    const {error}=await sb.rpc("responder_reclamo_pnr",{p_reclamo_id:id,p_mensaje:message||"Se adjunta evidencia.",p_adjuntos:paths});
+    if(error)throw error;
+    submitted=true;
+    toast("Respuesta enviada a Operaciones");await loadPnrs();
+  }catch(error){
+    let cleanupError=null;
+    if(!submitted&&paths.length){const result=await sb.storage.from("pnr-evidence").remove(paths);cleanupError=result.error}
+    err("pnr-error",new Error((submitted?"La respuesta quedó enviada, pero no se pudo actualizar la vista: ":"")+(error.message||error)+(cleanupError?` · No se pudieron limpiar archivos temporales: ${cleanupError.message}`:"")));
+    button.disabled=false;
+  }
+}
+
+// ---------- Perfil ----------
+async function loadPerfil(){
+  const [v,l,d]=await Promise.all([sb.from("vehiculos").select("*").eq("driver_id",ME.id).eq("activo",true).maybeSingle(),sb.from("licencias").select("*").eq("driver_id",ME.id).maybeSingle(),sb.from("drivers").select("*").eq("id",ME.id).single()]);
+  DRIVER=d.data||DRIVER;  VEHICULO=v.data;const V=VEHICULO,L=l.data;
+  $("pnom").textContent=DRIVER.nombre;$("pcod").textContent=DRIVER.codigo||"—";$("pmail").textContent=ME.email;
+  $("vpl").textContent=V?V.placas:"Sin registrar";$("vtp").textContent=V?V.tipo:"—";$("vmm").textContent=(V&&V.marca_modelo)||"—";
+  $("lnum").textContent=(L&&L.numero)||"Sin registrar";$("ltip").textContent=(L&&L.tipo)||"—";
+  $("lvig").textContent=L&&L.vigencia?parseF(L.vigencia).toLocaleDateString("es-MX"):"—";
+  $("utel").value=DRIVER.telefono||"";$("ucorreo").value=DRIVER.correo_contacto||"";
+  const cached=await localGet("cache",ME.id);
+  if(cached)await localPut("cache",{...cached,vehicle:VEHICULO});
+  await loadDocs();
+}
+$("save-contact").onclick=async()=>{
+  err("contact-err",null);
+  const correo=$("ucorreo").value.trim().toLowerCase();
+  if(correo&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(correo)){err("contact-err",new Error("Escribe un correo de contacto válido."));return}
+  const button=$("save-contact");button.disabled=true;
+  const {error}=await sb.rpc("actualizar_contacto_driver",{p_telefono:$("utel").value.trim()||null,p_correo_contacto:correo||null});
+  button.disabled=false;
+  if(error){err("contact-err",error);return}
+  toast("Datos de contacto guardados ✔");
+};
+const DOC_TIPOS=[
+  {k:"seguro",n:"Seguro del vehículo",ic:"🛡️"},
+  {k:"licencia",n:"Licencia de conducir",ic:"🪪"},
+  {k:"tarjeta",n:"Tarjeta de circulación",ic:"🚗"},
+  {k:"ine",n:"INE",ic:"🆔"}
+];
+let DOCS=[],DOC_ALERTS=[];
+const docTypeName=k=>(DOC_TIPOS.find(x=>x.k===k)||{}).n||k;
+function diasVencimiento(value){
+  if(!value)return null;
+  const today=new Date(),start=new Date(today.getFullYear(),today.getMonth(),today.getDate());
+  const expiry=new Date(`${value}T00:00:00`);
+  return Number.isNaN(expiry.getTime())?null:Math.floor((expiry-start)/86400000);
+}
+function estadoDoc(d){
+  if(!d)return {txt:"Sin registrar",cls:"w",dias:null};
+  const dias=diasVencimiento(d.vigencia);
+  if(dias===null)return {txt:"Sin vigencia",cls:"w",dias:null};
+  if(dias<0)return {txt:`Vencido hace ${-dias} ${dias===-1?"día":"días"}`,cls:"bad",dias};
+  if(dias<=15)return {txt:`Vence en ${dias} ${dias===1?"día":"días"}`,cls:"bad",dias};
+  if(dias<=30)return {txt:`Vence en ${dias} días`,cls:"w",dias};
+  return {txt:"Vigente",cls:"ok",dias};
+}
+async function loadDocs(){
+  const {data,error}=await sb.from("driver_documents").select("id,driver_id,tipo,storage_path,vigencia,estado,origen,creado_en,nota").eq("driver_id",ME.id).order("creado_en",{ascending:false});
+  if(error){DOCS=[];$("docs-note").textContent="No se pudieron cargar los documentos. Verifica que esté instalada la configuración de documentos en Supabase: "+error.message;drawDocs();return}
+  DOCS=data||[];
+  const paths=DOCS.map(x=>x.storage_path).filter(Boolean);
+  if(paths.length){
+    const {data:urls,error:urlError}=await sb.storage.from("driver-documents").createSignedUrls(paths,3600);
+    if(urlError){$("docs-note").textContent="No se pudieron abrir los archivos: "+urlError.message}
+    else DOCS=DOCS.map(x=>({...x,url:(urls||[]).find(y=>y.path===x.storage_path)?.signedUrl||null}));
+  }
+  const {data:alerts,error:alertError}=await sb.from("driver_document_alerts").select("id,driver_document_id,alert_date,message").eq("driver_id",ME.id).order("alert_date",{ascending:false}).limit(30);
+  DOC_ALERTS=alertError?[]:alerts||[];
+  if(alertError)$("docs-note").textContent="No se pudieron cargar las alertas: "+alertError.message;
+  drawDocs();
+}
+function drawDocs(){
+  const alerts=[];
+  $("docs-list").innerHTML=DOC_TIPOS.map(t=>{
+    const approved=DOCS.find(x=>x.tipo===t.k&&x.estado==="aprobado");
+    const pending=DOCS.find(x=>x.tipo===t.k&&x.estado==="pendiente");
+    const lastRejected=DOCS.find(x=>x.tipo===t.k&&x.estado==="rechazado");
+    const state=estadoDoc(approved);
+    if(approved&&state.dias!==null&&state.dias<=15&&!pending)alerts.push({cls:"bad",text:`${t.n}: ${state.txt.toLowerCase()}. Sube el reemplazo para dejar de recibir alertas.`});
+    const date=approved?.vigencia?new Date(`${approved.vigencia}T00:00:00`).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"}):"";
+    return `<div class="doc"><div class="ic">${esc(t.ic)}</div><div class="info"><b>${esc(t.n)}</b>
+      <small>${approved?`Vigencia hasta ${esc(date)}`:"Aún no hay un documento autorizado"}</small>
+      <span class="pill ${approved?state.cls:"w"}" style="margin-top:6px">${approved?esc(state.txt):"Sin registrar"}</span>
+      ${pending?`<small class="pill w" style="display:inline-block;margin-top:5px">Actualización enviada · en espera de Operaciones</small>`:""}
+      ${lastRejected?`<small class="pill bad" style="display:inline-block;margin-top:5px">Último archivo rechazado${lastRejected.nota?`: ${esc(lastRejected.nota)}`:""}</small>`:""}
+      </div><div class="act">${approved?.url?`<a href="${esc(approved.url)}" target="_blank" rel="noopener">Ver</a>`:""}<button data-docsub="${esc(t.k)}" ${pending?"disabled":""}>${pending?"En revisión":"Actualizar"}</button></div></div>`;
+  }).join("");
+  const today=new Date().toLocaleDateString("en-CA");
+  const todayAlerts=DOC_ALERTS.filter(x=>{
+    if(x.alert_date!==today)return false;
+    const alertDoc=DOCS.find(d=>d.id===x.driver_document_id);
+    return alertDoc&&!DOCS.some(d=>d.tipo===alertDoc.tipo&&d.estado==="pendiente");
+  });
+  $("docs-banner").innerHTML=alerts.map(a=>`<div class="alerta ${a.cls}">⚠️ ${esc(a.text)}</div>`).join("")+
+    todayAlerts.map(a=>`<div class="alerta bad">⛔ ${esc(a.message)}</div>`).join("");
+  document.querySelector("nav button[data-t=per]").classList.toggle("alerta-dot",alerts.length>0||todayAlerts.length>0);
+  $("docs-note").textContent="Los documentos se guardan de forma privada. La fecha que indiques se envía junto con el archivo y Operaciones debe aprobarla antes de reemplazar el documento vigente.";
+  document.querySelectorAll("[data-docsub]").forEach(b=>b.onclick=()=>abrirCargaDocumento(b.dataset.docsub));
+  if(todayAlerts.length&&"Notification" in window&&Notification.permission==="granted"){
+    const key=`doc-alert-${ME.id}-${today}`;
+    if(localStorage.getItem(key)!=="1"){
+      new Notification("Vigencia de documentos",{body:todayAlerts.map(x=>x.message).join("\n")});
+      localStorage.setItem(key,"1");
+    }
+  }
+}
+function abrirCargaDocumento(tipo){
+  abrirSheet(`<h2>Actualizar ${esc(docTypeName(tipo))}</h2><label for="doc-date">Fecha de vencimiento</label><input id="doc-date" type="date" required>
+    <label for="doc-file">Archivo (PDF o imagen, máximo 10 MB)</label><input id="doc-file" type="file" accept="image/*,application/pdf" required>
+    <div id="doc-upload-error"></div><div style="display:flex;gap:8px;margin-top:12px"><button class="btn" id="doc-upload">Enviar a Operaciones</button><button class="btn ghost" id="doc-upload-cancel">Cancelar</button></div>`);
+  $("doc-upload-cancel").onclick=()=>$("sheet").classList.add("hide");
+  $("doc-upload").onclick=async()=>{
+    const file=$("doc-file").files[0],vigencia=$("doc-date").value,errorBox=$("doc-upload-error"),button=$("doc-upload");
+    errorBox.innerHTML="";
+    if(!file||!vigencia){errorBox.innerHTML='<div class="errbox">Selecciona el documento y su fecha de vencimiento.</div>';return}
+    if(file.size>10*1024*1024){errorBox.innerHTML='<div class="errbox">El archivo supera el límite de 10 MB.</div>';return}
+    if(!(file.type==="application/pdf"||["image/jpeg","image/png","image/webp"].includes(file.type))){errorBox.innerHTML='<div class="errbox">Solo se aceptan PDF, JPEG, PNG o WebP.</div>';return}
+    button.disabled=true;
+    const extension=(file.name.split(".").pop()||"bin").toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,8)||"bin";
+    const storagePath=`${ME.id}/${tipo}/${crypto.randomUUID()}.${extension}`;
+    const {error:uploadError}=await sb.storage.from("driver-documents").upload(storagePath,file,{contentType:file.type,upsert:false});
+    if(uploadError){button.disabled=false;errorBox.innerHTML=`<div class="errbox">${esc(uploadError.message)}</div>`;return}
+    const {error:insertError}=await sb.from("driver_documents").insert({driver_id:ME.id,tipo,storage_path:storagePath,vigencia,estado:"pendiente",origen:"driver"});
+    if(insertError){
+      const {error:removeError}=await sb.storage.from("driver-documents").remove([storagePath]);
+      button.disabled=false;
+      errorBox.innerHTML=`<div class="errbox">${esc(insertError.message)}${removeError?` · No se pudo limpiar el archivo temporal: ${esc(removeError.message)}`:""}</div>`;
+      return;
+    }
+    $("sheet").classList.add("hide");toast("Documento enviado a Operaciones ✔");await loadDocs();
+  };
+}
+drawDocs();
+
+window.addEventListener("offline",()=>{OFFLINE_MODE=true;setNetStatus("Sin conexión · el check-in, check-out y las fotos se guardarán en este dispositivo.",true)});
+window.addEventListener("online",async()=>{
+  if(!ME)return;
+  const wasOffline=OFFLINE_MODE,routeOk=await syncPendingRoute(),cancelOk=await syncPendingCancellations();
+  if(routeOk&&cancelOk&&wasOffline)location.reload();
+});
+setInterval(async()=>{
+  if(!ME||!navigator.onLine)return;
+  const wasOffline=OFFLINE_MODE,routeOk=await syncPendingRoute(),cancelOk=await syncPendingCancellations();
+  if(routeOk&&cancelOk&&wasOffline)location.reload();
+},20000);
+sb.auth.onAuthStateChange(ev=>{if(ev==="SIGNED_OUT")location.reload()});
+if("serviceWorker" in navigator&&location.protocol.startsWith("http"))navigator.serviceWorker.register("sw.js").catch(()=>{});
+boot().catch(e=>{const message=e&&e.message?e.message:"No se pudo iniciar la app.";setNetStatus(message,true);$("auth").classList.remove("hide");$("amsg").innerHTML=`<div class="errbox">${esc(message)}</div>`});

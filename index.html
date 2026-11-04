@@ -117,6 +117,11 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
       <div><label>ID de ruta</label><input id="rid" placeholder="Ej. R-48213"></div>
     </div>
     <div id="unidad-w" class="hide"><label>Tipo de unidad de la ruta</label><select id="unidad"><option value="">Selecciona…</option><option value="3.5T">3.5 T (BT)</option><option value="OTRA">Otra unidad</option></select></div>
+    <div id="aux-checkin" class="hide">
+      <label>¿Harás esta ruta solo o con auxiliar?</label>
+      <select id="aux-mode"><option value="">Selecciona…</option><option value="solo">La hago solo</option><option value="auxiliar">Viajo con auxiliar</option></select>
+      <div id="aux-checkin-proof" class="hide"><label>Foto donde aparezcas con tu auxiliar antes de salir</label><input id="aux-in-file" type="file" accept="image/*" capture="environment"><img id="aux-in-preview" class="hide" alt="Foto del driver con auxiliar" style="width:100%;max-height:260px;object-fit:contain;border-radius:12px;margin-top:8px"></div>
+    </div>
     <label>Zona(s) que visitarás</label>
     <input id="zinp" placeholder="Escribe una zona y presiona Enter">
     <div class="chips" id="zchips" style="margin-top:8px"></div>
@@ -155,6 +160,7 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
   <div class="card lock" id="s4">
     <h2>4 · Check-out · Fin de ruta</h2>
     <div class="note">Se habilita al terminar los pasos anteriores.</div>
+    <div id="aux-checkout-proof" class="hide"><label>Foto donde aparezcas con tu auxiliar al terminar la ruta</label><input id="aux-out-file" type="file" accept="image/*" capture="environment"><img id="aux-out-preview" class="hide" alt="Foto del driver con auxiliar al checkout" style="width:100%;max-height:260px;object-fit:contain;border-radius:12px;margin-top:8px"></div>
     <div id="manif" class="hide">
       <h3>Manifiestos (obligatorio)</h3>
       <div class="note" style="margin-top:0">Sube las fotos de tus manifiestos antes del check out. Mínimo 1, máximo 10.</div>
@@ -178,11 +184,11 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
 <section class="tab" id="t-can">
   <div class="card">
     <h2>🚫 Cancelación por el cliente</h2>
-    <div class="note" style="margin:0 0 4px">Úsalo cuando llegas y el cliente cancela el servicio. Se guarda foto con marca de agua, ubicación, fecha y hora.</div>
+    <div class="note" style="margin:0 0 4px">Este módulo solamente deberá ser llenado en caso de haber sido cancelado dentro del CEDIS y con autorización de tu supervisor. En caso de detectar inconsistencias en este llenado, podrás ser bloqueado. Se guarda foto con marca de agua, ubicación, fecha y hora.</div>
+    <div id="can-limit" class="note hide"></div>
     <label>Cliente</label><select id="ccli"></select>
     <label>CEDIS / punto</label><select id="ccedis"></select>
     <button class="btn ghost" type="button" id="det2" style="margin-top:8px">📍 Detectar mi ubicación</button><div id="detbox2"></div>
-    <label>ID de ruta (opcional)</label><input id="crid" placeholder="Ej. R-48213">
     <input type="file" id="cfile" accept="image/*" capture="environment" class="hide">
     <button class="btn bad" id="bcam">📷 Tomar foto de evidencia</button>
     <canvas id="cv" class="hide"></canvas>
@@ -207,6 +213,13 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
   <div class="card"><h2>Mis rutas y cancelaciones</h2><div id="gest"></div></div>
 </section>
 
+<section class="tab" id="t-pnr">
+  <div class="card"><h2>📋 Mis PNR y penalizaciones</h2>
+    <div class="note">Aquí puedes revisar cada reclamo, el plazo de respuesta y su historial. Tienes 24 horas desde que se crea para enviar tu primera respuesta. Si Operaciones solicita más soporte, tendrás otras 24 horas. Los casos cerrados no se pueden reabrir.</div>
+    <div id="pnr-error"></div><div id="pnr-list"><div class="note">Cargando reclamos…</div></div>
+  </div>
+</section>
+
 <section class="tab" id="t-dr"><div id="drbox"></div></section>
 <section class="tab" id="t-per">
   <div class="card prof">
@@ -221,25 +234,13 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
     <div class="kv"><span>Vigencia</span><b id="lvig">—</b></div></div>
   <div class="card" id="docs-card"><h2>📄 Mis documentos</h2>
     <div id="docs-banner"></div><div id="docs-list"></div>
-    <input type="file" id="docfile" accept="image/*,application/pdf" class="hide">
-    <button class="btn ghost" id="docs-demo" style="margin-top:10px;font-size:14px;padding:12px">Ver ejemplo del diseño</button>
-    <div class="note" id="docs-note"></div></div>
+    <div class="note" id="docs-note">Los documentos y datos de flota son de solo lectura. Para actualizar uno, adjunta el archivo y su vigencia; Operaciones debe autorizarlo.</div></div>
   <div class="card"><h2>✏️ Actualiza tu información</h2>
-    <label>Teléfono</label><input id="utel" inputmode="tel">
-    <button class="btn ghost" id="btel" style="margin-top:8px">Guardar teléfono</button>
-    <h3 style="margin:18px 0 4px">Datos verificados</h3>
-    <div class="note" style="margin-top:0">Para cuidar tu cuenta, tu nombre, vehículo y licencia los autoriza Chazki. Envía una solicitud y te avisamos cuando se apruebe.</div>
-    <div id="cambio-est"></div>
-    <label>Nombre</label><input id="unom" disabled>
-    <label>Placas</label><input id="upl" disabled>
-    <label>Marca / modelo</label><input id="umm" placeholder="Ej. Nissan Versa 2021" disabled>
-    <label>Tipo de vehículo</label><div class="chips" id="vtypes"></div>
-    <label>Número de licencia</label><input id="ulic" disabled>
-    <label>Tipo de licencia</label><input id="ultip" placeholder="Ej. Tipo A" disabled>
-    <label>Vigencia de licencia</label><input id="uvig" type="date" disabled>
-    <button class="btn" id="bedit" style="margin-top:10px">Solicitar cambio de datos</button>
-    <div id="bform" class="hide"><div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="bsave">Enviar solicitud</button><button class="btn ghost" id="bcancel">Cancelar</button></div></div>
-    <div id="saveerr"></div>
+    <label>Teléfono</label><input id="utel" inputmode="tel" autocomplete="tel">
+    <label>Correo de contacto</label><input id="ucorreo" type="email" inputmode="email" autocomplete="email">
+    <button class="btn ghost" id="save-contact" style="margin-top:8px">Guardar contacto</button>
+    <div id="contact-err"></div>
+    <div class="note">Nombre, vehículo, licencia y documentos provienen de Flota. Solo Operaciones puede autorizar cambios en esos datos.</div>
   </div>
   <button class="btn ghost" id="blogout">Cerrar sesión</button>
 </section>
@@ -250,6 +251,7 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
   <button class="on" data-t="dia"><span class="ic">🗺️</span>Inicia tu día</button>
   <button data-t="can"><span class="ic">🚫</span>Cancelación</button>
   <button data-t="gan"><span class="ic">💰</span>Ganancias</button>
+  <button data-t="pnr"><span class="ic">📋</span>PNR</button>
   <button data-t="dr" id="navdr" class="hide"><span class="ic">🚚</span>Mis drivers</button>
   <button data-t="per"><span class="ic">👤</span>Perfil</button>
 </nav>

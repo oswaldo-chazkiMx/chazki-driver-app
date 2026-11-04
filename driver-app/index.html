@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#4b2fd0">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<title>Chazki Driver</title>
+<style>
+:root{--bg:#f3f4f8;--card:#fff;--ink:#14172b;--mut:#6b7090;--line:#e4e6f0;--pri:#4b2fd0;--pri2:#6b4df5;--ok:#12a36b;--warn:#f59e0b;--bad:#e5484d;--r:16px}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--ink);display:flex;justify-content:center}
+#app{width:100%;max-width:430px;min-height:100vh;background:var(--bg);position:relative;display:flex;flex-direction:column}
+header{background:linear-gradient(135deg,var(--pri),var(--pri2));color:#fff;padding:18px 18px 22px;border-radius:0 0 24px 24px}
+header .row{display:flex;justify-content:space-between;align-items:center}
+header .brand{width:148px;height:40px;object-fit:contain;object-position:left center;display:block}
+header small{opacity:.8}
+body[data-theme="night"]{--bg:#111827;--card:#1d293b;--ink:#edf2ff;--mut:#a8b4ca;--line:#344258;--pri:#718dff;--pri2:#936dff}
+body[data-theme="night"]{background:#0b1220}
+body[data-theme="night"] input,body[data-theme="night"] select,body[data-theme="night"] textarea,body[data-theme="night"] .chip,body[data-theme="night"] .qty button{background:var(--card);color:var(--ink);border-color:var(--line)}
+body[data-theme="night"] nav{background:var(--card);border-color:var(--line)}
+body[data-theme="night"] .seg{background:#263449}
+body[data-theme="night"] .seg button.on{background:#344258;color:var(--ink)}
+body[data-theme="night"] #auth .box,body[data-theme="night"] .sheetbox{background:var(--card);color:var(--ink)}
+body[data-theme="night"] .okbox{background:#123a30;border-color:#1b614f;color:#b5f0d7}
+.net-status{margin:12px 14px 0;padding:9px 12px;border-radius:11px;background:#e8f7ef;color:#11683f;font-size:12px;font-weight:650}
+.net-status.offline{background:#fff2d6;color:#815500}
+.net-status.hide{display:none!important}
+main{flex:1;padding:14px 14px 90px;overflow-y:auto}
+nav{position:fixed;bottom:0;width:100%;max-width:430px;background:#fff;border-top:1px solid var(--line);display:flex;z-index:5}
+nav button{flex:1;border:0;background:none;padding:9px 2px 11px;font-size:11px;color:var(--mut);display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer}
+nav button .ic{font-size:21px}nav button.on{color:var(--pri);font-weight:700}
+.tab{display:none}.tab.on{display:block}
+.card{background:var(--card);border-radius:var(--r);padding:14px;margin-bottom:12px;box-shadow:0 1px 3px rgba(20,23,43,.06)}
+.card h2{font-size:15px;margin:0 0 10px}.card h3{font-size:13px;margin:12px 0 6px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+label{display:block;font-size:12px;color:var(--mut);margin:10px 0 4px}
+input,select,textarea{width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;font-size:15px;background:#fff;color:var(--ink);font-family:inherit}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--pri2);border-color:transparent}
+button.btn{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-weight:700;background:var(--pri);color:#fff;cursor:pointer;margin-top:12px}
+button.btn:disabled{background:#c9cbdb;cursor:not-allowed}
+button.btn.ok{background:var(--ok)}button.btn.bad{background:var(--bad)}button.btn.ghost{background:#eceefb;color:var(--pri)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.avatar{width:64px;height:64px;border-radius:50%;background:#eceefb;display:flex;align-items:center;justify-content:center;font-size:30px}
+.prof{display:flex;gap:14px;align-items:center}
+.kv{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px;gap:10px}
+.kv:last-child{border:0}.kv span:first-child{color:var(--mut)}.kv b{text-align:right}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{padding:9px 13px;border-radius:99px;border:1px solid var(--line);background:#fff;font-size:14px;cursor:pointer;user-select:none}
+.chip.on{background:var(--pri);color:#fff;border-color:var(--pri)}
+.stepper{display:flex;gap:6px;margin-bottom:12px}.stepper div{flex:1;text-align:center;font-size:10px;color:var(--mut)}
+.stepper i{display:block;height:5px;border-radius:9px;background:var(--line);margin-bottom:4px}
+.stepper .done i{background:var(--ok)}.stepper .cur i{background:var(--pri)}.stepper .cur{color:var(--pri);font-weight:700}
+.lock{opacity:.45;pointer-events:none}
+#sheet{position:fixed;inset:0;background:#0009;z-index:60;display:flex;align-items:flex-end}#sheet.hide{display:none}
+.sheetbox{background:#fff;width:100%;max-height:88vh;overflow:auto;border-radius:22px 22px 0 0;padding:18px 16px 28px}
+#bell{position:relative;background:rgba(255,255,255,.2);border:0;border-radius:99px;font-size:16px;padding:5px 10px;color:#fff;cursor:pointer;margin-right:6px}#bellc{position:absolute;top:-4px;right:-4px;background:#e5484d;color:#fff;border-radius:99px;font-size:10px;font-weight:700;min-width:16px;height:16px;line-height:16px;text-align:center}#bellc.hide{display:none}
+.pill{display:inline-block;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:700}
+.pill.ok{background:#dcf5ea;color:#0b7a50}.pill.bad{background:#fde3e4;color:#b3262b}.pill.w{background:#fdf0d4;color:#946200}
+.item{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--line);font-size:14px;gap:10px}
+.item:last-child{border:0}.item small{color:var(--mut);display:block}
+.big{font-size:34px;font-weight:800}
+.bars{display:flex;align-items:flex-end;gap:8px;height:130px;margin-top:10px}
+.bars div{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;font-size:10px;color:var(--mut)}
+.bars b{display:block;width:100%;background:linear-gradient(var(--pri2),var(--pri));border-radius:6px 6px 0 0;min-height:4px}
+.seg{display:flex;background:#eceefb;border-radius:12px;padding:3px;margin-bottom:10px}
+.seg button{flex:1;border:0;background:none;padding:8px;border-radius:10px;font-size:13px;color:var(--mut);cursor:pointer}
+.seg button.on{background:#fff;color:var(--pri);font-weight:700;box-shadow:0 1px 2px rgba(0,0,0,.1)}
+.cause{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px;gap:8px}
+.cause:last-child{border:0}
+.qty{display:flex;align-items:center;gap:10px}
+.qty button{width:34px;height:34px;border-radius:50%;border:1px solid var(--line);background:#fff;font-size:18px;cursor:pointer}
+.qty span{min-width:18px;text-align:center;font-weight:700}
+.note{font-size:12px;color:var(--mut);margin-top:6px}
+.okbox{background:#e3f7ee;border:1px solid #b5e6d0;color:#0b6e48;border-radius:12px;padding:12px;font-size:14px}
+.errbox{background:#fde3e4;border:1px solid #f4b5b8;color:#8f1d22;border-radius:12px;padding:10px;font-size:13px;margin-top:10px}
+canvas{width:100%;border-radius:12px;margin-top:10px;display:block}
+.toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#14172b;color:#fff;padding:11px 18px;border-radius:99px;font-size:13px;z-index:20;opacity:0;transition:.25s;pointer-events:none;max-width:90%;text-align:center}
+.toast.show{opacity:1}
+.doc{display:flex;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.doc:last-child{border:0}
+.doc .ic{width:44px;height:44px;border-radius:12px;background:#eceefb;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
+.doc .info{flex:1;min-width:0}.doc .info b{display:block;font-size:14px}.doc .info small{display:block;color:var(--mut);font-size:12px;margin-top:2px}
+.doc .act{display:flex;flex-direction:column;gap:6px}.doc .act button{border:0;border-radius:10px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;background:#eceefb;color:var(--pri)}.doc .act button:disabled{opacity:.45;cursor:not-allowed}
+.alerta{border-radius:12px;padding:10px 12px;font-size:13px;margin-bottom:8px}.alerta.w{background:#fff7e0;border:1px solid #f6df9b;color:#7a5a00}.alerta.bad{background:#fde3e4;border:1px solid #f4b5b8;color:#8f1d22}
+nav button{position:relative}nav button.alerta-dot::after{content:"";position:absolute;top:7px;left:calc(50% + 8px);width:9px;height:9px;border-radius:50%;background:var(--bad);border:2px solid #fff}
+.hide{display:none!important}
+#auth{position:fixed;inset:0;background:linear-gradient(135deg,var(--pri),var(--pri2));z-index:50;display:flex;align-items:center;justify-content:center;padding:20px}
+#auth .box{background:#fff;border-radius:22px;padding:24px;width:100%;max-width:380px}
+#auth h1{margin:0 0 4px;font-size:22px}
+#loading{position:fixed;inset:0;background:var(--bg);z-index:60;display:flex;align-items:center;justify-content:center;color:var(--mut)}
+</style>
+</head>
+<body>
+<div id="loading">Cargando…</div>
+
+<div id="auth" class="hide">
+  <div class="box">
+    <img class="brand" src="chazki-logo.webp" alt="Chazki">
+    <div class="note" style="margin:0 0 6px" id="amode-sub">Inicia sesión con tu correo</div>
+    <div id="agroup-nombre" class="hide"><label>Nombre completo</label><input id="anombre" autocomplete="name"></div>
+    <label>Correo</label><input id="aemail" type="email" autocomplete="email" inputmode="email">
+    <label>Contraseña</label><input id="apass" type="password" autocomplete="current-password" placeholder="Mínimo 8 caracteres">
+    <button class="btn" id="abtn">Entrar</button>
+    <button class="btn ghost" id="aswitch" style="margin-top:8px">Crear cuenta nueva</button>
+    <div id="amsg"></div>
+  </div>
+</div>
+
+<div id="app">
+<header>
+  <div class="row"><div><img class="brand" src="chazki-logo.webp" alt="Chazki"><small id="hdate"></small></div><div style="display:flex;align-items:center"><button id="bell" type="button" aria-label="Avisos">🔔<span id="bellc" class="hide">0</span></button></div></div>
+  <div style="margin-top:12px;font-size:14px">Hola, <b id="hname">—</b> 👋 <span id="hstate" class="pill w" style="margin-left:6px">Sin ruta activa</span></div>
+</header>
+
+<main>
+<div id="net-status" class="net-status hide" role="status" aria-live="polite"></div>
+<section class="tab on" id="t-dia">
+  <div class="stepper" id="stepper"></div>
+  <div class="card" id="s1">
+    <h2>1 · Check-in · ¿Dónde cargas hoy?</h2>
+    <label>Cliente</label><select id="cli"></select><div class="note" id="cli-hint" style="margin-top:4px"></div>
+    <label>CEDIS</label><select id="cedis"></select>
+    <button class="btn ghost" type="button" id="det1" style="margin-top:8px">📍 Detectar mi ubicación</button><div id="detbox1"></div>
+    <div class="grid2">
+      <div><label>Paquetes asignados</label><input id="pk" type="number" inputmode="numeric" min="1" placeholder="0"></div>
+      <div><label>ID de ruta</label><input id="rid" placeholder="Ej. R-48213"></div>
+    </div>
+    <div id="unidad-w" class="hide"><label>Tipo de unidad de la ruta</label><select id="unidad"><option value="">Selecciona…</option><option value="3.5T">3.5 T (BT)</option><option value="OTRA">Otra unidad</option></select></div>
+    <div id="aux-checkin" class="hide">
+      <label>¿Harás esta ruta solo o con auxiliar?</label>
+      <select id="aux-mode"><option value="">Selecciona…</option><option value="solo">La hago solo</option><option value="auxiliar">Viajo con auxiliar</option></select>
+      <div id="aux-checkin-proof" class="hide"><label>Foto donde aparezcas con tu auxiliar antes de salir</label><input id="aux-in-file" type="file" accept="image/*" capture="environment"><img id="aux-in-preview" class="hide" alt="Foto del driver con auxiliar" style="width:100%;max-height:260px;object-fit:contain;border-radius:12px;margin-top:8px"></div>
+    </div>
+    <label>Zona(s) que visitarás</label>
+    <input id="zinp" placeholder="Escribe una zona y presiona Enter">
+    <div class="chips" id="zchips" style="margin-top:8px"></div>
+    <label>Hora de llegada al CEDIS</label>
+    <div style="display:flex;gap:8px"><input id="hora" type="time"><button class="btn ghost" id="bnow" style="margin:0;width:auto;padding:0 14px;font-size:13px">Ahora</button></div>
+    <button class="btn" id="bin" disabled>Check IN · Inicia tu ruta</button>
+    <div class="note" id="inhint">Completa todos los campos para habilitar el check-in.</div>
+    <div id="inerr"></div>
+  </div>
+  <div class="card hide" id="sresume"></div>
+  <div class="card lock" id="s2">
+    <h2>2 · Fin de ruta</h2>
+    <div class="grid2">
+      <div><label>Paquetes entregados</label><input id="ent" type="number" inputmode="numeric" min="0" placeholder="0"></div>
+      <div><label>Paquetes fallidos</label><input id="fal" type="number" inputmode="numeric" min="0" placeholder="0"></div>
+    </div>
+    <div class="note" id="s2note"></div>
+    <div id="causes" class="hide">
+      <h3>¿Por qué no se entregaron?</h3>
+      <div class="note" style="margin:0 0 6px">Reparte los fallidos por causa. Debe sumar <b id="ftot">0</b>.</div>
+      <div id="clist"></div><div class="note" id="csum"></div>
+    </div>
+    <button class="btn" id="b2" disabled>Continuar</button>
+  </div>
+  <div class="card lock" id="s3">
+    <h2>3 · ¿Deseas reportar alguna incidencia en ruta?</h2>
+    <div class="grid2">
+      <button class="btn ghost" id="inc-no" style="margin:0">No, ruta sin incidencias</button>
+      <button class="btn ghost" id="inc-si" style="margin:0">Sí, tuve incidencias</button>
+    </div>
+    <div id="inclist" class="hide">
+      <h3>Selecciona las que apliquen</h3><div class="chips" id="incchips"></div>
+      <label>Comentarios (opcional)</label><textarea id="inctxt" rows="2" placeholder="Describe brevemente lo ocurrido"></textarea>
+    </div>
+  </div>
+  <div class="card lock" id="s4">
+    <h2>4 · Check-out · Fin de ruta</h2>
+    <div class="note">Se habilita al terminar los pasos anteriores.</div>
+    <div id="aux-checkout-proof" class="hide"><label>Foto donde aparezcas con tu auxiliar al terminar la ruta</label><input id="aux-out-file" type="file" accept="image/*" capture="environment"><img id="aux-out-preview" class="hide" alt="Foto del driver con auxiliar al checkout" style="width:100%;max-height:260px;object-fit:contain;border-radius:12px;margin-top:8px"></div>
+    <div id="manif" class="hide">
+      <h3>Manifiestos (obligatorio)</h3>
+      <div class="note" style="margin-top:0">Sube las fotos de tus manifiestos antes del check out. Mínimo 1, máximo 10.</div>
+      <div id="manif-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px"></div>
+      <input type="file" id="manif-file" accept="image/*" multiple class="hide">
+      <button class="btn ghost" type="button" id="manif-add" style="margin-top:8px">📷 Agregar fotos</button>
+      <div id="manif-err"></div>
+    </div>
+    <div id="extras" class="hide">
+      <h3>Maniobras, estadía y otros</h3>
+      <label>Maniobras</label><textarea id="x-man" rows="2" placeholder="Describe si hubo maniobras (opcional)"></textarea>
+      <label>Estadía</label><textarea id="x-est" rows="2" placeholder="Tiempo y motivo de estadía (opcional)"></textarea>
+      <label>Otros</label><textarea id="x-otr" rows="2" placeholder="Cualquier otro concepto (opcional)"></textarea>
+    </div>
+    <button class="btn ok" id="bout" disabled>Check OUT · Finalizar ruta</button>
+    <div id="outerr"></div>
+  </div>
+  <div class="card hide" id="sdone"></div>
+</section>
+
+<section class="tab" id="t-can">
+  <div class="card">
+    <h2>🚫 Cancelación por el cliente</h2>
+    <div class="note" style="margin:0 0 4px">Este módulo solamente deberá ser llenado en caso de haber sido cancelado dentro del CEDIS y con autorización de tu supervisor. En caso de detectar inconsistencias en este llenado, podrás ser bloqueado. Se guarda foto con marca de agua, ubicación, fecha y hora.</div>
+    <div id="can-limit" class="note hide"></div>
+    <label>Cliente</label><select id="ccli"></select>
+    <label>CEDIS / punto</label><select id="ccedis"></select>
+    <button class="btn ghost" type="button" id="det2" style="margin-top:8px">📍 Detectar mi ubicación</button><div id="detbox2"></div>
+    <input type="file" id="cfile" accept="image/*" capture="environment" class="hide">
+    <button class="btn bad" id="bcam">📷 Tomar foto de evidencia</button>
+    <canvas id="cv" class="hide"></canvas>
+    <div id="cmeta" class="note"></div>
+    <button class="btn" id="bcan" disabled>Registrar cancelación</button>
+    <div id="canerr"></div>
+  </div>
+  <div class="card"><h2>Mis cancelaciones recientes</h2><div id="canlist"><div class="note">Cargando…</div></div></div>
+</section>
+
+<section class="tab" id="t-gan">
+  <div id="gkpi-w"><div class="card" id="gkpi"></div></div>
+  <div class="seg" id="gseg"><button class="on" data-p="sem">Semana</button><button data-p="mes">Mes</button></div>
+  <div class="card">
+    <div style="color:var(--mut);font-size:13px" id="glabel">Ganancias de la semana</div>
+    <div class="big" id="gtot">$0</div><div class="note" id="gsub"></div>
+    <div class="bars" id="bars"></div>
+  </div>
+  <div class="card"><h2>Desglose</h2><div id="gdes"></div></div>
+  <div class="card hide" id="gflota"><h2>Por driver (periodo elegido)</h2><div id="gflo"></div></div>
+  <div class="card"><h2>Últimos pagos</h2><div id="gpag"></div></div>
+  <div class="card"><h2>Mis rutas y cancelaciones</h2><div id="gest"></div></div>
+</section>
+
+<section class="tab" id="t-pnr">
+  <div class="card"><h2>📋 Mis PNR y penalizaciones</h2>
+    <div class="note">Aquí puedes revisar cada reclamo, el plazo de respuesta y su historial. Tienes 24 horas desde que se crea para enviar tu primera respuesta. Si Operaciones solicita más soporte, tendrás otras 24 horas. Los casos cerrados no se pueden reabrir.</div>
+    <div id="pnr-error"></div><div id="pnr-list"><div class="note">Cargando reclamos…</div></div>
+  </div>
+</section>
+
+<section class="tab" id="t-dr"><div id="drbox"></div></section>
+<section class="tab" id="t-per">
+  <div class="card prof">
+    <div class="avatar">🧑‍✈️</div>
+    <div><div style="font-size:18px;font-weight:800" id="pnom">—</div><div class="note" style="margin:2px 0">ID Driver: <b id="pcod">—</b></div><div class="note" style="margin:2px 0" id="pmail"></div></div>
+  </div>
+  <div class="card"><h2>🚚 Vehículo</h2>
+    <div class="kv"><span>Placas</span><b id="vpl">—</b></div><div class="kv"><span>Tipo</span><b id="vtp">—</b></div>
+    <div class="kv"><span>Marca / modelo</span><b id="vmm">—</b></div></div>
+  <div class="card"><h2>🪪 Licencia</h2>
+    <div class="kv"><span>Número</span><b id="lnum">—</b></div><div class="kv"><span>Tipo</span><b id="ltip">—</b></div>
+    <div class="kv"><span>Vigencia</span><b id="lvig">—</b></div></div>
+  <div class="card" id="docs-card"><h2>📄 Mis documentos</h2>
+    <div id="docs-banner"></div><div id="docs-list"></div>
+    <div class="note" id="docs-note">Los documentos y datos de flota son de solo lectura. Para actualizar uno, adjunta el archivo y su vigencia; Operaciones debe autorizarlo.</div></div>
+  <div class="card"><h2>✏️ Actualiza tu información</h2>
+    <label>Teléfono</label><input id="utel" inputmode="tel" autocomplete="tel">
+    <label>Correo de contacto</label><input id="ucorreo" type="email" inputmode="email" autocomplete="email">
+    <button class="btn ghost" id="save-contact" style="margin-top:8px">Guardar contacto</button>
+    <div id="contact-err"></div>
+    <div class="note">Nombre, vehículo, licencia y documentos provienen de Flota. Solo Operaciones puede autorizar cambios en esos datos.</div>
+  </div>
+  <button class="btn ghost" id="blogout">Cerrar sesión</button>
+</section>
+</main>
+
+<div id="sheet" class="hide"></div>
+<nav>
+  <button class="on" data-t="dia"><span class="ic">🗺️</span>Inicia tu día</button>
+  <button data-t="can"><span class="ic">🚫</span>Cancelación</button>
+  <button data-t="gan"><span class="ic">💰</span>Ganancias</button>
+  <button data-t="pnr"><span class="ic">📋</span>PNR</button>
+  <button data-t="dr" id="navdr" class="hide"><span class="ic">🚚</span>Mis drivers</button>
+  <button data-t="per"><span class="ic">👤</span>Perfil</button>
+</nav>
+<div class="toast" id="toast"></div>
+</div>
+
+<script src="vendor/supabase-js-2.118.0.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

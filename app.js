@@ -45,7 +45,7 @@ function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");set
 $("hdate").textContent=new Date().toLocaleDateString("es-MX",{weekday:"long",day:"numeric",month:"long"});
 const VTIPOS=[["🛵","Moto"],["🚗","Sedan"],["🚙","Small"],["🚐","Large"],["🚚","Pickup"],["🚛","Van"]];
 
-let ME=null,DRIVER=null,CLI=[],CAUSAS=[],INCID=[],vt=null,ACC={puede_ver_ganancias:true,es_flotillero:false};
+let ME=null,DRIVER=null,VEHICULO=null,CLI=[],CAUSAS=[],INCID=[],vt=null,ACC={puede_ver_ganancias:true,es_flotillero:false};
 const S={stage:0,zonas:[],route:null,fallos:{},inc:null,incSel:new Set()};
 
 // ---------- Autenticación ----------
@@ -79,12 +79,14 @@ async function boot(){
   try{cached=await localGet("cache",ME.id)}catch(e){if(!navigator.onLine)throw e}
   if(!navigator.onLine){
     if(!cached){$("auth").classList.remove("hide");$("amsg").innerHTML='<div class="errbox">Conéctate una vez e inicia sesión para preparar el modo sin conexión.</div>';OFFLINE_MODE=true;setNetStatus("Sin conexión. No hay datos guardados para este dispositivo.",true);return}
-    ({driver:DRIVER,clients:CLI,causes:CAUSAS,incidents:INCID,access:ACC}=cached);
+    ({driver:DRIVER,clients:CLI,causes:CAUSAS,incidents:INCID,access:ACC}=cached);VEHICULO=cached.vehicle||null;
+    if(String(DRIVER.estatus||"").toLowerCase()!=="activo"){$("auth").classList.remove("hide");$("amsg").innerHTML='<div class="errbox">Tu cuenta de driver está inactiva. Conéctate a internet y contacta a tu flotillero para solicitar la reactivación.</div>';return}
     OFFLINE_MODE=true;
     $("hname").textContent=DRIVER.nombre.split(" ")[0];if(ACC.es_flotillero)$("navdr").classList.remove("hide");
     fillClientes($("cli"));fillClientes($("ccli"));prefillCliente();
     $("incchips").innerHTML=INCID.map(c=>`<span class="chip" data-i="${esc(c.id)}">${esc(c.nombre)}</span>`).join("");
     renderStepper();await restoreOfflineRoute();await loadCan();
+    PNR_ERROR="Conéctate a internet para consultar PNR, enviar evidencias y ver penalizaciones.";drawPnrs();
     setNetStatus("Sin conexión · el check-in, check-out y las fotos se guardarán en este dispositivo.",true);
     return;
   }
@@ -98,7 +100,8 @@ async function boot(){
     DRIVER=d.data;CLI=cl.data||[];CAUSAS=ca.data||[];INCID=ic.data||[];
   }catch(e){
     if(!networkError(e)||!cached)throw e;
-    ({driver:DRIVER,clients:CLI,causes:CAUSAS,incidents:INCID,access:ACC}=cached);
+    ({driver:DRIVER,clients:CLI,causes:CAUSAS,incidents:INCID,access:ACC}=cached);VEHICULO=cached.vehicle||null;
+    if(String(DRIVER.estatus||"").toLowerCase()!=="activo"){$("auth").classList.remove("hide");$("amsg").innerHTML='<div class="errbox">Tu cuenta de driver está inactiva. Conéctate a internet y contacta a tu flotillero para solicitar la reactivación.</div>';return}
     OFFLINE_MODE=true;
     $("hname").textContent=DRIVER.nombre.split(" ")[0];if(ACC.es_flotillero)$("navdr").classList.remove("hide");
     fillClientes($("cli"));fillClientes($("ccli"));prefillCliente();
@@ -108,6 +111,11 @@ async function boot(){
     return;
   }
   if(!DRIVER){toast("No se encontró tu perfil de driver");return}
+  if(String(DRIVER.estatus||"").toLowerCase()!=="activo"){
+    $("auth").classList.remove("hide");
+    $("amsg").innerHTML='<div class="errbox">Tu cuenta de driver está inactiva. Contacta a tu flotillero para solicitar la reactivación.</div>';
+    await sb.auth.signOut();return;
+  }
   $("hname").textContent=DRIVER.nombre.split(" ")[0];
   fillClientes($("cli"));fillClientes($("ccli"));prefillCliente();
   $("incchips").innerHTML=INCID.map(c=>`<span class="chip" data-i="${esc(c.id)}">${esc(c.nombre)}</span>`).join("");
@@ -116,11 +124,11 @@ async function boot(){
   await localPut("cache",{key:ME.id,driver:DRIVER,clients:CLI,causes:CAUSAS,incidents:INCID,access:ACC});
   if(OFFLINE_MODE){
     $("hname").textContent=DRIVER.nombre.split(" ")[0];if(ACC.es_flotillero)$("navdr").classList.remove("hide");
-    await restoreOfflineRoute();await loadCan();
+    await restoreOfflineRoute();await loadCan();PNR_ERROR="Conéctate a internet para consultar PNR, enviar evidencias y ver penalizaciones.";drawPnrs();
     setNetStatus("Conexión intermitente · el check-in, check-out y las fotos se guardarán en este dispositivo.",true);
     return;
   }
-  try{await Promise.all([loadPerfil(),loadGan(),loadCan(),resumeRoute()])}
+  try{await Promise.all([loadPerfil(),loadGan(),loadCan(),loadPnrs(),resumeRoute()])}
   catch(e){if(!networkError(e))throw e;OFFLINE_MODE=true;await restoreOfflineRoute();await loadCan();setNetStatus("Conexión intermitente · el check-in, check-out y las fotos se guardarán en este dispositivo.",true);return}
   if(navigator.onLine)await syncPendingCancellations();
   suscribirAvisos();
@@ -179,7 +187,7 @@ function setStage(n){
   if(n>=1&&S.route){$("s1").classList.add("hide");$("sresume").classList.remove("hide");const r=S.route;
     $("sresume").innerHTML=`<h2>✅ Ruta en curso</h2><div class="kv"><span>Cliente</span><b>${esc(r.cli)}</b></div><div class="kv"><span>CEDIS</span><b>${esc(r.cedis)}</b></div>
     <div class="kv"><span>ID de ruta</span><b>${esc(r.rid)}</b></div><div class="kv"><span>Paquetes</span><b>${esc(r.pk)}</b></div>
-    <div class="kv"><span>Zonas</span><b>${esc(r.zonas.join(", "))}</b></div><div class="kv"><span>Llegada a CEDIS</span><b>${esc(r.hora)}</b></div>`;
+    <div class="kv"><span>Zonas</span><b>${esc(r.zonas.join(", "))}</b></div><div class="kv"><span>Modalidad</span><b>${r.auxiliarRequerido?(r.viajaConAuxiliar?"Con auxiliar":"Solo"):"No aplica"}</b></div><div class="kv"><span>Llegada a CEDIS</span><b>${esc(r.hora)}</b></div>`;
     $("hstate").className="pill ok";$("hstate").textContent="En ruta"}
 }
 async function resumeRoute(){
@@ -191,17 +199,17 @@ async function resumeRoute(){
   }
   const {data}=await sb.from("rutas").select("*,cedis(id,nombre,cliente_id)").eq("driver_id",ME.id).eq("estado","en_ruta").order("checkin_at",{ascending:false}).limit(1);
   if(!data||!data.length)return;const r=data[0];
-  S.route={unidad:r.tipo_unidad,dbId:r.id,cli:cliName(r.cedis.cliente_id),cliId:r.cedis.cliente_id,cedis:r.cedis.nombre,cedisId:r.cedis.id,pk:r.paquetes_asignados,rid:r.id_ruta,zonas:r.zonas,
+  S.route={unidad:r.tipo_unidad,auxiliarRequerido:r.auxiliar_requerido===true,viajaConAuxiliar:r.viaja_con_auxiliar===true,dbId:r.id,cli:cliName(r.cedis.cliente_id),cliId:r.cedis.cliente_id,cedis:r.cedis.nombre,cedisId:r.cedis.id,pk:r.paquetes_asignados,rid:r.id_ruta,zonas:r.zonas,
     hora:new Date(r.hora_llegada_cedis).toTimeString().slice(0,5),checkin:new Date(r.checkin_at)};
   await localPut("routes",{key:routeLocalKey(),driverId:ME.id,status:"active",serverRouteId:r.id,
-    routeInfo:{unidad:r.tipo_unidad,cli:S.route.cli,cliId:S.route.cliId,cedis:S.route.cedis,cedisId:S.route.cedisId,pk:S.route.pk,rid:S.route.rid,zonas:S.route.zonas,hora:S.route.hora,checkin:S.route.checkin.toISOString()},
-    routePayload:{driver_id:ME.id,cedis_id:r.cedis.id,id_ruta:r.id_ruta,paquetes_asignados:r.paquetes_asignados,zonas:r.zonas,hora_llegada_cedis:r.hora_llegada_cedis,tipo_unidad:r.tipo_unidad,checkin_at:r.checkin_at},checkout:null,manifests:[],remoteManifests:[]});
+    routeInfo:{unidad:r.tipo_unidad,auxiliarRequerido:S.route.auxiliarRequerido,viajaConAuxiliar:S.route.viajaConAuxiliar,cli:S.route.cli,cliId:S.route.cliId,cedis:S.route.cedis,cedisId:S.route.cedisId,pk:S.route.pk,rid:S.route.rid,zonas:S.route.zonas,hora:S.route.hora,checkin:S.route.checkin.toISOString()},
+    routePayload:{driver_id:ME.id,cedis_id:r.cedis.id,id_ruta:r.id_ruta,paquetes_asignados:r.paquetes_asignados,zonas:r.zonas,hora_llegada_cedis:r.hora_llegada_cedis,tipo_unidad:r.tipo_unidad,auxiliar_requerido:S.route.auxiliarRequerido,viaja_con_auxiliar:S.route.viajaConAuxiliar,evidencia_auxiliar_checkin_path:r.evidencia_auxiliar_checkin_path||null,evidencia_auxiliar_checkout_path:r.evidencia_auxiliar_checkout_path||null,checkin_at:r.checkin_at},checkout:null,manifests:[],remoteManifests:[]});
   prefillCan();setStage(1);updFin();if(requiereManif())await loadManif();
 }
 async function restoreOfflineRoute(record){
   if(!record)return;
   const r=record.routeInfo;
-  S.route={...r,dbId:record.serverRouteId||null,localKey:record.key,checkin:new Date(r.checkin)};
+  S.route={...r,viajaConAuxiliar:r.viajaConAuxiliar===true,dbId:record.serverRouteId||null,localKey:record.key,checkin:new Date(r.checkin)};
   S.zonas=[...r.zonas];prefillCan();setStage(1);updFin();
   if(record.checkout){
     S.result={ent:record.checkout.ent, fal:record.checkout.fal};
@@ -214,6 +222,29 @@ async function restoreOfflineRoute(record){
     drawManif();enableOut();
   }
 }
+async function syncAuxiliaryEvidence(record,stage){
+  if(!record.routePayload.viaja_con_auxiliar)return;
+  const isCheckin=stage==="checkin",field=isCheckin?"evidencia_auxiliar_checkin_path":"evidencia_auxiliar_checkout_path";
+  const holder=isCheckin?record.auxiliary:record.checkout;
+  const blobKey=isCheckin?"checkinBlob":"auxiliaryBlob",pathKey=isCheckin?"checkinPath":"auxiliaryEvidencePath";
+  if(!holder)throw new Error(`Falta la evidencia fotográfica del auxiliar en el ${isCheckin?"check-in":"check-out"}.`);
+  let path=holder[pathKey]||record.routePayload[field]||null;
+  if(!path&&holder[blobKey]){
+    const stamp=Date.parse(record.routeInfo.checkin);
+    path=`${ME.id}/${stamp}/${stage}.jpg`;
+    holder[pathKey]=path;
+    if(isCheckin)record.routePayload[field]=path;else record.checkout[field]=path;
+    await localPut("routes",record);
+  }
+  if(holder[blobKey]){
+    const {error}=await sb.storage.from("ruta-auxiliares").upload(path,holder[blobKey],{contentType:"image/jpeg",upsert:true});
+    if(error)throw error;
+    holder[blobKey]=null;
+    if(isCheckin)record.routePayload[field]=path;else record.checkout[field]=path;
+    await localPut("routes",record);
+  }
+  if(!path)throw new Error(`No se guardó la foto requerida del auxiliar en el ${isCheckin?"check-in":"check-out"}.`);
+}
 async function syncPendingRoute(){
   if(syncBusy||!ME||!navigator.onLine)return false;
   const key=routeLocalKey();let record;
@@ -221,6 +252,7 @@ async function syncPendingRoute(){
   if(!record){OFFLINE_MODE=false;setNetStatus("");return true}
   syncBusy=true;
   try{
+    await syncAuxiliaryEvidence(record,"checkin");
     if(!record.serverRouteId){
       const {data:existing,error:lookupError}=await sb.from("rutas").select("id")
         .eq("driver_id",record.routePayload.driver_id)
@@ -258,10 +290,12 @@ async function syncPendingRoute(){
     }
     if(record.manifests&&record.manifests.length){record.manifests=[];await localPut("routes",record)}
     if(record.checkout){
+      await syncAuxiliaryEvidence(record,"checkout");
       if(record.checkout.fallos.length){const rows=record.checkout.fallos.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_fallos").upsert(rows);if(error)throw error}
       if(record.checkout.incidencias.length){const rows=record.checkout.incidencias.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_incidencias").upsert(rows);if(error)throw error}
       const {error}=await sb.from("rutas").update({estado:"cerrada",checkout_at:record.checkout.checkoutAt,
-        entregados:record.checkout.ent,fallidos:record.checkout.fal,hubo_incidencias:record.checkout.hubo_incidencias,...record.checkout.extras}).eq("id",record.serverRouteId);
+        entregados:record.checkout.ent,fallidos:record.checkout.fal,hubo_incidencias:record.checkout.hubo_incidencias,
+        evidencia_auxiliar_checkout_path:record.checkout.evidencia_auxiliar_checkout_path||null,...record.checkout.extras}).eq("id",record.serverRouteId);
       if(error)throw error;
       await localDelete("routes",key);S.routeLocalCheckout=record.checkout;showRouteDone(false);
     }else{
@@ -290,7 +324,7 @@ function routeDoneMarkup(pending){
   $("bnew").onclick=()=>location.reload();
 }
 function showRouteDone(pending=false){routeDoneMarkup(pending)}
-function prefillCan(){const r=S.route;$("ccli").value=r.cliId;fillCedis($("ccedis"),r.cliId);$("ccedis").value=r.cedisId;$("crid").value=r.rid}
+function prefillCan(){const r=S.route;$("ccli").value=r.cliId;fillCedis($("ccedis"),r.cliId);$("ccedis").value=r.cedisId}
 
 $("zinp").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();addZona()}});
 $("zinp").addEventListener("blur",addZona);
@@ -301,30 +335,64 @@ $("bnow").onclick=()=>{$("hora").value=new Date().toTimeString().slice(0,5);chec
 const esCoppel=()=>/^COPPEL/i.test(cliName($("cli").value)||"");
 function syncUnidad(){const on=esCoppel();$("unidad-w").classList.toggle("hide",!on);if(on&&!$("unidad").value&&/BT/i.test(cliName($("cli").value)))$("unidad").value="3.5T";if(!on)$("unidad").value=""}
 $("unidad").onchange=()=>checkIn();
-function checkIn(){syncUnidad();const ok=$("cli").value&&$("cedis").value&&(!esCoppel()||$("unidad").value)&&+$("pk").value>0&&$("rid").value.trim()&&S.zonas.length&&$("hora").value;
+document.querySelector("#cedis").addEventListener("change",checkIn);
+const textoAux=v=>String(v||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
+function requiereAuxiliarRuta(){
+  const cliente=textoAux(cliName($("cli").value)+" "+cedName($("cli").value,$("cedis").value));
+  const ruta=textoAux([cedName($("cli").value,$("cedis").value),$("rid").value,...S.zonas,$("unidad").value,VEHICULO?.tipo,VEHICULO?.marca_modelo,DRIVER?.tipo_vehiculo,DRIVER?.tipo_unidad,DRIVER?.esquema].join(" "));
+  return /MERCADO\s*LIBRE|\bMELI\b|\bML\b|LIVERPOOL|WALMART/.test(cliente)
+    || /SMALL|LARGE|3[.,]?\s*5|(?:^|\W)BT(?:$|\W)|CIRCUIT/.test(ruta);
+}
+function syncAuxiliary(){
+  const required=requiereAuxiliarRuta();
+  $("aux-checkin").classList.toggle("hide",!required);
+  $("aux-checkin-proof").classList.toggle("hide",!required||$("aux-mode").value!=="auxiliar");
+  if(!required){$("aux-mode").value="";$("aux-in-file").value="";$("aux-in-preview").classList.add("hide")}
+}
+function previewAuxPhoto(inputId,previewId){
+  $(inputId).addEventListener("change",()=>{
+    const file=$(inputId).files[0],preview=$(previewId);
+    if(file){preview.src=URL.createObjectURL(file);preview.classList.remove("hide")}
+    else{preview.removeAttribute("src");preview.classList.add("hide")}
+    if(inputId==="aux-in-file")checkIn();else enableOut();
+  });
+}
+async function procesarFotoAuxiliar(inputId){
+  const file=$(inputId).files[0];
+  if(!file)throw new Error("Toma la foto obligatoria con tu auxiliar.");
+  if(!file.type.startsWith("image/")||file.size>10*1024*1024)throw new Error("Usa una imagen de máximo 10 MB.");
+  const blob=await comprimir(file);
+  if(!blob)throw new Error("No se pudo procesar la foto del auxiliar.");
+  return blob;
+}
+previewAuxPhoto("aux-in-file","aux-in-preview");previewAuxPhoto("aux-out-file","aux-out-preview");
+$("aux-mode").onchange=checkIn;
+function checkIn(){syncUnidad();syncAuxiliary();const required=requiereAuxiliarRuta(),auxMode=$("aux-mode").value;
+  const auxiliaryOk=!required||auxMode==="solo"||(auxMode==="auxiliar"&&$("aux-in-file").files.length>0);
+  const ok=$("cli").value&&$("cedis").value&&(!esCoppel()||$("unidad").value)&&+$("pk").value>0&&$("rid").value.trim()&&S.zonas.length&&$("hora").value&&auxiliaryOk;
   $("bin").disabled=!ok;$("inhint").textContent=ok?"Todo listo. Presiona Check IN para iniciar tu ruta.":"Completa todos los campos para habilitar el check-in."}
 $("bin").onclick=async()=>{
   $("bin").disabled=true;err("inerr",null);
   const hoy=new Date().toLocaleDateString("en-CA");
-  const checkinAt=new Date(),llegada=new Date(`${hoy}T${$("hora").value}`).toISOString();
-  const routePayload={driver_id:ME.id,cedis_id:+$("cedis").value,id_ruta:$("rid").value.trim(),paquetes_asignados:+$("pk").value,zonas:[...S.zonas],hora_llegada_cedis:llegada,tipo_unidad:esCoppel()?$("unidad").value:null,checkin_at:checkinAt.toISOString()};
-  const routeInfo={cli:cliName($("cli").value),cliId:$("cli").value,cedis:cedName($("cli").value,$("cedis").value),cedisId:$("cedis").value,pk:+$("pk").value,rid:$("rid").value.trim(),zonas:[...S.zonas],hora:$("hora").value,checkin:checkinAt.toISOString(),unidad:routePayload.tipo_unidad};
-  let data=null;
-  if(navigator.onLine){
-    try{
-      const result=await sb.from("rutas").insert(routePayload).select().single();
-      if(result.error){if(!networkError(result.error))throw result.error;OFFLINE_MODE=true}
-      else data=result.data;
-    }catch(e){if(!networkError(e)){err("inerr",e);$("bin").disabled=false;return}OFFLINE_MODE=true}
-  }else OFFLINE_MODE=true;
-  const record={key:routeLocalKey(),driverId:ME.id,status:data?"active":"checkin_pending",serverRouteId:data&&data.id||null,routeInfo,routePayload,checkout:null,manifests:[]};
+  const checkinAt=new Date(),llegada=new Date(`${hoy}T${$("hora").value}`).toISOString(),withAux=requiereAuxiliarRuta()&&$("aux-mode").value==="auxiliar";
+  let checkinBlob=null;
+  try{if(withAux)checkinBlob=await procesarFotoAuxiliar("aux-in-file")}
+  catch(e){err("inerr",e);$("bin").disabled=false;return}
+  const tipoUnidad=esCoppel()?$("unidad").value:(VEHICULO?.tipo||DRIVER?.tipo_unidad||null);
+  const routeRequiresAuxiliary=requiereAuxiliarRuta();
+  const routePayload={driver_id:ME.id,cedis_id:+$("cedis").value,id_ruta:$("rid").value.trim(),paquetes_asignados:+$("pk").value,zonas:[...S.zonas],hora_llegada_cedis:llegada,tipo_unidad:tipoUnidad,auxiliar_requerido:routeRequiresAuxiliary,viaja_con_auxiliar:withAux,evidencia_auxiliar_checkin_path:null,evidencia_auxiliar_checkout_path:null,checkin_at:checkinAt.toISOString()};
+  const routeInfo={cli:cliName($("cli").value),cliId:$("cli").value,cedis:cedName($("cli").value,$("cedis").value),cedisId:$("cedis").value,pk:+$("pk").value,rid:$("rid").value.trim(),zonas:[...S.zonas],hora:$("hora").value,checkin:checkinAt.toISOString(),unidad:routePayload.tipo_unidad,auxiliarRequerido:routeRequiresAuxiliary,viajaConAuxiliar:withAux};
+  const record={key:routeLocalKey(),driverId:ME.id,status:"checkin_pending",serverRouteId:null,routeInfo,routePayload,auxiliary:{checkinBlob,checkinPath:null},checkout:null,manifests:[]};
   try{await localPut("routes",record)}
-  catch(e){if(!data){err("inerr",e);$("bin").disabled=false;return}toast("Check-in registrado, pero no se pudo guardar una copia local.");}
-  S.route={...routeInfo,dbId:data&&data.id||null,localKey:record.key,checkin:checkinAt};
+  catch(e){err("inerr",e);$("bin").disabled=false;return}
+  let synced=false;
+  if(navigator.onLine)synced=await syncPendingRoute();else{OFFLINE_MODE=true;setNetStatus("Sin conexión · check-in y evidencia guardados en este dispositivo; se enviarán al recuperar la red.",true)}
+  const saved=await localGet("routes",routeLocalKey());
+  S.route={...routeInfo,dbId:saved?.serverRouteId||null,localKey:record.key,checkin:checkinAt};
   prefillCan();setStage(1);$("ent").value="";$("fal").value="";updFin();
-  $("hstate").className=`pill ${data?"ok":"w"}`;$("hstate").textContent=data?"En ruta":"Check-in pendiente de enviar";
-  if(data){toast("Check-in registrado · ¡Buena ruta!");if(OFFLINE_MODE)setNetStatus("Conexión intermitente · la ruta quedó registrada y se guardó una copia local.",true)}
-  else{setNetStatus("Sin conexión · check-in guardado en este dispositivo; se enviará al recuperar la red.",true);toast("Check-in guardado en este dispositivo")}
+  $("hstate").className=`pill ${synced?"ok":"w"}`;$("hstate").textContent=synced?"En ruta":"Check-in pendiente de enviar";
+  if(synced){toast("Check-in registrado · ¡Buena ruta!");$("aux-in-file").value="";$("aux-in-preview").classList.add("hide")}
+  else{setNetStatus("Sin conexión o sincronización pendiente · check-in y evidencia guardados en este dispositivo.",true);toast("Check-in guardado en este dispositivo")}
 };
 
 ["ent","fal"].forEach(id=>$(id).addEventListener("input",updFin));
@@ -398,16 +466,19 @@ $("manif-file").onchange=async e=>{
   }catch(x){err("manif-err",x)}
   $("manif-add").disabled=MANIF.length>=10;
 };
-function enableOut(){const rm=!!requiereManif();$("manif").classList.toggle("hide",!rm);if(rm&&!manifCargado&&S.route)loadManif();$("extras").classList.toggle("hide",!llevaExtras());const ok=(S.inc===false||(S.inc===true&&S.incSel.size>0))&&(!rm||MANIF.length>0);if(S.stage>=2)setStage((S.inc===false||(S.inc===true&&S.incSel.size>0))?3:2);$("bout").disabled=!(ok&&S.stage>=3)}
+function enableOut(){const rm=!!requiereManif(),aux=!!S.route?.viajaConAuxiliar;$("manif").classList.toggle("hide",!rm);if(rm&&!manifCargado&&S.route)loadManif();$("extras").classList.toggle("hide",!llevaExtras());$("aux-checkout-proof").classList.toggle("hide",!aux);const auxOk=!aux||$("aux-out-file").files.length>0;const ok=(S.inc===false||(S.inc===true&&S.incSel.size>0))&&(!rm||MANIF.length>0)&&auxOk;if(S.stage>=2)setStage((S.inc===false||(S.inc===true&&S.incSel.size>0))?3:2);$("bout").disabled=!(ok&&S.stage>=3)}
 $("bout").onclick=async()=>{
   $("bout").disabled=true;err("outerr",null);const r=S.route,res=S.result;
   let record;
   try{record=await localGet("routes",routeLocalKey());if(!record)throw new Error("No existe una copia local de esta ruta. No se cerró para evitar perder el registro.")}catch(e){err("outerr",e);$("bout").disabled=false;return}
+  let auxiliaryBlob=null;
+  try{if(r.viajaConAuxiliar)auxiliaryBlob=await procesarFotoAuxiliar("aux-out-file")}
+  catch(e){err("outerr",e);$("bout").disabled=false;return}
   const checkoutAt=new Date().toISOString();
   const fl=Object.entries(S.fallos).filter(([,q])=>q>0).map(([c,q])=>({causa_id:+c,cantidad:q}));
   const ic=S.inc?[...S.incSel].map(i=>({incidencia_id:+i,comentario:$("inctxt").value.trim()||null})):[];
   record.status="checkout_pending";
-  record.checkout={checkoutAt,ent:res.ent,fal:res.fal,hubo_incidencias:!!S.inc,fallos:fl,incidencias:ic,
+  record.checkout={checkoutAt,ent:res.ent,fal:res.fal,hubo_incidencias:!!S.inc,fallos:fl,incidencias:ic,auxiliaryBlob,auxiliaryEvidencePath:null,
     extras:llevaExtras()?{maniobras:$("x-man").value.trim()||null,estadia:$("x-est").value.trim()||null,otros:$("x-otr").value.trim()||null}:{}};
   try{await localPut("routes",record)}catch(e){err("outerr",e);$("bout").disabled=false;return}
   S.routeLocalCheckout=record.checkout;
@@ -445,34 +516,67 @@ async function stamp(img){
     `<span style="color:var(--mut)">Este CEDIS aún no tiene ubicación registrada; se registra sin validar.</span>`;
   $("cmeta").innerHTML=`📍 ${loc?loc.lat.toFixed(5)+", "+loc.lng.toFixed(5):"ubicación no disponible"} · ${dia} ${fecha} ${hora}<br>${vm}`;checkCan();
 }
-function checkCan(){$("bcan").disabled=!(canBlob&&$("ccli").value&&$("ccedis").value)}
+function checkCan(){$("bcan").disabled=canUsedToday||canLimitUnknown||!(canBlob&&$("ccli").value&&$("ccedis").value)}
 $("bcan").onclick=async()=>{
   $("bcan").disabled=true;err("canerr",null);
   try{
-    const record={key:crypto.randomUUID(),driver_id:ME.id,ruta_id:S.route?S.route.dbId:null,cedis_id:+$("ccedis").value,id_ruta:$("crid").value.trim()||null,
+    const record={key:crypto.randomUUID(),driver_id:ME.id,ruta_id:S.route?S.route.dbId:null,cedis_id:+$("ccedis").value,id_ruta:S.route?.rid||null,
       lat:canMeta.loc?canMeta.loc.lat:null,lng:canMeta.loc?canMeta.loc.lng:null,capturado_at:canMeta.d.toISOString(),blob:canBlob};
     await localPut("cancellations",record);
+    canUsedToday=true;updateCancelAvailability();
     canBlob=null;$("cv").classList.add("hide");$("cmeta").textContent="";checkCan();
     if(navigator.onLine&&await syncPendingCancellations())toast("Cancelación registrada y enviada a Operaciones");
     else{OFFLINE_MODE=true;setNetStatus("Sin conexión o red intermitente · cancelación y foto guardadas en este dispositivo, pendientes de envío.",true);toast("Cancelación guardada en este dispositivo")}
     await loadCan();
   }catch(error){err("canerr",error);$("bcan").disabled=false}
 };
-let CAN2=[],NOT=[];
+let CAN2=[],CAN_SERVER=[],NOT=[],canUsedToday=false,canLimitUnknown=true;
 const cuentaReg=v=>{const ms=new Date(v)-Date.now();if(ms<=0)return null;const m=Math.floor(ms/60000);return `${Math.floor(m/60)} h ${String(m%60).padStart(2,"0")} min`};
 const estC=x=>((x.estatus==="aclaracion"||x.estatus==="rechazada")&&x.plazo_vence&&new Date(x.plazo_vence)<Date.now())?"vencida":x.estatus;
+const diaCancelacion=v=>{
+  const d=new Date(v);if(Number.isNaN(d.getTime()))return"";
+  const parts=new Intl.DateTimeFormat("en-CA",{timeZone:"America/Mexico_City",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(d);
+  const values=Object.fromEntries(parts.map(x=>[x.type,x.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+function updateCancelAvailability(){
+  const box=$("can-limit"),locked=canUsedToday||canLimitUnknown;
+  box.classList.toggle("hide",!locked);
+  box.textContent=canUsedToday
+    ?"Ya registraste una cancelación hoy. Solo se permite una cancelación por día."
+    :"No se pudo verificar si ya registraste una cancelación hoy. Conéctate a internet y actualiza antes de continuar.";
+  ["ccli","ccedis","det2","bcam","cfile"].forEach(id=>$(id).disabled=locked);
+  checkCan();
+}
 async function loadCan(){
-  const {data,error}=navigator.onLine?await sb.rpc("mis_cancelaciones_estatus"):{data:[],error:null};
-  if(error&&!networkError(error)){err("canerr",error);return}
-  const pending=await localGetAll("cancellations");
-  CAN2=[...(data||[]),...pending.map(x=>({id:x.key,fecha:x.capturado_at,cliente:cedObjById(x.cedis_id)?.cliente_nombre||"Cliente",cedis:cedNameById(x.cedis_id)||"CEDIS",id_ruta:x.id_ruta,estatus:"pendiente",es_mia:true,local:true}))];
+  let serverRows=null;
+  if(navigator.onLine){
+    const {data,error}=await sb.rpc("mis_cancelaciones_estatus");
+    if(!error){serverRows=data||[];CAN_SERVER=serverRows;canLimitUnknown=false;err("canerr",null);
+      try{await localPut("cache",{key:`cancellations:${ME.id}`,rows:serverRows,cachedAt:new Date().toISOString()})}
+      catch(cacheError){err("canerr",cacheError)}
+    }else if(networkError(error)){
+      OFFLINE_MODE=true;
+      const cached=await localGet("cache",`cancellations:${ME.id}`);
+      CAN_SERVER=cached?.rows||[];canLimitUnknown=!cached;
+    }else{err("canerr",error);CAN_SERVER=[];canLimitUnknown=true}
+  }else{
+    const cached=await localGet("cache",`cancellations:${ME.id}`);
+    CAN_SERVER=cached?.rows||[];canLimitUnknown=!cached;
+  }
+  const pending=(await localGetAll("cancellations")).filter(x=>String(x.driver_id)===String(ME.id));
+  CAN2=[...CAN_SERVER,...pending.map(x=>({id:x.key,fecha:x.capturado_at,cliente:cedObjById(x.cedis_id)?.cliente_nombre||"Cliente",cedis:cedNameById(x.cedis_id)||"CEDIS",id_ruta:x.id_ruta,estatus:"pendiente",es_mia:true,local:true}))];
+  const today=diaCancelacion(new Date());
+  const myRows=CAN_SERVER.filter(x=>x.es_mia===true||(!("es_mia" in x)&&(!x.driver_id||String(x.driver_id)===String(ME.id))));
+  canUsedToday=myRows.some(x=>diaCancelacion(x.fecha||x.capturado_at)===today)||pending.some(x=>String(x.driver_id)===String(ME.id)&&diaCancelacion(x.capturado_at)===today);
+  updateCancelAvailability();
   drawCan()
 }
 async function syncPendingCancellations(){
   if(syncCancelBusy||!ME||!navigator.onLine)return false;
   syncCancelBusy=true;
   try{
-    const pending=await localGetAll("cancellations");
+    const pending=(await localGetAll("cancellations")).filter(x=>String(x.driver_id)===String(ME.id));
     for(const record of pending){
       const path=`${ME.id}/offline-${record.key}.jpg`;
       const {error:uploadError}=await sb.storage.from("cancelaciones").upload(path,record.blob,{contentType:"image/jpeg",upsert:true});
@@ -524,6 +628,7 @@ function abrirAvisos(){const f=x=>new Date(x).toLocaleString("es-MX",{day:"2-dig
   sb.rpc("marcar_notificaciones_leidas",{p_ids:null}).then(()=>{NOT.forEach(n=>n.leida_en=n.leida_en||new Date().toISOString());drawBell()})}
 $("bell").onclick=abrirAvisos;
 function suscribirAvisos(){loadNotifs();setInterval(loadNotifs,60000);
+  setInterval(()=>{if(navigator.onLine)loadPnrs()},60000);
   sb.channel("avisos-"+ME.id).on("postgres_changes",{event:"INSERT",schema:"public",table:"notificaciones",filter:"usuario=eq."+ME.id},p=>{NOT.unshift(p.new);drawBell();toast("🔔 "+p.new.titulo);
     if("Notification" in window&&Notification.permission==="granted")try{new Notification(p.new.titulo,{body:p.new.cuerpo||""})}catch(e){}
     if(p.new.tipo&&p.new.tipo.startsWith("cancelacion"))loadCan().then(loadEstatus)}).subscribe()}
@@ -538,7 +643,7 @@ async function loadGan(){
   const sel=ACC.es_flotillero?"*,drivers(nombre),rutas(id_ruta)":"*";
   const q=sb.from("pagos").select(sel).gte("fecha",d.toLocaleDateString("en-CA")).order("fecha",{ascending:false});
   const {data}=ACC.es_flotillero?await q:await q.eq("driver_id",ME.id);PAGOS=data||[];drawG()}
-let RUTAS_K=[],CANS_K=[],kp="sem";
+let RUTAS_K=[],CANS_K=[],kp="sem",PNRS=[],PNR_DISCOUNTS={},PNR_ERROR="",PNR_SEEN=false;
 function rangoK(p,prev){const n=new Date();let a,b;
   if(p==="sem"){a=monday(n);if(prev)a.setDate(a.getDate()-7);b=new Date(a);b.setDate(b.getDate()+7)}
   else{a=new Date(n.getFullYear(),n.getMonth()-(prev?1:0),1);b=new Date(a.getFullYear(),a.getMonth()+1,1)}return [a,b]}
@@ -570,19 +675,20 @@ function drawDrivers(){
   const cards=DRVS.map(d=>{
     const R=RUTAS_K.filter(x=>x.driver_id===d.id),Rp=R.filter(x=>ok(x.fecha)&&x.estatus!=="en_curso"),C=CANS_K.filter(x=>x.driver===d.nombre&&ok(x.fecha));
     const asg=Rp.reduce((s,x)=>s+(x.asignados||0),0),ent=Rp.reduce((s,x)=>s+(x.entregados||0),0),fal=Rp.reduce((s,x)=>s+(x.fallidos||0),0);
-    const bj=BAJAS.find(x=>x.driver_id===d.id),pend=bj&&bj.estatus==="pendiente",rech=bj&&bj.estatus==="rechazada";
+    const bj=BAJAS.find(x=>x.driver_id===d.id),pend=bj&&bj.estatus==="pendiente",rech=bj&&bj.estatus==="rechazada",activo=String(d.estatus||"").toLowerCase()==="activo";
     const ck=(v)=>v?"✅":"⏳";
-    const estado=pend?`<div class="note" style="margin-top:8px;background:#e3ecff;color:#1d4ed8;padding:8px;border-radius:10px"><b>Baja solicitada</b> · ${f(bj.solicitado_en)}<br>Supervisor ${ck(bj.aprob_supervisor)} · Coordinador ${ck(bj.aprob_coord)}</div>`:(rech?`<div class="note" style="margin-top:8px;color:#b42318">Última solicitud de baja: rechazada (${f(bj.resuelto_en)})</div>`:"");
+    const estado=pend?`<div class="note" style="margin-top:8px;background:#e3ecff;color:#1d4ed8;padding:8px;border-radius:10px"><b>Desactivación solicitada</b> · ${f(bj.solicitado_en)}<br>Supervisor ${ck(bj.aprob_supervisor)} · Coordinador ${ck(bj.aprob_coord)}</div>`:(!activo?`<div class="note" style="margin-top:8px;color:#b42318">Driver desactivado · su historial se conserva</div>`:(rech?`<div class="note" style="margin-top:8px;color:#b42318">Última solicitud de desactivación: rechazada (${f(bj.resuelto_en)})</div>`:""));
     const lista=dopen[d.id]?(R.slice(0,8).map(x=>`<div class="item"><div><b>Ruta ${esc(x.id_ruta)}</b><small>${f(x.fecha)} · ${esc(x.cliente)} · ${x.entregados==null?"—":x.entregados}/${esc(x.asignados)}</small></div>${pillE(x.estatus)}</div>`).join("")||'<div class="note">Sin rutas recientes.</div>'):"";
-    const form=dform===d.id?`<div style="margin-top:10px"><label>Motivo de la baja</label><textarea id="bj-m" rows="2" placeholder="Por qué termina la relación"></textarea><div id="bj-e" class="note" style="color:#b42318"></div><div style="display:flex;gap:8px;margin-top:8px"><button class="btn" data-bjok="${esc(d.id)}">Enviar solicitud</button><button class="btn ghost" data-bjx="1">Cancelar</button></div><div class="note" style="margin-top:6px">Requiere autorización del supervisor y del coordinador de Chazki.</div></div>`:"";
-    return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h2 style="margin:0">${esc(d.nombre)}</h2><small style="color:var(--mut)">${esc(d.codigo||"")}${esc(d.telefono?" · "+d.telefono:"")}</small></div>${pillE(d.estatus==="activo"?"aprobada":"rechazada").replace(/Aprobada/,"Activo").replace(/Rechazada/,"Inactivo")}</div>
+    const form=dform===d.id?`<div style="margin-top:10px"><label>Motivo de la desactivación</label><textarea id="bj-m" rows="2" placeholder="Indica por qué se desactivará al driver"></textarea><div id="bj-e" class="note" style="color:#b42318"></div><div style="display:flex;gap:8px;margin-top:8px"><button class="btn" data-bjok="${esc(d.id)}">Enviar solicitud</button><button class="btn ghost" data-bjx="1">Cancelar</button></div><div class="note" style="margin-top:6px">Requiere autorización del supervisor y del coordinador de Chazki. Se conserva el perfil y todo su historial.</div></div>`:"";
+    return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h2 style="margin:0">${esc(d.nombre)}</h2><small style="color:var(--mut)">${esc(d.codigo||"")}${esc(d.telefono?" · "+d.telefono:"")}</small></div>${pillE(activo?"aprobada":"rechazada").replace(/Aprobada/,"Activo").replace(/Rechazada/,"Inactivo")}</div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px;text-align:center"><div><b style="font-size:18px">${esc(Rp.length)}</b><br><small>Rutas</small></div><div><b style="font-size:18px">${pct(asg?ent/asg:null)}</b><br><small>Efect.</small></div><div><b style="font-size:18px">${fal}</b><br><small>Fallidos</small></div><div><b style="font-size:18px">${esc(C.length)}</b><br><small>Cancel.</small></div></div>
-      <div style="display:flex;gap:8px;margin-top:10px"><button class="btn ghost" data-dv="${esc(d.id)}">${dopen[d.id]?"Ocultar rutas":"Ver rutas"}</button>${pend?"":`<button class="btn ghost" data-bj="${esc(d.id)}" style="color:#b42318">Solicitar baja</button>`}</div>${estado}${lista}${form}</div>`}).join("");
+      <div style="display:flex;gap:8px;margin-top:10px"><button class="btn ghost" data-dv="${esc(d.id)}">${dopen[d.id]?"Ocultar rutas":"Ver rutas"}</button>${pend?"":activo?`<button class="btn ghost" data-bj="${esc(d.id)}" style="color:#b42318">Solicitar desactivación</button>`:`<button class="btn ghost" data-reactivar="${esc(d.id)}">Reactivar driver</button>`}</div>${estado}${lista}${form}</div>`}).join("");
   box.innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">🚚 Mis drivers (${esc(DRVS.length)})</h2><div class="seg" id="dseg" style="margin:0;width:150px"><button class="${dp==="sem"?"on":""}" data-p="sem">Semana</button><button class="${dp==="mes"?"on":""}" data-p="mes">Mes</button></div></div></div>${esc(cards||'<div class="card"><div class="note">Aún no tienes drivers en tu flotilla.</div></div>')}`;
   box.querySelectorAll("#dseg button").forEach(b=>b.onclick=()=>{dp=b.dataset.p;drawDrivers()});
   box.querySelectorAll("[data-dv]").forEach(b=>b.onclick=()=>{dopen[b.dataset.dv]=!dopen[b.dataset.dv];drawDrivers()});
   box.querySelectorAll("[data-bj]").forEach(b=>b.onclick=()=>{dform=b.dataset.bj;drawDrivers()});
   box.querySelectorAll("[data-bjx]").forEach(b=>b.onclick=()=>{dform=null;drawDrivers()});
+  box.querySelectorAll("[data-reactivar]").forEach(b=>b.onclick=async()=>{b.disabled=true;const {error}=await sb.rpc("reactivar_driver",{p_driver_id:b.dataset.reactivar});if(error){toast(error.message);b.disabled=false;return}await loadDrivers()});
   box.querySelectorAll("[data-bjok]").forEach(b=>b.onclick=async()=>{const m=$("bj-m").value.trim();if(!m){$("bj-e").textContent="Escribe el motivo";return}
     b.disabled=true;const {error}=await sb.rpc("solicitar_baja_driver",{p_driver_id:b.dataset.bjok,p_motivo:m});if(error){$("bj-e").textContent=error.message;b.disabled=false;return}
     dform=null;await loadDrivers()})}
@@ -615,72 +721,218 @@ function drawG(){
 }
 document.querySelectorAll("#gseg button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#gseg button").forEach(x=>x.classList.toggle("on",x===b));gp=b.dataset.p;drawG()});
 
+const PNR_ESTADOS={
+  esperando_driver:["Pendiente de tu respuesta","w"],
+  revision:["En revisión por Operaciones","w"],
+  esperando_soporte:["Soporte adicional solicitado","bad"],
+  cerrada_sin_cargo:["Cerrado · sin descuento","ok"],
+  cerrada_con_cargo:["Cerrado · descuento aplicado","bad"]
+};
+const fechaPnR=value=>value?new Date(value).toLocaleString("es-MX",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
+const fmtPnR=value=>"$"+Number(value||0).toLocaleString("es-MX",{minimumFractionDigits:2,maximumFractionDigits:2});
+async function loadPnrs(){
+  if(!navigator.onLine){PNR_ERROR="El seguimiento de PNR requiere conexión a internet.";drawPnrs();return}
+  const [claims,discounts]=await Promise.all([
+    sb.from("pnr_reclamos").select("*,pnr_reclamo_eventos(*)").eq("driver_id",ME.id).order("creado_en",{ascending:false}),
+    sb.from("pnr_descuentos").select("reclamo_id,saldo_pendiente,monto_aplicado").eq("driver_id",ME.id)
+  ]);
+  if(claims.error){PNR_ERROR="No se pudieron cargar tus reclamos. Verifica que Operaciones haya habilitado el módulo PNR: "+claims.error.message;PNRS=[];drawPnrs();return}
+  if(discounts.error){PNR_ERROR="No se pudo cargar el estado de tus descuentos: "+discounts.error.message;PNR_DISCOUNTS={}}
+  else PNR_DISCOUNTS=Object.fromEntries((discounts.data||[]).map(x=>[x.reclamo_id,x]));
+  const previousPnrs=PNRS;PNRS=claims.data||[];PNR_ERROR="";
+  if(PNR_SEEN){
+    const known=new Set(previousPnrs.map(x=>x.id));
+    const incoming=PNRS.filter(x=>!known.has(x.id));
+    if(incoming.length){
+      toast(incoming.length===1?"🔔 Tienes un nuevo reclamo PNR. Revisa tu plazo de respuesta.":`🔔 Tienes ${incoming.length} nuevos reclamos PNR.`);
+      if("Notification" in window&&Notification.permission==="granted")try{new Notification("Nuevo reclamo PNR",{body:"Revisa los detalles y responde dentro de las 24 horas."})}catch(e){}
+    }
+  }
+  PNR_SEEN=true;
+  const paths=PNRS.flatMap(x=>(x.pnr_reclamo_eventos||[]).flatMap(e=>e.adjuntos||[]));
+  if(paths.length){
+    const {data,error}=await sb.storage.from("pnr-evidence").createSignedUrls(paths,3600);
+    if(error){PNR_ERROR="No se pudieron abrir algunas evidencias: "+error.message}
+    else{
+      const urls=Object.fromEntries((data||[]).filter(x=>x.signedUrl).map(x=>[x.path,x.signedUrl]));
+      PNRS=PNRS.map(x=>({...x,pnr_reclamo_eventos:(x.pnr_reclamo_eventos||[]).map(e=>({...e,urls:(e.adjuntos||[]).map(path=>({path,url:urls[path]})).filter(x=>x.url)}))}));
+    }
+  }
+  drawPnrs();
+}
+function drawPnrs(){
+  const errorBox=$("pnr-error"),list=$("pnr-list");
+  if(!errorBox||!list)return;
+  err("pnr-error",PNR_ERROR?new Error(PNR_ERROR):null);
+  list.innerHTML=PNRS.length?PNRS.map(claim=>{
+    const [label,style]=PNR_ESTADOS[claim.estado]||["Estatus desconocido","w"];
+    const events=(claim.pnr_reclamo_eventos||[]).slice().sort((a,b)=>new Date(a.creado_en)-new Date(b.creado_en));
+    const canRespond=["esperando_driver","esperando_soporte"].includes(claim.estado)&&claim.vence_en&&new Date(claim.vence_en)>Date.now();
+    const discount=PNR_DISCOUNTS[claim.id];
+    return `<article class="card" style="border:1px solid var(--line);box-shadow:none">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><b>PNR ${esc(claim.pnr)}</b><span class="pill ${style}">${esc(label)}</span></div>
+      <div class="note">Cliente: <b>${esc(claim.cliente)}</b>${claim.ruta_id?` · Ruta: ${esc(claim.ruta_id)}`:""}<br>Recibido: ${esc(fechaPnR(claim.creado_en))} · Importe del reclamo: <b>${esc(fmtPnR(claim.monto))}</b><br>${canRespond?`Responde antes del: <b>${esc(fechaPnR(claim.vence_en))}</b>`:claim.estado==="esperando_driver"||claim.estado==="esperando_soporte"?"El plazo venció; el reclamo se cerrará automáticamente.":""}</div>
+      ${discount?`<div class="item"><span>Descuento del reclamo</span><b>${esc(fmtPnR(discount.monto_aplicado))} aplicado · ${esc(fmtPnR(discount.saldo_pendiente))} pendiente de próximas liquidaciones</b></div>`:""}
+      <h3>Línea del tiempo</h3>${events.map(event=>`<div class="item" style="display:block"><b>${esc(pnrEventLabel(event.tipo))}</b><small style="display:block">${esc(fechaPnR(event.creado_en))}${event.actor_email?" · "+esc(event.actor_email):""}</small>${event.mensaje?`<div style="white-space:pre-wrap;margin-top:5px">${esc(event.mensaje)}</div>`:""}${(event.urls||[]).length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${event.urls.map((file,i)=>`<a href="${esc(file.url)}" target="_blank" rel="noopener">Evidencia ${i+1}</a>`).join("")}</div>`:""}</div>`).join("")||'<div class="note">Aún no hay movimientos.</div>'}
+      ${canRespond?`<label for="pnr-msg-${esc(claim.id)}">${claim.estado==="esperando_soporte"?"Respuesta con soporte adicional":"Tu respuesta o apelación"}</label>
+      <textarea id="pnr-msg-${esc(claim.id)}" rows="3" maxlength="5000" placeholder="Explica lo ocurrido y agrega la información relevante"></textarea>
+      <label for="pnr-files-${esc(claim.id)}">Imágenes de evidencia (opcional, máximo 5)</label><input id="pnr-files-${esc(claim.id)}" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+      <button class="btn" data-pnr-send="${esc(claim.id)}">Enviar respuesta</button>`:""}
+    </article>`;
+  }).join(""):'<div class="note">No tienes PNR ni penalizaciones registrados.</div>';
+  list.querySelectorAll("[data-pnr-send]").forEach(button=>button.onclick=()=>responderPnR(button.dataset.pnrSend,button));
+}
+function pnrEventLabel(type){
+  return ({creado:"Reclamo generado por Operaciones",respuesta_driver:"Primera respuesta del driver",solicitud_soporte:"Operaciones solicitó soporte adicional",evidencia_adicional:"Soporte adicional enviado",evidencia_aceptada:"Evidencia aceptada · reclamo cerrado sin cargo",evidencia_rechazada:"Evidencia insuficiente · reclamo cerrado con cargo",vencido:"Plazo vencido · reclamo cerrado con cargo",descuento_aplicado:"Descuento aplicado a liquidación"})[type]||type;
+}
+async function responderPnR(id,button){
+  const message=$("pnr-msg-"+id).value.trim(),files=[...$("pnr-files-"+id).files];
+  if(!message&&!files.length){$("pnr-error").innerHTML='<div class="errbox">Escribe una respuesta o adjunta al menos una imagen.</div>';return}
+  if(files.length>5||files.some(file=>file.size>10*1024*1024||!["image/jpeg","image/png","image/webp"].includes(file.type))){
+    $("pnr-error").innerHTML='<div class="errbox">Adjunta hasta 5 imágenes JPEG, PNG o WebP de máximo 10 MB cada una.</div>';return
+  }
+  button.disabled=true;err("pnr-error",null);const paths=[];let submitted=false;
+  try{
+    for(const file of files){
+      const ext=file.type==="image/jpeg"?"jpg":file.type==="image/png"?"png":"webp";
+      const path=`${ME.id}/${crypto.randomUUID()}.${ext}`;
+      const {error}=await sb.storage.from("pnr-evidence").upload(path,file,{contentType:file.type,upsert:false});
+      if(error)throw error;paths.push(path);
+    }
+    const {error}=await sb.rpc("responder_reclamo_pnr",{p_reclamo_id:id,p_mensaje:message||"Se adjunta evidencia.",p_adjuntos:paths});
+    if(error)throw error;
+    submitted=true;
+    toast("Respuesta enviada a Operaciones");await loadPnrs();
+  }catch(error){
+    let cleanupError=null;
+    if(!submitted&&paths.length){const result=await sb.storage.from("pnr-evidence").remove(paths);cleanupError=result.error}
+    err("pnr-error",new Error((submitted?"La respuesta quedó enviada, pero no se pudo actualizar la vista: ":"")+(error.message||error)+(cleanupError?` · No se pudieron limpiar archivos temporales: ${cleanupError.message}`:"")));
+    button.disabled=false;
+  }
+}
+
 // ---------- Perfil ----------
 async function loadPerfil(){
   const [v,l,d]=await Promise.all([sb.from("vehiculos").select("*").eq("driver_id",ME.id).eq("activo",true).maybeSingle(),sb.from("licencias").select("*").eq("driver_id",ME.id).maybeSingle(),sb.from("drivers").select("*").eq("id",ME.id).single()]);
-  DRIVER=d.data||DRIVER;const V=v.data,L=l.data;
+  DRIVER=d.data||DRIVER;  VEHICULO=v.data;const V=VEHICULO,L=l.data;
   $("pnom").textContent=DRIVER.nombre;$("pcod").textContent=DRIVER.codigo||"—";$("pmail").textContent=ME.email;
   $("vpl").textContent=V?V.placas:"Sin registrar";$("vtp").textContent=V?V.tipo:"—";$("vmm").textContent=(V&&V.marca_modelo)||"—";
   $("lnum").textContent=(L&&L.numero)||"Sin registrar";$("ltip").textContent=(L&&L.tipo)||"—";
   $("lvig").textContent=L&&L.vigencia?parseF(L.vigencia).toLocaleDateString("es-MX"):"—";
-  $("unom").value=DRIVER.nombre;$("utel").value=DRIVER.telefono||"";$("upl").value=V?V.placas:"";$("umm").value=(V&&V.marca_modelo)||"";
-  $("ulic").value=(L&&L.numero)||"";$("ultip").value=(L&&L.tipo)||"";$("uvig").value=(L&&L.vigencia)||"";vt=V?V.tipo:null;drawVt();modoEdicion(false);estadoCambio();
+  $("utel").value=DRIVER.telefono||"";$("ucorreo").value=DRIVER.correo_contacto||"";
+  const cached=await localGet("cache",ME.id);
+  if(cached)await localPut("cache",{...cached,vehicle:VEHICULO});
+  await loadDocs();
 }
-function drawVt(){$("vtypes").innerHTML=VTIPOS.map(v=>`<span class="chip ${v[1]===vt?"on":""}" data-v="${v[1]}">${v[0]} ${v[1]}</span>`).join("")}
-$("vtypes").onclick=e=>{if(!editando)return;if(e.target.dataset.v){vt=e.target.dataset.v;drawVt()}};
-let editando=false;
-const CAMPOS={nombre:"Nombre",placas:"Placas",tipo:"Tipo de vehículo",marca_modelo:"Marca / modelo",licencia_numero:"Número de licencia",licencia_tipo:"Tipo de licencia",licencia_vigencia:"Vigencia de licencia"};
-function modoEdicion(on){editando=on;["unom","upl","umm","ulic","ultip","uvig"].forEach(i=>$(i).disabled=!on);$("bform").classList.toggle("hide",!on);$("bedit").classList.toggle("hide",on);drawVt()}
-$("bedit").onclick=()=>modoEdicion(true);
-$("bcancel").onclick=()=>{err("saveerr",null);modoEdicion(false);loadPerfil()};
-$("btel").onclick=async()=>{err("saveerr",null);const {error}=await sb.from("drivers").update({telefono:$("utel").value.trim()||null}).eq("id",ME.id);if(error){err("saveerr",error);return}toast("Teléfono guardado ✔")};
-async function estadoCambio(){
-  const {data}=await sb.from("cambios_perfil").select("*").eq("driver_id",ME.id).order("solicitado_en",{ascending:false}).limit(1);const c=data&&data[0];const box=$("cambio-est");
-  if(!c){box.innerHTML="";$("bedit").disabled=false;return}
-  const f=x=>new Date(x).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
-  const lista=Object.entries(c.datos).map(([k,v])=>`${CAMPOS[k]||k}: <b>${v}</b>`).join("<br>");
-  if(c.estatus==="pendiente"){box.innerHTML=`<div class="note" style="background:#e3ecff;color:#1d4ed8;padding:10px;border-radius:10px;margin-top:10px"><b>Cambio en revisión</b> · ${f(c.solicitado_en)}<br>${lista}</div>`;$("bedit").disabled=true;$("bedit").textContent="Solicitud en revisión"}
-  else{box.innerHTML=c.estatus==="aprobada"?`<div class="note" style="margin-top:10px;color:#0f7a3d">Último cambio aprobado (${f(c.resuelto_en)})</div>`:`<div class="note" style="margin-top:10px;color:#b42318">Último cambio rechazado (${f(c.resuelto_en)})${esc(c.nota?": "+c.nota:"")}</div>`;$("bedit").disabled=false;$("bedit").textContent="Solicitar cambio de datos"}}
-$("bsave").onclick=async()=>{
-  err("saveerr",null);$("bsave").disabled=true;
-  const datos={nombre:$("unom").value.trim(),placas:$("upl").value.trim(),tipo:vt||"",marca_modelo:$("umm").value.trim(),licencia_numero:$("ulic").value.trim(),licencia_tipo:$("ultip").value.trim(),licencia_vigencia:$("uvig").value};
-  const {error}=await sb.rpc("solicitar_cambio_perfil",{p_datos:datos});$("bsave").disabled=false;
-  if(error){err("saveerr",error);return}
-  toast("Solicitud enviada ✔");modoEdicion(false);loadPerfil()};
-
-// ---------- Mis documentos (diseño; aún sin conexión a datos) ----------
-const DOC_TIPOS=[{k:"seguro",n:"Seguro del vehículo",ic:"🛡️",campo:"Póliza"},{k:"licencia",n:"Licencia de conducir",ic:"🪪",campo:"Número"},{k:"tarjeta",n:"Tarjeta de circulación",ic:"🚗",campo:"Folio"},{k:"ine",n:"INE",ic:"🆔",campo:"Clave de elector"}];
-let DOCS={},DOCS_DEMO=false,docTarget=null;
-const enDias=n=>{const d=new Date();d.setDate(d.getDate()+n);return d.toLocaleDateString("en-CA")};
-function docsEjemplo(){return {seguro:{numero:"•••• 4821",vence:enDias(12)},licencia:{numero:"•••• 7302",vence:enDias(730)},tarjeta:{numero:"•••• 1159",vence:enDias(-5)},ine:{numero:"•••• 8846",vence:enDias(1900)}}}
+$("save-contact").onclick=async()=>{
+  err("contact-err",null);
+  const correo=$("ucorreo").value.trim().toLowerCase();
+  if(correo&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(correo)){err("contact-err",new Error("Escribe un correo de contacto válido."));return}
+  const button=$("save-contact");button.disabled=true;
+  const {error}=await sb.rpc("actualizar_contacto_driver",{p_telefono:$("utel").value.trim()||null,p_correo_contacto:correo||null});
+  button.disabled=false;
+  if(error){err("contact-err",error);return}
+  toast("Datos de contacto guardados ✔");
+};
+const DOC_TIPOS=[
+  {k:"seguro",n:"Seguro del vehículo",ic:"🛡️"},
+  {k:"licencia",n:"Licencia de conducir",ic:"🪪"},
+  {k:"tarjeta",n:"Tarjeta de circulación",ic:"🚗"},
+  {k:"ine",n:"INE",ic:"🆔"}
+];
+let DOCS=[],DOC_ALERTS=[];
+const docTypeName=k=>(DOC_TIPOS.find(x=>x.k===k)||{}).n||k;
+function diasVencimiento(value){
+  if(!value)return null;
+  const today=new Date(),start=new Date(today.getFullYear(),today.getMonth(),today.getDate());
+  const expiry=new Date(`${value}T00:00:00`);
+  return Number.isNaN(expiry.getTime())?null:Math.floor((expiry-start)/86400000);
+}
 function estadoDoc(d){
   if(!d)return {txt:"Sin registrar",cls:"w",dias:null};
-  if(d.revision)return {txt:"En revisión",cls:"w",dias:null};
-  const dias=Math.round((parseF(d.vence)-new Date(new Date().toLocaleDateString("en-CA")+"T00:00:00"))/864e5);
-  if(dias<0)return {txt:`Vencido hace ${-dias} ${-dias===1?"día":"días"}`,cls:"bad",dias};
-  if(dias<=30)return {txt:`Vence en ${dias} ${dias===1?"día":"días"}`,cls:"w",dias};
+  const dias=diasVencimiento(d.vigencia);
+  if(dias===null)return {txt:"Sin vigencia",cls:"w",dias:null};
+  if(dias<0)return {txt:`Vencido hace ${-dias} ${dias===-1?"día":"días"}`,cls:"bad",dias};
+  if(dias<=15)return {txt:`Vence en ${dias} ${dias===1?"día":"días"}`,cls:"bad",dias};
+  if(dias<=30)return {txt:`Vence en ${dias} días`,cls:"w",dias};
   return {txt:"Vigente",cls:"ok",dias};
 }
-function drawDocs(){
-  const alertas=[];
-  $("docs-list").innerHTML=DOC_TIPOS.map(t=>{const d=DOCS[t.k],e=estadoDoc(d);
-    if(d&&e.cls==="bad")alertas.push({cls:"bad",m:`${esc(t.n)}: ${e.txt.toLowerCase()}. Sube el documento actualizado.`});
-    else if(d&&e.dias!==null&&e.dias<=30)alertas.push({cls:"w",m:`${esc(t.n)}: ${e.txt.toLowerCase()}. Ve preparando el nuevo.`});
-    const vence=d&&d.vence?parseF(d.vence).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"}):"";
-    return `<div class="doc"><div class="ic">${esc(t.ic)}</div><div class="info"><b>${esc(t.n)}</b>
-      <small>${d?`${esc(t.campo)} ${esc(d.numero)}${vence?" · vence "+vence:""}`:"Aún no hay un documento registrado"}</small>
-      <span class="pill ${esc(e.cls)}" style="margin-top:6px">${esc(e.txt)}</span></div>
-      <div class="act">${d?`<button data-docver="${esc(t.k)}">Ver</button>`:""}<button data-docsub="${esc(t.k)}" ${DOCS_DEMO?"":"disabled"}>${d?"Actualizar":"Subir"}</button></div></div>`}).join("");
-  $("docs-banner").innerHTML=alertas.map(a=>`<div class="alerta ${esc(a.cls)}">${a.cls==="bad"?"⛔":"⚠️"} ${esc(a.m)}</div>`).join("");
-  document.querySelector("nav button[data-t=per]").classList.toggle("alerta-dot",alertas.length>0);
-  $("docs-demo").textContent=DOCS_DEMO?"Quitar el ejemplo":"Ver ejemplo del diseño";
-  $("docs-note").textContent=DOCS_DEMO?"Vista de ejemplo: los datos no son tuyos y no se guardan.":"Esta sección aún no está conectada. Cuando lo esté, aquí consultarás tu seguro, licencia, tarjeta de circulación e INE, recibirás avisos antes de que venzan y podrás subir el documento nuevo.";
-  document.querySelectorAll("[data-docsub]").forEach(b=>b.onclick=()=>{docTarget=b.dataset.docsub;$("docfile").click()});
-  document.querySelectorAll("[data-docver]").forEach(b=>b.onclick=()=>toast("En el app real se abrirá la imagen del documento"));
+async function loadDocs(){
+  const {data,error}=await sb.from("driver_documents").select("id,driver_id,tipo,storage_path,vigencia,estado,origen,creado_en,nota").eq("driver_id",ME.id).order("creado_en",{ascending:false});
+  if(error){DOCS=[];$("docs-note").textContent="No se pudieron cargar los documentos. Verifica que esté instalada la configuración de documentos en Supabase: "+error.message;drawDocs();return}
+  DOCS=data||[];
+  const paths=DOCS.map(x=>x.storage_path).filter(Boolean);
+  if(paths.length){
+    const {data:urls,error:urlError}=await sb.storage.from("driver-documents").createSignedUrls(paths,3600);
+    if(urlError){$("docs-note").textContent="No se pudieron abrir los archivos: "+urlError.message}
+    else DOCS=DOCS.map(x=>({...x,url:(urls||[]).find(y=>y.path===x.storage_path)?.signedUrl||null}));
+  }
+  const {data:alerts,error:alertError}=await sb.from("driver_document_alerts").select("id,driver_document_id,alert_date,message").eq("driver_id",ME.id).order("alert_date",{ascending:false}).limit(30);
+  DOC_ALERTS=alertError?[]:alerts||[];
+  if(alertError)$("docs-note").textContent="No se pudieron cargar las alertas: "+alertError.message;
+  drawDocs();
 }
-$("docs-demo").onclick=()=>{DOCS_DEMO=!DOCS_DEMO;DOCS=DOCS_DEMO?docsEjemplo():{};drawDocs()};
-$("docfile").onchange=e=>{const f=e.target.files[0];e.target.value="";if(!f||!docTarget||!DOCS_DEMO)return;
-  const base=DOCS[docTarget]||{numero:"•••• ----"};DOCS[docTarget]={...base,revision:true};drawDocs();toast("Documento enviado a revisión (ejemplo): "+f.name)};
+function drawDocs(){
+  const alerts=[];
+  $("docs-list").innerHTML=DOC_TIPOS.map(t=>{
+    const approved=DOCS.find(x=>x.tipo===t.k&&x.estado==="aprobado");
+    const pending=DOCS.find(x=>x.tipo===t.k&&x.estado==="pendiente");
+    const lastRejected=DOCS.find(x=>x.tipo===t.k&&x.estado==="rechazado");
+    const state=estadoDoc(approved);
+    if(approved&&state.dias!==null&&state.dias<=15&&!pending)alerts.push({cls:"bad",text:`${t.n}: ${state.txt.toLowerCase()}. Sube el reemplazo para dejar de recibir alertas.`});
+    const date=approved?.vigencia?new Date(`${approved.vigencia}T00:00:00`).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"}):"";
+    return `<div class="doc"><div class="ic">${esc(t.ic)}</div><div class="info"><b>${esc(t.n)}</b>
+      <small>${approved?`Vigencia hasta ${esc(date)}`:"Aún no hay un documento autorizado"}</small>
+      <span class="pill ${approved?state.cls:"w"}" style="margin-top:6px">${approved?esc(state.txt):"Sin registrar"}</span>
+      ${pending?`<small class="pill w" style="display:inline-block;margin-top:5px">Actualización enviada · en espera de Operaciones</small>`:""}
+      ${lastRejected?`<small class="pill bad" style="display:inline-block;margin-top:5px">Último archivo rechazado${lastRejected.nota?`: ${esc(lastRejected.nota)}`:""}</small>`:""}
+      </div><div class="act">${approved?.url?`<a href="${esc(approved.url)}" target="_blank" rel="noopener">Ver</a>`:""}<button data-docsub="${esc(t.k)}" ${pending?"disabled":""}>${pending?"En revisión":"Actualizar"}</button></div></div>`;
+  }).join("");
+  const today=new Date().toLocaleDateString("en-CA");
+  const todayAlerts=DOC_ALERTS.filter(x=>{
+    if(x.alert_date!==today)return false;
+    const alertDoc=DOCS.find(d=>d.id===x.driver_document_id);
+    return alertDoc&&!DOCS.some(d=>d.tipo===alertDoc.tipo&&d.estado==="pendiente");
+  });
+  $("docs-banner").innerHTML=alerts.map(a=>`<div class="alerta ${a.cls}">⚠️ ${esc(a.text)}</div>`).join("")+
+    todayAlerts.map(a=>`<div class="alerta bad">⛔ ${esc(a.message)}</div>`).join("");
+  document.querySelector("nav button[data-t=per]").classList.toggle("alerta-dot",alerts.length>0||todayAlerts.length>0);
+  $("docs-note").textContent="Los documentos se guardan de forma privada. La fecha que indiques se envía junto con el archivo y Operaciones debe aprobarla antes de reemplazar el documento vigente.";
+  document.querySelectorAll("[data-docsub]").forEach(b=>b.onclick=()=>abrirCargaDocumento(b.dataset.docsub));
+  if(todayAlerts.length&&"Notification" in window&&Notification.permission==="granted"){
+    const key=`doc-alert-${ME.id}-${today}`;
+    if(localStorage.getItem(key)!=="1"){
+      new Notification("Vigencia de documentos",{body:todayAlerts.map(x=>x.message).join("\n")});
+      localStorage.setItem(key,"1");
+    }
+  }
+}
+function abrirCargaDocumento(tipo){
+  abrirSheet(`<h2>Actualizar ${esc(docTypeName(tipo))}</h2><label for="doc-date">Fecha de vencimiento</label><input id="doc-date" type="date" required>
+    <label for="doc-file">Archivo (PDF o imagen, máximo 10 MB)</label><input id="doc-file" type="file" accept="image/*,application/pdf" required>
+    <div id="doc-upload-error"></div><div style="display:flex;gap:8px;margin-top:12px"><button class="btn" id="doc-upload">Enviar a Operaciones</button><button class="btn ghost" id="doc-upload-cancel">Cancelar</button></div>`);
+  $("doc-upload-cancel").onclick=()=>$("sheet").classList.add("hide");
+  $("doc-upload").onclick=async()=>{
+    const file=$("doc-file").files[0],vigencia=$("doc-date").value,errorBox=$("doc-upload-error"),button=$("doc-upload");
+    errorBox.innerHTML="";
+    if(!file||!vigencia){errorBox.innerHTML='<div class="errbox">Selecciona el documento y su fecha de vencimiento.</div>';return}
+    if(file.size>10*1024*1024){errorBox.innerHTML='<div class="errbox">El archivo supera el límite de 10 MB.</div>';return}
+    if(!(file.type==="application/pdf"||["image/jpeg","image/png","image/webp"].includes(file.type))){errorBox.innerHTML='<div class="errbox">Solo se aceptan PDF, JPEG, PNG o WebP.</div>';return}
+    button.disabled=true;
+    const extension=(file.name.split(".").pop()||"bin").toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,8)||"bin";
+    const storagePath=`${ME.id}/${tipo}/${crypto.randomUUID()}.${extension}`;
+    const {error:uploadError}=await sb.storage.from("driver-documents").upload(storagePath,file,{contentType:file.type,upsert:false});
+    if(uploadError){button.disabled=false;errorBox.innerHTML=`<div class="errbox">${esc(uploadError.message)}</div>`;return}
+    const {error:insertError}=await sb.from("driver_documents").insert({driver_id:ME.id,tipo,storage_path:storagePath,vigencia,estado:"pendiente",origen:"driver"});
+    if(insertError){
+      const {error:removeError}=await sb.storage.from("driver-documents").remove([storagePath]);
+      button.disabled=false;
+      errorBox.innerHTML=`<div class="errbox">${esc(insertError.message)}${removeError?` · No se pudo limpiar el archivo temporal: ${esc(removeError.message)}`:""}</div>`;
+      return;
+    }
+    $("sheet").classList.add("hide");toast("Documento enviado a Operaciones ✔");await loadDocs();
+  };
+}
 drawDocs();
 
 window.addEventListener("offline",()=>{OFFLINE_MODE=true;setNetStatus("Sin conexión · el check-in, check-out y las fotos se guardarán en este dispositivo.",true)});
