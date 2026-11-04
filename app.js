@@ -3,7 +3,7 @@ const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);
 const $=id=>document.getElementById(id);
 const LOCAL_DB="chazki-driver-offline";
 const CANCEL_DAILY_LIMIT_EXEMPT_DRIVER_ID="f640638a-d9a6-4136-a7dd-481e86715c7e";
-let OFFLINE_MODE=!navigator.onLine, syncBusy=false, syncCancelBusy=false;
+let OFFLINE_MODE=!navigator.onLine, syncBusy=false, syncCancelBusy=false, ROUTE_SYNC_ERROR=null;
 function openLocalDb(){
   return new Promise((resolve,reject)=>{
     if(!("indexedDB" in window)){reject(new Error("Este dispositivo no permite guardar registros sin conexión."));return}
@@ -209,6 +209,7 @@ async function resumeRoute(){
 }
 async function restoreOfflineRoute(record){
   if(!record)return;
+  ROUTE_SYNC_ERROR=record.syncError||null;
   const r=record.routeInfo;
   S.route={...r,viajaConAuxiliar:r.viajaConAuxiliar===true,dbId:record.serverRouteId||null,localKey:record.key,checkin:new Date(r.checkin)};
   S.zonas=[...r.zonas];prefillCan();setStage(1);updFin();
@@ -250,11 +251,15 @@ async function syncPendingRoute(){
   if(syncBusy||!ME||!navigator.onLine)return false;
   const key=routeLocalKey();let record;
   try{record=await localGet("routes",key)}catch(e){setNetStatus(e.message,true);return false}
-  if(!record){OFFLINE_MODE=false;setNetStatus("");return true}
+  if(!record){ROUTE_SYNC_ERROR=null;OFFLINE_MODE=false;setNetStatus("");return true}
+  ROUTE_SYNC_ERROR=record.syncError||null;
   syncBusy=true;
+  let syncStep="preparando el envío de la ruta";
   try{
+    syncStep="sincronizando evidencia del check-in";
     await syncAuxiliaryEvidence(record,"checkin");
     if(!record.serverRouteId){
+      syncStep="verificando si el check-in ya existe en Supabase";
       const {data:existing,error:lookupError}=await sb.from("rutas").select("id")
         .eq("driver_id",record.routePayload.driver_id)
         .eq("id_ruta",record.routePayload.id_ruta)
@@ -263,6 +268,7 @@ async function syncPendingRoute(){
       if(lookupError)throw lookupError;
       let route=existing;
       if(!route){
+        syncStep="registrando el check-in en Supabase";
         const inserted=await sb.from("rutas").insert(record.routePayload).select("id").single();
         if(inserted.error)throw inserted.error;
         route=inserted.data;
@@ -273,12 +279,14 @@ async function syncPendingRoute(){
     for(let i=0;i<(record.manifests||[]).length;i++){
       const photo=record.manifests[i];
       if(!photo.photoPath){
+        syncStep="subiendo una foto del manifiesto";
         const path=`${ME.id}/${record.serverRouteId}/offline-${photo.id}.jpg`;
         const {error}=await sb.storage.from("manifiestos").upload(path,photo.blob,{contentType:"image/jpeg",upsert:true});
         if(error)throw error;
         photo.photoPath=path;await localPut("routes",record);
       }
       if(!photo.rowSaved){
+        syncStep="registrando la foto del manifiesto";
         const {data:existing,error:lookupError}=await sb.from("ruta_manifiestos").select("id")
           .eq("ruta_id",record.serverRouteId).eq("foto_path",photo.photoPath).maybeSingle();
         if(lookupError)throw lookupError;
@@ -291,15 +299,22 @@ async function syncPendingRoute(){
     }
     if(record.manifests&&record.manifests.length){record.manifests=[];await localPut("routes",record)}
     if(record.checkout){
+      syncStep="sincronizando evidencia del check-out";
       await syncAuxiliaryEvidence(record,"checkout");
-      if(record.checkout.fallos.length){const rows=record.checkout.fallos.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_fallos").upsert(rows);if(error)throw error}
-      if(record.checkout.incidencias.length){const rows=record.checkout.incidencias.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_incidencias").upsert(rows);if(error)throw error}
-      const {error}=await sb.from("rutas").update({estado:"cerrada",checkout_at:record.checkout.checkoutAt,
+      if(record.checkout.fallos.length){syncStep="registrando los paquetes fallidos";const rows=record.checkout.fallos.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_fallos").upsert(rows);if(error)throw error}
+      if(record.checkout.incidencias.length){syncStep="registrando las incidencias de la ruta";const rows=record.checkout.incidencias.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_incidencias").upsert(rows);if(error)throw error}
+      syncStep="cerrando la ruta en Supabase";
+      const {data:closedRoute,error}=await sb.from("rutas").update({estado:"cerrada",checkout_at:record.checkout.checkoutAt,
         entregados:record.checkout.ent,fallidos:record.checkout.fal,hubo_incidencias:record.checkout.hubo_incidencias,
-        evidencia_auxiliar_checkout_path:record.checkout.evidencia_auxiliar_checkout_path||null,...record.checkout.extras}).eq("id",record.serverRouteId);
+        evidencia_auxiliar_checkout_path:record.checkout.evidencia_auxiliar_checkout_path||null,...record.checkout.extras})
+        .eq("id",record.serverRouteId).select("id").single();
       if(error)throw error;
+      if(!closedRoute)throw new Error("Supabase no confirmó el cierre de la ruta.");
+      ROUTE_SYNC_ERROR=null;
       await localDelete("routes",key);S.routeLocalCheckout=record.checkout;showRouteDone(false);
     }else{
+      ROUTE_SYNC_ERROR=null;
+      delete record.syncError;
       record.status="active";await localPut("routes",record);
       if(S.route)S.route.dbId=record.serverRouteId;
       if(requiereManif())await loadManif();
@@ -307,8 +322,20 @@ async function syncPendingRoute(){
     OFFLINE_MODE=false;setNetStatus("");
     return true;
   }catch(e){
+    ROUTE_SYNC_ERROR={
+      step:syncStep,
+      message:String(e?.message||e||"Error desconocido"),
+      code:e?.code||null,
+      details:e?.details||null,
+      hint:e?.hint||null,
+      status:e?.status||null
+    };
+    record.syncError=ROUTE_SYNC_ERROR;
+    try{await localPut("routes",record)}
+    catch(saveError){ROUTE_SYNC_ERROR.saveError=String(saveError?.message||saveError)}
     if(networkError(e)){OFFLINE_MODE=true;setNetStatus("Conexión intermitente · hay registros guardados en este dispositivo y se enviarán al recuperar la red.",true)}
-    else{const target=record.checkout?"outerr":"inerr";err(target,e);setNetStatus("No se pudo sincronizar. Tus datos siguen guardados en este dispositivo.",true)}
+    else{const target=record.checkout?"outerr":"inerr";err(target,e);setNetStatus("El servidor no aceptó la sincronización. Tus datos siguen guardados en este dispositivo.",true)}
+    renderRouteSyncError();
     return false;
   }finally{syncBusy=false}
 }
@@ -335,13 +362,27 @@ function routeDoneMarkup(pending){
   const r=S.route,res=S.result,t=S.routeLocalCheckout?new Date(S.routeLocalCheckout.checkoutAt):new Date();
   const incs=S.incSel.size?[...S.incSel].map(i=>(INCID.find(x=>String(x.id)===String(i))||{}).nombre).filter(Boolean):[];
   ["s2","s3","s4","sresume"].forEach(x=>$(x).classList.add("hide"));$("sdone").classList.remove("hide");
-  $("sdone").innerHTML=`<div class="${pending?"alerta w":"okbox"}"><b>${pending?"📴 Ruta guardada en este dispositivo":"🏁 Ruta finalizada"}</b><br>${pending?"Se enviará automáticamente al recuperar conexión.":""}<br>${esc(r.cli)} · ${esc(r.cedis)} · ${esc(r.rid)}</div>
+  $("sdone").innerHTML=`<div class="${pending?"alerta w":"okbox"}"><b>${pending?"📴 Ruta guardada en este dispositivo":"🏁 Ruta finalizada"}</b><br>${pending?"Se enviará automáticamente cuando se resuelva el problema.":""}<br>${esc(r.cli)} · ${esc(r.cedis)} · ${esc(r.rid)}</div>
+  <div id="route-sync-error" aria-live="polite"></div>
   <div class="kv"><span>Entregados</span><b>${esc(res.ent)}</b></div><div class="kv"><span>Fallidos</span><b>${esc(res.fal)}</b></div>
   <div class="kv"><span>Efectividad</span><b>${Math.round(res.ent/r.pk*100)}%</b></div>
   <div class="kv"><span>Incidencias</span><b>${incs.length?incs.join(", "):"Ninguna"}</b></div>
   <div class="kv"><span>Check-out</span><b>${t.toTimeString().slice(0,5)}</b></div><button class="btn" id="bnew">Iniciar nueva ruta</button>`;
   $("hstate").className=`pill ${pending?"w":"ok"}`;$("hstate").textContent=pending?"Pendiente de envío":"Ruta cerrada";
+  renderRouteSyncError();
   $("bnew").onclick=()=>location.reload();
+}
+function renderRouteSyncError(){
+  const box=$("route-sync-error");
+  if(!box||!ROUTE_SYNC_ERROR)return;
+  const e=ROUTE_SYNC_ERROR;
+  box.innerHTML=`<div class="errbox"><b>No se sincronizó durante: ${esc(e.step)}.</b><br>${esc(e.message)}
+    ${e.code?`<br><small>Código: ${esc(e.code)}</small>`:""}
+    ${e.status?`<br><small>HTTP: ${esc(e.status)}</small>`:""}
+    ${e.details?`<br><small>Detalle: ${esc(e.details)}</small>`:""}
+    ${e.hint?`<br><small>Sugerencia del servidor: ${esc(e.hint)}</small>`:""}
+    ${e.saveError?`<br><small>No se pudo guardar el diagnóstico en el dispositivo: ${esc(e.saveError)}</small>`:""}
+    <br><small>Tus datos siguen guardados en este dispositivo. Usa 🔄 para reintentar.</small></div>`;
 }
 function showRouteDone(pending=false){routeDoneMarkup(pending)}
 function prefillCan(){const r=S.route;$("ccli").value=r.cliId;fillCedis($("ccedis"),r.cliId);$("ccedis").value=r.cedisId}

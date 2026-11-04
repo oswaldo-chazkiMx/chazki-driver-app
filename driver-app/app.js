@@ -2,7 +2,8 @@ const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&
 const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);
 const $=id=>document.getElementById(id);
 const LOCAL_DB="chazki-driver-offline";
-let OFFLINE_MODE=!navigator.onLine, syncBusy=false, syncCancelBusy=false;
+const CANCEL_DAILY_LIMIT_EXEMPT_DRIVER_ID="f640638a-d9a6-4136-a7dd-481e86715c7e";
+let OFFLINE_MODE=!navigator.onLine, syncBusy=false, syncCancelBusy=false, ROUTE_SYNC_ERROR=null;
 function openLocalDb(){
   return new Promise((resolve,reject)=>{
     if(!("indexedDB" in window)){reject(new Error("Este dispositivo no permite guardar registros sin conexión."));return}
@@ -208,6 +209,7 @@ async function resumeRoute(){
 }
 async function restoreOfflineRoute(record){
   if(!record)return;
+  ROUTE_SYNC_ERROR=record.syncError||null;
   const r=record.routeInfo;
   S.route={...r,viajaConAuxiliar:r.viajaConAuxiliar===true,dbId:record.serverRouteId||null,localKey:record.key,checkin:new Date(r.checkin)};
   S.zonas=[...r.zonas];prefillCan();setStage(1);updFin();
@@ -249,11 +251,15 @@ async function syncPendingRoute(){
   if(syncBusy||!ME||!navigator.onLine)return false;
   const key=routeLocalKey();let record;
   try{record=await localGet("routes",key)}catch(e){setNetStatus(e.message,true);return false}
-  if(!record){OFFLINE_MODE=false;setNetStatus("");return true}
+  if(!record){ROUTE_SYNC_ERROR=null;OFFLINE_MODE=false;setNetStatus("");return true}
+  ROUTE_SYNC_ERROR=record.syncError||null;
   syncBusy=true;
+  let syncStep="preparando el envío de la ruta";
   try{
+    syncStep="sincronizando evidencia del check-in";
     await syncAuxiliaryEvidence(record,"checkin");
     if(!record.serverRouteId){
+      syncStep="verificando si el check-in ya existe en Supabase";
       const {data:existing,error:lookupError}=await sb.from("rutas").select("id")
         .eq("driver_id",record.routePayload.driver_id)
         .eq("id_ruta",record.routePayload.id_ruta)
@@ -262,6 +268,7 @@ async function syncPendingRoute(){
       if(lookupError)throw lookupError;
       let route=existing;
       if(!route){
+        syncStep="registrando el check-in en Supabase";
         const inserted=await sb.from("rutas").insert(record.routePayload).select("id").single();
         if(inserted.error)throw inserted.error;
         route=inserted.data;
@@ -272,12 +279,14 @@ async function syncPendingRoute(){
     for(let i=0;i<(record.manifests||[]).length;i++){
       const photo=record.manifests[i];
       if(!photo.photoPath){
+        syncStep="subiendo una foto del manifiesto";
         const path=`${ME.id}/${record.serverRouteId}/offline-${photo.id}.jpg`;
         const {error}=await sb.storage.from("manifiestos").upload(path,photo.blob,{contentType:"image/jpeg",upsert:true});
         if(error)throw error;
         photo.photoPath=path;await localPut("routes",record);
       }
       if(!photo.rowSaved){
+        syncStep="registrando la foto del manifiesto";
         const {data:existing,error:lookupError}=await sb.from("ruta_manifiestos").select("id")
           .eq("ruta_id",record.serverRouteId).eq("foto_path",photo.photoPath).maybeSingle();
         if(lookupError)throw lookupError;
@@ -290,15 +299,22 @@ async function syncPendingRoute(){
     }
     if(record.manifests&&record.manifests.length){record.manifests=[];await localPut("routes",record)}
     if(record.checkout){
+      syncStep="sincronizando evidencia del check-out";
       await syncAuxiliaryEvidence(record,"checkout");
-      if(record.checkout.fallos.length){const rows=record.checkout.fallos.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_fallos").upsert(rows);if(error)throw error}
-      if(record.checkout.incidencias.length){const rows=record.checkout.incidencias.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_incidencias").upsert(rows);if(error)throw error}
-      const {error}=await sb.from("rutas").update({estado:"cerrada",checkout_at:record.checkout.checkoutAt,
+      if(record.checkout.fallos.length){syncStep="registrando los paquetes fallidos";const rows=record.checkout.fallos.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_fallos").upsert(rows);if(error)throw error}
+      if(record.checkout.incidencias.length){syncStep="registrando las incidencias de la ruta";const rows=record.checkout.incidencias.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_incidencias").upsert(rows);if(error)throw error}
+      syncStep="cerrando la ruta en Supabase";
+      const {data:closedRoute,error}=await sb.from("rutas").update({estado:"cerrada",checkout_at:record.checkout.checkoutAt,
         entregados:record.checkout.ent,fallidos:record.checkout.fal,hubo_incidencias:record.checkout.hubo_incidencias,
-        evidencia_auxiliar_checkout_path:record.checkout.evidencia_auxiliar_checkout_path||null,...record.checkout.extras}).eq("id",record.serverRouteId);
+        evidencia_auxiliar_checkout_path:record.checkout.evidencia_auxiliar_checkout_path||null,...record.checkout.extras})
+        .eq("id",record.serverRouteId).select("id").single();
       if(error)throw error;
+      if(!closedRoute)throw new Error("Supabase no confirmó el cierre de la ruta.");
+      ROUTE_SYNC_ERROR=null;
       await localDelete("routes",key);S.routeLocalCheckout=record.checkout;showRouteDone(false);
     }else{
+      ROUTE_SYNC_ERROR=null;
+      delete record.syncError;
       record.status="active";await localPut("routes",record);
       if(S.route)S.route.dbId=record.serverRouteId;
       if(requiereManif())await loadManif();
@@ -306,22 +322,67 @@ async function syncPendingRoute(){
     OFFLINE_MODE=false;setNetStatus("");
     return true;
   }catch(e){
+    ROUTE_SYNC_ERROR={
+      step:syncStep,
+      message:String(e?.message||e||"Error desconocido"),
+      code:e?.code||null,
+      details:e?.details||null,
+      hint:e?.hint||null,
+      status:e?.status||null
+    };
+    record.syncError=ROUTE_SYNC_ERROR;
+    try{await localPut("routes",record)}
+    catch(saveError){ROUTE_SYNC_ERROR.saveError=String(saveError?.message||saveError)}
     if(networkError(e)){OFFLINE_MODE=true;setNetStatus("Conexión intermitente · hay registros guardados en este dispositivo y se enviarán al recuperar la red.",true)}
-    else{const target=record.checkout?"outerr":"inerr";err(target,e);setNetStatus("No se pudo sincronizar. Tus datos siguen guardados en este dispositivo.",true)}
+    else{const target=record.checkout?"outerr":"inerr";err(target,e);setNetStatus("El servidor no aceptó la sincronización. Tus datos siguen guardados en este dispositivo.",true)}
+    renderRouteSyncError();
     return false;
   }finally{syncBusy=false}
 }
+async function retryPendingRouteSync(){
+  const button=$("sync-route");
+  if(button.disabled)return;
+  button.disabled=true;button.textContent="⏳";
+  try{
+    if(!ME)throw new Error("Inicia sesión para sincronizar la ruta.");
+    if(!navigator.onLine){setNetStatus("Sin conexión · la ruta sigue guardada en este dispositivo.",true);toast("Conéctate a internet e inténtalo de nuevo.");return}
+    if(syncBusy){toast("La sincronización ya está en curso.");return}
+    const record=await localGet("routes",routeLocalKey());
+    if(!record){toast("No hay rutas pendientes de sincronizar.");return}
+    const wasOffline=OFFLINE_MODE,synced=await syncPendingRoute();
+    if(synced){toast("Ruta sincronizada correctamente.");if(wasOffline)location.reload()}
+    else toast("No se pudo sincronizar. La ruta sigue guardada en el dispositivo.");
+  }catch(e){
+    setNetStatus(`No se pudo sincronizar la ruta: ${e.message||e}`,true);
+    toast("No se pudo sincronizar. La ruta sigue guardada en el dispositivo.");
+  }finally{button.disabled=false;button.textContent="🔄"}
+}
+$("sync-route").onclick=retryPendingRouteSync;
 function routeDoneMarkup(pending){
   const r=S.route,res=S.result,t=S.routeLocalCheckout?new Date(S.routeLocalCheckout.checkoutAt):new Date();
   const incs=S.incSel.size?[...S.incSel].map(i=>(INCID.find(x=>String(x.id)===String(i))||{}).nombre).filter(Boolean):[];
   ["s2","s3","s4","sresume"].forEach(x=>$(x).classList.add("hide"));$("sdone").classList.remove("hide");
-  $("sdone").innerHTML=`<div class="${pending?"alerta w":"okbox"}"><b>${pending?"📴 Ruta guardada en este dispositivo":"🏁 Ruta finalizada"}</b><br>${pending?"Se enviará automáticamente al recuperar conexión.":""}<br>${esc(r.cli)} · ${esc(r.cedis)} · ${esc(r.rid)}</div>
+  $("sdone").innerHTML=`<div class="${pending?"alerta w":"okbox"}"><b>${pending?"📴 Ruta guardada en este dispositivo":"🏁 Ruta finalizada"}</b><br>${pending?"Se enviará automáticamente cuando se resuelva el problema.":""}<br>${esc(r.cli)} · ${esc(r.cedis)} · ${esc(r.rid)}</div>
+  <div id="route-sync-error" aria-live="polite"></div>
   <div class="kv"><span>Entregados</span><b>${esc(res.ent)}</b></div><div class="kv"><span>Fallidos</span><b>${esc(res.fal)}</b></div>
   <div class="kv"><span>Efectividad</span><b>${Math.round(res.ent/r.pk*100)}%</b></div>
   <div class="kv"><span>Incidencias</span><b>${incs.length?incs.join(", "):"Ninguna"}</b></div>
   <div class="kv"><span>Check-out</span><b>${t.toTimeString().slice(0,5)}</b></div><button class="btn" id="bnew">Iniciar nueva ruta</button>`;
   $("hstate").className=`pill ${pending?"w":"ok"}`;$("hstate").textContent=pending?"Pendiente de envío":"Ruta cerrada";
+  renderRouteSyncError();
   $("bnew").onclick=()=>location.reload();
+}
+function renderRouteSyncError(){
+  const box=$("route-sync-error");
+  if(!box||!ROUTE_SYNC_ERROR)return;
+  const e=ROUTE_SYNC_ERROR;
+  box.innerHTML=`<div class="errbox"><b>No se sincronizó durante: ${esc(e.step)}.</b><br>${esc(e.message)}
+    ${e.code?`<br><small>Código: ${esc(e.code)}</small>`:""}
+    ${e.status?`<br><small>HTTP: ${esc(e.status)}</small>`:""}
+    ${e.details?`<br><small>Detalle: ${esc(e.details)}</small>`:""}
+    ${e.hint?`<br><small>Sugerencia del servidor: ${esc(e.hint)}</small>`:""}
+    ${e.saveError?`<br><small>No se pudo guardar el diagnóstico en el dispositivo: ${esc(e.saveError)}</small>`:""}
+    <br><small>Tus datos siguen guardados en este dispositivo. Usa 🔄 para reintentar.</small></div>`;
 }
 function showRouteDone(pending=false){routeDoneMarkup(pending)}
 function prefillCan(){const r=S.route;$("ccli").value=r.cliId;fillCedis($("ccedis"),r.cliId);$("ccedis").value=r.cedisId}
@@ -599,7 +660,7 @@ async function stamp(img){
     `<span style="color:var(--mut)">Este CEDIS aún no tiene ubicación registrada; se registra sin validar.</span>`;
   $("cmeta").innerHTML=`📍 ${loc?loc.lat.toFixed(5)+", "+loc.lng.toFixed(5):"ubicación no disponible"} · ${dia} ${fecha} ${hora}<br>${vm}`;checkCan();
 }
-function checkCan(){$("bcan").disabled=canUsedToday||canLimitUnknown||!(canBlob&&$("ccli").value&&$("ccedis").value)}
+function checkCan(){const dailyLimitLocked=ME?.id!==CANCEL_DAILY_LIMIT_EXEMPT_DRIVER_ID&&(canUsedToday||canLimitUnknown);$("bcan").disabled=dailyLimitLocked||!(canBlob&&$("ccli").value&&$("ccedis").value)}
 $("bcan").onclick=async()=>{
   $("bcan").disabled=true;err("canerr",null);
   try{
@@ -623,9 +684,10 @@ const diaCancelacion=v=>{
   return `${values.year}-${values.month}-${values.day}`;
 };
 function updateCancelAvailability(){
-  const box=$("can-limit"),locked=canUsedToday||canLimitUnknown;
+  const box=$("can-limit"),exempt=ME?.id===CANCEL_DAILY_LIMIT_EXEMPT_DRIVER_ID,locked=!exempt&&(canUsedToday||canLimitUnknown);
   box.classList.toggle("hide",!locked);
-  box.textContent=canUsedToday
+  if(exempt){box.classList.remove("hide");box.textContent="Cuenta de pruebas: no aplica el límite diario. Se mantienen los requisitos de autorización y evidencia."}
+  else box.textContent=canUsedToday
     ?"Ya registraste una cancelación hoy. Solo se permite una cancelación por día."
     :"No se pudo verificar si ya registraste una cancelación hoy. Conéctate a internet y actualiza antes de continuar.";
   ["ccli","ccedis","det2","bcam","cfile"].forEach(id=>$(id).disabled=locked);
@@ -726,7 +788,7 @@ async function loadGan(){
   const sel=ACC.es_flotillero?"*,drivers(nombre),rutas(id_ruta)":"*";
   const q=sb.from("pagos").select(sel).gte("fecha",d.toLocaleDateString("en-CA")).order("fecha",{ascending:false});
   const {data}=ACC.es_flotillero?await q:await q.eq("driver_id",ME.id);PAGOS=data||[];drawG()}
-let RUTAS_K=[],CANS_K=[],kp="sem",PNRS=[],PNR_DISCOUNTS={},PNR_ERROR="",PNR_SEEN=false;
+let RUTAS_K=[],CANS_K=[],kp="sem",PNRS=[],PNR_DISCOUNTS={},PNR_ERROR="",PNR_SEEN=false,NO_SHOW_CASES=[],NO_SHOW_EVENTS=[],NO_SHOW_ERROR="";
 function rangoK(p,prev){const n=new Date();let a,b;
   if(p==="sem"){a=monday(n);if(prev)a.setDate(a.getDate()-7);b=new Date(a);b.setDate(b.getDate()+7)}
   else{a=new Date(n.getFullYear(),n.getMonth()-(prev?1:0),1);b=new Date(a.getFullYear(),a.getMonth()+1,1)}return [a,b]}
@@ -788,19 +850,28 @@ async function loadEstatus(){
 const parseF=s=>{const [y,m,d]=s.split("-");return new Date(+y,m-1,+d)};
 const monday=d=>{const x=new Date(d);x.setHours(0,0,0,0);x.setDate(x.getDate()-((x.getDay()+6)%7));return x};
 function drawG(){
-  const hoy=new Date(),lm=monday(hoy);let xs,vals,sel;
-  if(gp==="sem"){xs=["L","M","X","J","V","S","D"];vals=Array(7).fill(0);sel=PAGOS.filter(p=>monday(parseF(p.fecha)).getTime()===lm.getTime());sel.forEach(p=>vals[(parseF(p.fecha).getDay()+6)%7]+=+p.monto)}
-  else{const y=hoy.getFullYear(),m=hoy.getMonth();xs=["S1","S2","S3","S4","S5"];vals=Array(5).fill(0);sel=PAGOS.filter(p=>{const f=parseF(p.fecha);return f.getFullYear()===y&&f.getMonth()===m});sel.forEach(p=>vals[Math.min(4,Math.floor((parseF(p.fecha).getDate()-1)/7))]+=+p.monto)}
-  const tot=vals.reduce((a,b)=>a+b,0),mx=Math.max(...vals,1);
+  const all=pagosConNoShow(),hoy=new Date(),lm=monday(hoy);let xs,vals,sel;
+  if(gp==="sem"){xs=["L","M","X","J","V","S","D"];vals=Array(7).fill(0);sel=all.filter(p=>monday(parseF(p.fecha)).getTime()===lm.getTime());sel.forEach(p=>vals[(parseF(p.fecha).getDay()+6)%7]+=+p.monto)}
+  else{const y=hoy.getFullYear(),m=hoy.getMonth();xs=["S1","S2","S3","S4","S5"];vals=Array(5).fill(0);sel=all.filter(p=>{const f=parseF(p.fecha);return f.getFullYear()===y&&f.getMonth()===m});sel.forEach(p=>vals[Math.min(4,Math.floor((parseF(p.fecha).getDate()-1)/7))]+=+p.monto)}
+  const tot=vals.reduce((a,b)=>a+b,0),mx=Math.max(...vals.map(Math.abs),1);
   $("glabel").textContent=gp==="sem"?"Ganancias de la semana":"Ganancias del mes";$("gtot").textContent=fmt(tot);
   $("gsub").textContent=`${sel.filter(p=>p.concepto==="servicio").length} servicios pagados`;
-  $("bars").innerHTML=vals.map((v,i)=>`<div><span>${v?fmt(v):""}</span><b style="height:${Math.max(3,v/mx*100)}%"></b>${xs[i]}</div>`).join("");
+  $("bars").innerHTML=vals.map((v,i)=>`<div><span>${v?fmt(v):""}</span><b style="height:${Math.max(3,Math.abs(v)/mx*100)}%;${v<0?"background:#d94848":""}"></b>${xs[i]}</div>`).join("");
   const by=c=>sel.filter(p=>p.concepto===c).reduce((a,p)=>a+ +p.monto,0);
-  $("gdes").innerHTML=[["Servicios","servicio"],["Bonos","bono"],["Propinas","propina"],["Ajustes","ajuste"]].map(([l,c])=>`<div class="item"><span>${l}</span><b>${fmt(by(c))}</b></div>`).join("");
+  $("gdes").innerHTML=[["Servicios","servicio"],["Bonos","bono"],["Propinas","propina"],["Ajustes","ajuste"],["Penalizaciones NO SHOW","penalizacion_no_show"],["Reversiones NO SHOW","reversion_no_show"]].map(([l,c])=>`<div class="item"><span>${l}</span><b>${fmt(by(c))}</b></div>`).join("");
   $("gflota").classList.toggle("hide",!ACC.es_flotillero);
   if(ACC.es_flotillero){const m={};sel.forEach(p=>{const n=p.drivers?p.drivers.nombre:"—";m[n]=(m[n]||0)+ +p.monto});
     $("gflo").innerHTML=Object.entries(m).sort((a,b)=>b[1]-a[1]).map(([n,v])=>`<div class="item"><span>${n}</span><b>${fmt(v)}</b></div>`).join("")||'<div class="note">Sin pagos en este periodo.</div>'}
-  $("gpag").innerHTML=PAGOS.length?PAGOS.slice(0,ACC.es_flotillero?15:8).map(p=>`<div class="item"><div>${p.concepto[0].toUpperCase()+p.concepto.slice(1)}${esc(ACC.es_flotillero&&p.drivers?" · "+p.drivers.nombre:"")}<small>${parseF(p.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short"})}${esc(p.rutas?" · Ruta "+p.rutas.id_ruta:"")}</small></div><div style="text-align:right"><b>${fmt(p.monto)}</b><small><span class="pill ${p.estatus==="pagado"?"ok":"w"}">${esc(p.estatus)}</span></small></div></div>`).join(""):'<div class="note">Aún no tienes pagos registrados.</div>';
+  const paymentLabel=p=>({penalizacion_no_show:"Penalización NO SHOW",reversion_no_show:"Reversión NO SHOW"}[p.concepto]||p.concepto[0].toUpperCase()+p.concepto.slice(1));
+  $("gpag").innerHTML=all.length?all.slice(0,ACC.es_flotillero?15:8).map(p=>`<div class="item"><div>${esc(paymentLabel(p))}${esc(ACC.es_flotillero&&p.drivers?" · "+p.drivers.nombre:"")}<small>${parseF(p.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short"})}${esc(p.rutas?" · Ruta "+p.rutas.id_ruta:"")}</small></div><div style="text-align:right"><b>${fmt(p.monto)}</b><small><span class="pill ${p.estatus==="pagado"?"ok":"w"}">${esc(p.estatus)}</span></small></div></div>`).join(""):'<div class="note">Aún no tienes pagos registrados.</div>';
+}
+function pagosConNoShow(){
+  const penalties=new Set(NO_SHOW_CASES.map(c=>c.pago_penalizacion_id).filter(id=>id!=null).map(String));
+  const reversals=new Set(NO_SHOW_CASES.map(c=>c.pago_reversion_id).filter(id=>id!=null).map(String));
+  return PAGOS.map(p=>({
+    ...p,
+    concepto:penalties.has(String(p.id))?"penalizacion_no_show":reversals.has(String(p.id))?"reversion_no_show":p.concepto
+  })).sort((a,b)=>String(b.fecha).localeCompare(String(a.fecha)));
 }
 document.querySelectorAll("#gseg button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#gseg button").forEach(x=>x.classList.toggle("on",x===b));gp=b.dataset.p;drawG()});
 
@@ -814,12 +885,24 @@ const PNR_ESTADOS={
 const fechaPnR=value=>value?new Date(value).toLocaleString("es-MX",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
 const fmtPnR=value=>"$"+Number(value||0).toLocaleString("es-MX",{minimumFractionDigits:2,maximumFractionDigits:2});
 async function loadPnrs(){
-  if(!navigator.onLine){PNR_ERROR="El seguimiento de PNR requiere conexión a internet.";drawPnrs();return}
-  const [claims,discounts]=await Promise.all([
+  if(!navigator.onLine){PNR_ERROR="El seguimiento de PNR requiere conexión a internet.";NO_SHOW_ERROR="Conéctate a internet para consultar los NO SHOW.";drawPnrs();return}
+  const noShowQuery=sb.from("no_show_casos").select("*").order("creado_en",{ascending:false}).limit(1000);
+  const [claims,discounts,noShows]=await Promise.all([
     sb.from("pnr_reclamos").select("*,pnr_reclamo_eventos(*)").eq("driver_id",ME.id).order("creado_en",{ascending:false}),
-    sb.from("pnr_descuentos").select("reclamo_id,saldo_pendiente,monto_aplicado").eq("driver_id",ME.id)
+    sb.from("pnr_descuentos").select("reclamo_id,saldo_pendiente,monto_aplicado").eq("driver_id",ME.id),
+    ACC.es_flotillero?noShowQuery:noShowQuery.eq("driver_id",ME.id)
   ]);
-  if(claims.error){PNR_ERROR="No se pudieron cargar tus reclamos. Verifica que Operaciones haya habilitado el módulo PNR: "+claims.error.message;PNRS=[];drawPnrs();return}
+  if(noShows.error){NO_SHOW_CASES=[];NO_SHOW_EVENTS=[];NO_SHOW_ERROR="No se pudieron cargar los NO SHOW. Verifica que Operaciones haya instalado el flujo en Supabase: "+noShows.error.message}
+  else{
+    NO_SHOW_CASES=noShows.data||[];NO_SHOW_ERROR="";
+    const ids=NO_SHOW_CASES.map(c=>c.id);
+    if(ids.length){
+      const {data,error}=await sb.from("no_show_eventos").select("*").in("caso_id",ids).order("creado_en");
+      if(error){NO_SHOW_EVENTS=[];NO_SHOW_ERROR="No se pudo cargar el historial de NO SHOW: "+error.message}
+      else NO_SHOW_EVENTS=data||[];
+    }else NO_SHOW_EVENTS=[];
+  }
+  if(claims.error){PNR_ERROR="No se pudieron cargar tus reclamos. Verifica que Operaciones haya habilitado el módulo PNR: "+claims.error.message;PNRS=[];drawPnrs();if($("gpag")&&ACC.puede_ver_ganancias)await loadGan();return}
   if(discounts.error){PNR_ERROR="No se pudo cargar el estado de tus descuentos: "+discounts.error.message;PNR_DISCOUNTS={}}
   else PNR_DISCOUNTS=Object.fromEntries((discounts.data||[]).map(x=>[x.reclamo_id,x]));
   const previousPnrs=PNRS;PNRS=claims.data||[];PNR_ERROR="";
@@ -842,11 +925,13 @@ async function loadPnrs(){
     }
   }
   drawPnrs();
+  if($("gpag")&&ACC.puede_ver_ganancias)await loadGan();
 }
 function drawPnrs(){
   const errorBox=$("pnr-error"),list=$("pnr-list");
   if(!errorBox||!list)return;
   err("pnr-error",PNR_ERROR?new Error(PNR_ERROR):null);
+  drawNoShows();
   list.innerHTML=PNRS.length?PNRS.map(claim=>{
     const [label,style]=PNR_ESTADOS[claim.estado]||["Estatus desconocido","w"];
     const events=(claim.pnr_reclamo_eventos||[]).slice().sort((a,b)=>new Date(a.creado_en)-new Date(b.creado_en));
@@ -864,6 +949,49 @@ function drawPnrs(){
     </article>`;
   }).join(""):'<div class="note">No tienes PNR ni penalizaciones registrados.</div>';
   list.querySelectorAll("[data-pnr-send]").forEach(button=>button.onclick=()=>responderPnR(button.dataset.pnrSend,button));
+}
+const estadoNoShowDriver={
+  reportado:["Penalización aplicada · apelación disponible","w"],
+  apelado:["Apelación pendiente de Coordinación","bad"],
+  apelacion_aceptada:["Apelación aceptada · penalización revertida","ok"],
+  apelacion_rechazada:["Apelación rechazada · penalización vigente","bad"]
+};
+const fechaNoShow=value=>value?new Date(`${String(value).slice(0,10)}T12:00:00`).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"}):"—";
+function drawNoShows(){
+  const errorBox=$("no-show-error"),list=$("no-show-list");
+  if(!errorBox||!list)return;
+  err("no-show-error",NO_SHOW_ERROR?new Error(NO_SHOW_ERROR):null);
+  list.innerHTML=NO_SHOW_CASES.length?NO_SHOW_CASES.map(c=>{
+    const [label,style]=estadoNoShowDriver[c.estado]||["Estatus desconocido","w"];
+    const vence=c.vence_apelacion_en?new Date(c.vence_apelacion_en):null;
+    const canAppeal=navigator.onLine&&c.estado==="reportado"&&vence&&vence>Date.now();
+    const events=NO_SHOW_EVENTS.filter(e=>e.caso_id===c.id);
+    return `<article class="card" style="border:1px solid var(--line);box-shadow:none">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><b>NO SHOW · ${esc(c.cliente_nombre)}</b><span class="pill ${style}">${esc(label)}</span></div>
+      <div class="note">Fecha del servicio: <b>${esc(fechaNoShow(c.fecha_servicio))}</b> · CEDIS: <b>${esc(c.cedis_nombre)}</b><br>Reportado: ${esc(fechaPnR(c.creado_en))}<br>Penalización en tus ganancias: <b>${esc(fmtPnR(-Number(c.monto_penalizacion||0)))}</b></div>
+      <div class="item" style="display:block"><b>Observaciones del Supervisor</b><div style="white-space:pre-wrap;margin-top:4px">${esc(c.observaciones_supervisor)}</div></div>
+      ${c.apelacion?`<div class="item" style="display:block"><b>Tu contestación</b><div style="white-space:pre-wrap;margin-top:4px">${esc(c.apelacion)}</div><small>${esc(fechaPnR(c.apelacion_en))}</small></div>`:""}
+      ${c.resolucion?`<div class="item" style="display:block"><b>Resolución de Coordinación</b><div style="white-space:pre-wrap;margin-top:4px">${esc(c.resolucion)}</div></div>`:""}
+      ${events.length?`<details><summary>Historial (${events.length} movimientos)</summary>${events.map(e=>`<div class="item" style="display:block"><b>${esc(({reportado:"Reporte creado",apelacion_driver:"Apelación enviada",apelacion_aceptada:"Apelación aceptada",apelacion_rechazada:"Apelación rechazada"})[e.tipo]||e.tipo)}</b><small>${esc(fechaPnR(e.creado_en))}</small><div style="white-space:pre-wrap">${esc(e.mensaje)}</div></div>`).join("")}</details>`:""}
+      ${canAppeal?`<label for="ns-appeal-${esc(c.id)}">Apela una sola vez (máximo 300 caracteres; vence ${esc(fechaPnR(c.vence_apelacion_en))})</label><textarea id="ns-appeal-${esc(c.id)}" rows="3" maxlength="300" placeholder="Explica por qué solicitas revisar la penalización"></textarea><div style="text-align:right;color:var(--mut);font-size:12px"><span data-ns-count="${esc(c.id)}">0</span>/300</div><button class="btn" data-ns-appeal="${esc(c.id)}">Enviar apelación</button>`:c.estado==="reportado"?"<div class=\"note\">El plazo de 6 horas para apelar venció.</div>":""}
+    </article>`;
+  }).join(""):'<div class="note">No tienes reportes NO SHOW.</div>';
+  list.querySelectorAll("[data-ns-appeal]").forEach(button=>button.onclick=()=>apelarNoShow(button.dataset.nsAppeal,button));
+  list.querySelectorAll("textarea[id^=\"ns-appeal-\"]").forEach(textarea=>textarea.oninput=()=>{const id=textarea.id.slice("ns-appeal-".length);const counter=list.querySelector(`[data-ns-count="${id}"]`);if(counter)counter.textContent=String(textarea.value.length)});
+}
+function textoInapropiadoNoShow(value){
+  const normalized=String(value||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g," ");
+  return /(^| )(puta|puto|putas|putos|mierda|chingar|chingado|chingada|chingados|chingadas|chingue|chingues|verga|vergas|pendejo|pendeja|pendejos|pendejas|culero|culera|culeros|culeras|cabron|cabrona|cabrones|cabronas|pinche|pinches|jodido|jodida|joder|maricon|maricona|maricones|fuck|fucking|shit|bitch|asshole|bastard)( |$)/.test(normalized);
+}
+async function apelarNoShow(id,button){
+  const field=$("ns-appeal-"+id),message=field.value.trim();
+  if(!message||message.length>300||textoInapropiadoNoShow(message)){err("no-show-error",new Error("Escribe una contestación de hasta 300 caracteres y sin groserías."));return}
+  button.disabled=true;err("no-show-error",null);
+  try{
+    const {error}=await sb.rpc("apelar_no_show",{p_caso_id:id,p_contestacion:message});
+    if(error)throw error;
+    toast("Apelación enviada a Coordinación");await loadPnrs();
+  }catch(error){err("no-show-error",error);button.disabled=false}
 }
 function pnrEventLabel(type){
   return ({creado:"Reclamo generado por Operaciones",respuesta_driver:"Primera respuesta del driver",solicitud_soporte:"Operaciones solicitó soporte adicional",evidencia_adicional:"Soporte adicional enviado",evidencia_aceptada:"Evidencia aceptada · reclamo cerrado sin cargo",evidencia_rechazada:"Evidencia insuficiente · reclamo cerrado con cargo",vencido:"Plazo vencido · reclamo cerrado con cargo",descuento_aplicado:"Descuento aplicado a liquidación"})[type]||type;
