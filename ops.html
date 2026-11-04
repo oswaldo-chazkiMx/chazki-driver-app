@@ -7,8 +7,8 @@
 <title>Chazki Driver · Panel de Operaciones</title>
 <style>
 :root{--bg:#f3f5f9;--ink:#182230;--mut:#718096;--line:#e5eaf1;--pri:#4b2fd0;--pri2:#674ee8;--ok:#12845b;--bad:#d9434b;--nav:#111827;--navmut:#a7b0c0}
-*{box-sizing:border-box}body{margin:0;height:100vh;overflow:hidden;background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--ink);display:flex;flex-direction:column}
-header{height:72px;background:#fff;color:var(--ink);padding:0 28px;display:flex;justify-content:space-between;align-items:center;gap:16px;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;overflow-x:hidden;background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--ink)}
+header{height:72px;background:#fff;color:var(--ink);padding:0 28px;display:flex;justify-content:space-between;align-items:center;gap:16px;border-bottom:1px solid var(--line)}
 header .brand{display:flex;align-items:center;gap:14px;min-width:300px}
 header .brandmark{display:block;width:150px;height:auto;max-height:42px;object-fit:contain}
 header h1{margin:0;font-size:16px;letter-spacing:-.02em}header .subtitle{display:block;color:var(--mut);font-size:11px;margin-top:3px}
@@ -18,8 +18,8 @@ header .role{font-size:12px;color:#5541bd;background:#f1efff;padding:7px 11px;bo
 header button{color:#445064;background:#f3f5f9;border:1px solid var(--line);padding:8px 13px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer}
 header #bell{font-size:16px;padding:7px 11px;position:relative}
 #bellc{position:absolute;top:-5px;right:-5px;background:var(--bad);color:#fff;border-radius:99px;font-size:10px;font-weight:700;min-width:17px;height:17px;line-height:17px;text-align:center}
-.workspace{display:grid;grid-template-columns:244px minmax(0,1fr);flex:1;min-height:0}
-.sidebar{background:var(--nav);padding:22px 13px;color:#fff;min-height:0;height:100%;overflow-y:auto}
+.workspace{display:grid;grid-template-columns:244px minmax(0,1fr);align-items:start}
+.sidebar{position:sticky;top:0;align-self:start;background:var(--nav);padding:22px 13px;color:#fff;min-height:calc(100vh - 72px);height:calc(100vh - 72px);overflow-y:auto}
 .nav-caption{font-size:10px;font-weight:800;letter-spacing:.11em;text-transform:uppercase;color:#7f8ba0;padding:16px 12px 7px}
 .role-nav{display:flex;flex-direction:column;gap:4px;margin:0}
 .nav-group{display:flex;flex-direction:column;gap:4px}
@@ -27,7 +27,7 @@ header #bell{font-size:16px;padding:7px 11px;position:relative}
 .role-nav button:hover{background:#ffffff10;color:#fff}
 .role-nav button.on{background:#4b2fd033;color:#fff;box-shadow:inset 3px 0 var(--pri2)}
 .nav-icon{width:20px;text-align:center;font-size:15px;opacity:.9}
-.content{min-width:0;min-height:0;height:100%;overflow-y:auto;padding:25px 28px 40px}
+.content{min-width:0;padding:25px 28px 40px}
 .page-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:18px}
 .page-heading h2{margin:0;font-size:22px;letter-spacing:-.03em}.page-heading p{margin:5px 0 0;color:var(--mut);font-size:13px}
 .content .bar{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px;box-shadow:0 2px 6px #18223008}
@@ -39,7 +39,7 @@ header #bell{font-size:16px;padding:7px 11px;position:relative}
 table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--mut);font-weight:600;font-size:12px}
 tr:last-child td{border:0}.pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700}.ok{background:#dcf5ea;color:#0b7a50}.w{background:#fdf0d4;color:#946200}.bad{background:#fde3e4;color:#b3262b}
 img.th{width:56px;height:56px;object-fit:cover;border-radius:8px;cursor:pointer}
-#auth{width:calc(100% - 32px);max-width:420px;margin:auto;background:#fff;border-radius:18px;padding:28px;box-shadow:0 8px 30px rgba(20,23,43,.1)}
+#auth{width:calc(100% - 32px);max-width:420px;margin:12vh auto;background:#fff;border-radius:18px;padding:28px;box-shadow:0 8px 30px rgba(20,23,43,.1)}
 #auth .welcome-brand{text-align:center;margin-bottom:20px}
 #auth .welcome-logo{display:block;width:min(270px,100%);height:auto;margin:0 auto 15px;object-fit:contain}
 #auth .welcome-heading{margin:0 0 5px;font-size:25px;letter-spacing:-.03em}
@@ -66,7 +66,7 @@ td select{padding:6px;border:1px solid var(--line);border-radius:8px;font-size:1
 .res{width:100%}.res td{padding:5px 8px}.res td:last-child{text-align:right;font-variant-numeric:tabular-nums}.res tr.t td{font-weight:700;border-top:2px solid var(--line)}.res tr.h td{color:var(--mut);font-size:11px;text-transform:uppercase;border:0;padding-top:12px}
 #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#14172b;color:#fff;padding:11px 18px;border-radius:99px;font-size:13px;z-index:40;opacity:0;transition:.25s;pointer-events:none;max-width:90%}#toast.show{opacity:1}
 #lb{position:fixed;inset:0;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;z-index:9}#lb img{max-width:92vw;max-height:92vh;border-radius:10px}
-@media(max-width:850px){header{padding:0 18px}.workspace{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}.sidebar{padding:10px 12px;height:auto;overflow:visible}.nav-caption{display:none}.role-nav{display:block}.nav-group{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin-bottom:8px}.role-nav button{font-size:12px;padding:9px 8px;justify-content:center}.nav-icon{width:auto}.content{padding:20px 16px 32px}}
+@media(max-width:850px){header{padding:0 18px}.workspace{grid-template-columns:1fr;grid-template-rows:auto auto}.sidebar{position:static;padding:10px 12px;min-height:0;height:auto;overflow:visible}.nav-caption{display:none}.role-nav{display:block}.nav-group{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin-bottom:8px}.role-nav button{font-size:12px;padding:9px 8px;justify-content:center}.nav-icon{width:auto}.content{padding:20px 16px 32px}}
 @media(max-width:560px){header{height:auto;min-height:68px;padding:10px 14px;align-items:center;flex-basis:auto}header .brand{min-width:0;gap:8px}header .brandmark{width:100px;max-height:30px}header h1{font-size:13px}header .subtitle{display:none}header .role{display:none}header .head-actions{gap:6px}header button{padding:7px 9px}.sidebar{padding:9px}.nav-group{grid-template-columns:repeat(2,minmax(0,1fr))}.content{padding:16px 12px 28px}.page-heading{margin-bottom:13px}.page-heading h2{font-size:19px}.content .bar{gap:8px;padding:10px}.bar label{font-size:12px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.kpi{padding:11px}.kpi b{font-size:22px}}
 </style>
 </head>

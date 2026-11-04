@@ -10,8 +10,16 @@ $("apw-toggle").onclick=e=>{e.preventDefault();$("apw").classList.toggle("hide")
 // Google Workspace: la cuenta debe ser de la organización; el dominio se vuelve a exigir en la base de datos
 $("agoogle").onclick=async()=>{
   $("amsg").innerHTML="";
-  const {error}=await sb.auth.signInWithOAuth({provider:"google",options:{redirectTo:location.origin+location.pathname,queryParams:{hd:"chazki.com",prompt:"select_account"}}});
-  if(error)$("amsg").innerHTML=`<div class="errbox">No se pudo iniciar con Google: ${esc(error.message)}</div>`};
+  try{
+    const {error}=await sb.auth.signInWithOAuth({provider:"google",options:{redirectTo:location.origin+location.pathname,queryParams:{hd:"chazki.com",prompt:"select_account"}}});
+    if(error)throw error;
+  }catch(error){
+    const disabled=/unsupported provider|provider is not enabled/i.test(error.message||"");
+    const message=disabled
+      ?"Google aún no está habilitado en Supabase. Actívalo en Authentication → Sign In / Providers → Google y configura el Client ID y Client Secret. Agrega https://chazki-driver-app.vercel.app/ops.html en Authentication → URL Configuration → Redirect URLs."
+      :`No se pudo iniciar con Google: ${error.message||"Error inesperado"}`;
+    $("amsg").innerHTML=`<div class="errbox">${esc(message)}</div>`;
+  }};
 $("abtn").onclick=async()=>{
   const email=$("aemail").value.trim(),password=$("apass").value;
   if(!dominioOk(email)){$("amsg").innerHTML='<div class="errbox">Solo personal de Chazki: usa tu correo @chazki.com.</div>';return}
@@ -75,6 +83,17 @@ async function boot(){
   $("loading").classList.remove("hide");
   const {data:{session}}=await sb.auth.getSession();
   if(!session){$("auth").classList.remove("hide");$("loading").classList.add("hide");return}
+  const {data:authorized,error:authorizationError}=await sb.rpc("mi_acceso_administrativo");
+  if(authorizationError){
+    $("auth").classList.remove("hide");
+    $("amsg").innerHTML=`<div class="errbox">No se pudo validar la lista de acceso administrativo. Ejecuta primero el SQL de autorización en Supabase. ${esc(authorizationError.message)}</div>`;
+    $("loading").classList.add("hide");return;
+  }
+  if(authorized!==true){
+    $("auth").classList.remove("hide");
+    $("amsg").innerHTML='<div class="errbox">Esta cuenta no está autorizada para acceder al panel de operaciones. Contacta a la cuenta maestra.</div>';
+    await sb.auth.signOut();$("loading").classList.add("hide");return;
+  }
   const {data:me}=await sb.from("drivers").select("nombre,rol").eq("id",session.user.id).single();
   if(!me||!Object.keys(TABS).includes(me.rol)||!dominioOk(session.user.email)){$("auth").classList.remove("hide");$("amsg").innerHTML='<div class="errbox">Esta cuenta no tiene acceso al panel. Es solo para personal de Chazki con correo @chazki.com.</div>';await sb.auth.signOut();$("loading").classList.add("hide");return}
   ROL=me.rol;aplicarRol();suscribirAvisos(session.user.id);DSET=(await sb.rpc("datasets_disponibles")).data||[];cargaLog();

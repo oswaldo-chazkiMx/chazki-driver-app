@@ -10,11 +10,23 @@
 <style>
 :root{--bg:#f3f4f8;--card:#fff;--ink:#14172b;--mut:#6b7090;--line:#e4e6f0;--pri:#4b2fd0;--pri2:#6b4df5;--ok:#12a36b;--warn:#f59e0b;--bad:#e5484d;--r:16px}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-body{margin:0;background:#dfe2ee;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--ink);display:flex;justify-content:center}
+body{margin:0;background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--ink);display:flex;justify-content:center}
 #app{width:100%;max-width:430px;min-height:100vh;background:var(--bg);position:relative;display:flex;flex-direction:column}
 header{background:linear-gradient(135deg,var(--pri),var(--pri2));color:#fff;padding:18px 18px 22px;border-radius:0 0 24px 24px}
 header .row{display:flex;justify-content:space-between;align-items:center}
-header h1{font-size:18px;margin:0}header small{opacity:.8}
+header .brand{width:148px;height:40px;object-fit:contain;object-position:left center;display:block}
+header small{opacity:.8}
+body[data-theme="night"]{--bg:#111827;--card:#1d293b;--ink:#edf2ff;--mut:#a8b4ca;--line:#344258;--pri:#718dff;--pri2:#936dff}
+body[data-theme="night"]{background:#0b1220}
+body[data-theme="night"] input,body[data-theme="night"] select,body[data-theme="night"] textarea,body[data-theme="night"] .chip,body[data-theme="night"] .qty button{background:var(--card);color:var(--ink);border-color:var(--line)}
+body[data-theme="night"] nav{background:var(--card);border-color:var(--line)}
+body[data-theme="night"] .seg{background:#263449}
+body[data-theme="night"] .seg button.on{background:#344258;color:var(--ink)}
+body[data-theme="night"] #auth .box,body[data-theme="night"] .sheetbox{background:var(--card);color:var(--ink)}
+body[data-theme="night"] .okbox{background:#123a30;border-color:#1b614f;color:#b5f0d7}
+.net-status{margin:12px 14px 0;padding:9px 12px;border-radius:11px;background:#e8f7ef;color:#11683f;font-size:12px;font-weight:650}
+.net-status.offline{background:#fff2d6;color:#815500}
+.net-status.hide{display:none!important}
 main{flex:1;padding:14px 14px 90px;overflow-y:auto}
 nav{position:fixed;bottom:0;width:100%;max-width:430px;background:#fff;border-top:1px solid var(--line);display:flex;z-index:5}
 nav button{flex:1;border:0;background:none;padding:9px 2px 11px;font-size:11px;color:var(--mut);display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer}
@@ -83,7 +95,7 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
 
 <div id="auth" class="hide">
   <div class="box">
-    <h1>Chazki Driver</h1>
+    <img class="brand" src="chazki-logo.webp" alt="Chazki">
     <div class="note" style="margin:0 0 6px" id="amode-sub">Inicia sesión con tu correo</div>
     <div id="agroup-nombre" class="hide"><label>Nombre completo</label><input id="anombre" autocomplete="name"></div>
     <label>Correo</label><input id="aemail" type="email" autocomplete="email" inputmode="email">
@@ -96,11 +108,12 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
 
 <div id="app">
 <header>
-  <div class="row"><div><h1>Chazki Driver</h1><small id="hdate"></small></div><div style="display:flex;align-items:center"><button id="bell" type="button" aria-label="Avisos">🔔<span id="bellc" class="hide">0</span></button><a id="opslink" class="hide" href="ops.html" style="color:#fff;font-size:12px;background:rgba(255,255,255,.2);padding:5px 10px;border-radius:99px;text-decoration:none">Panel Ops</a></div></div>
+  <div class="row"><div><img class="brand" src="chazki-logo.webp" alt="Chazki"><small id="hdate"></small></div><div style="display:flex;align-items:center"><button id="bell" type="button" aria-label="Avisos">🔔<span id="bellc" class="hide">0</span></button></div></div>
   <div style="margin-top:12px;font-size:14px">Hola, <b id="hname">—</b> 👋 <span id="hstate" class="pill w" style="margin-left:6px">Sin ruta activa</span></div>
 </header>
 
 <main>
+<div id="net-status" class="net-status hide" role="status" aria-live="polite"></div>
 <section class="tab on" id="t-dia">
   <div class="stepper" id="stepper"></div>
   <div class="card" id="s1">

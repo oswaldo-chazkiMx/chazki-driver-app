@@ -8,6 +8,7 @@ const files = [
   ["app.js", "app.js"],
   ["config.js", "config.js"],
   ["icon.svg", "icon.svg"],
+  ["chazki-logo.webp", "chazki-logo.webp"],
   ["manifest.webmanifest", "manifest.webmanifest"],
   ["sw.js", "sw.js"],
   ["vendor/supabase-js-2.118.0.js", "vendor/supabase-js-2.118.0.js"],

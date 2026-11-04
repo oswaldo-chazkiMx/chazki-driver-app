@@ -1,6 +1,44 @@
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);
 const $=id=>document.getElementById(id);
+const LOCAL_DB="chazki-driver-offline";
+let OFFLINE_MODE=!navigator.onLine, syncBusy=false, syncCancelBusy=false;
+function openLocalDb(){
+  return new Promise((resolve,reject)=>{
+    if(!("indexedDB" in window)){reject(new Error("Este dispositivo no permite guardar registros sin conexión."));return}
+    const request=indexedDB.open(LOCAL_DB,2);
+    request.onupgradeneeded=()=>{const db=request.result;if(!db.objectStoreNames.contains("cache"))db.createObjectStore("cache",{keyPath:"key"});if(!db.objectStoreNames.contains("routes"))db.createObjectStore("routes",{keyPath:"key"});if(!db.objectStoreNames.contains("cancellations"))db.createObjectStore("cancellations",{keyPath:"key"})};
+    request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error||new Error("No se pudo abrir el almacenamiento local."));
+  });
+}
+async function localGet(store,key){
+  const db=await openLocalDb();
+  return new Promise((resolve,reject)=>{const tx=db.transaction(store,"readonly"),request=tx.objectStore(store).get(key);request.onsuccess=()=>resolve(request.result||null);request.onerror=()=>reject(request.error||new Error("No se pudo leer el almacenamiento local."));tx.oncomplete=()=>db.close();tx.onerror=()=>{db.close();reject(tx.error||new Error("No se pudo leer el almacenamiento local."))}});
+}
+async function localPut(store,value){
+  const db=await openLocalDb();
+  return new Promise((resolve,reject)=>{const tx=db.transaction(store,"readwrite");tx.objectStore(store).put(value);tx.oncomplete=()=>{db.close();resolve()};tx.onerror=()=>{db.close();reject(tx.error||new Error("No se pudo guardar en el dispositivo."))};tx.onabort=()=>{db.close();reject(tx.error||new Error("No se pudo guardar en el dispositivo."))}});
+}
+async function localDelete(store,key){
+  const db=await openLocalDb();
+  return new Promise((resolve,reject)=>{const tx=db.transaction(store,"readwrite");tx.objectStore(store).delete(key);tx.oncomplete=()=>{db.close();resolve()};tx.onerror=()=>{db.close();reject(tx.error||new Error("No se pudo actualizar el almacenamiento local."))}});
+}
+async function localGetAll(store){
+  const db=await openLocalDb();
+  return new Promise((resolve,reject)=>{const tx=db.transaction(store,"readonly"),request=tx.objectStore(store).getAll();request.onsuccess=()=>resolve(request.result||[]);request.onerror=()=>reject(request.error||new Error("No se pudieron leer los registros pendientes."));tx.oncomplete=()=>db.close();tx.onerror=()=>{db.close();reject(tx.error||new Error("No se pudieron leer los registros pendientes."))}});
+}
+const routeLocalKey=()=>`route:${ME.id}`;
+const networkError=e=>!navigator.onLine||e instanceof TypeError||/network|fetch|offline|connection|socket/i.test(String(e&&(e.message||e)));
+function setNetStatus(message,offline=OFFLINE_MODE){
+  const el=$("net-status");if(!el)return;
+  el.textContent=message||"";el.classList.toggle("offline",offline);el.classList.toggle("hide",!message);
+}
+function setThemeByHour(){
+  const hour=new Date().getHours(),night=hour<6||hour>=18;
+  document.body.dataset.theme=night?"night":"day";
+  const meta=document.querySelector('meta[name="theme-color"]');if(meta)meta.content=night?"#111827":"#4b2fd0";
+}
+setThemeByHour();setInterval(setThemeByHour,60000);
 const fmt=n=>"$"+Number(n).toLocaleString("es-MX",{maximumFractionDigits:0});
 const err=(el,e)=>{$(el).innerHTML=e?`<div class="errbox">${esc((e.message||e))}</div>`:""};
 function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),2600)}
@@ -37,22 +75,57 @@ async function boot(){
   $("loading").classList.add("hide");
   if(!session){$("auth").classList.remove("hide");return}
   $("auth").classList.add("hide");ME=session.user;
-  const [d,cl,ca,ic]=await Promise.all([
-    sb.from("drivers").select("*").eq("id",ME.id).single(),
-    sb.from("clientes").select("id,nombre,cedis(id,nombre,lat,lng,radio_m)").eq("activo",true).order("nombre"),
-    sb.from("causas_fallo").select("*").order("orden"),
-    sb.from("tipos_incidencia").select("*").order("orden")]);
-  DRIVER=d.data;CLI=(cl.data||[]);CAUSAS=ca.data||[];INCID=ic.data||[];
+  let cached=null;
+  try{cached=await localGet("cache",ME.id)}catch(e){if(!navigator.onLine)throw e}
+  if(!navigator.onLine){
+    if(!cached){$("auth").classList.remove("hide");$("amsg").innerHTML='<div class="errbox">Conéctate una vez e inicia sesión para preparar el modo sin conexión.</div>';OFFLINE_MODE=true;setNetStatus("Sin conexión. No hay datos guardados para este dispositivo.",true);return}
+    ({driver:DRIVER,clients:CLI,causes:CAUSAS,incidents:INCID,access:ACC}=cached);
+    OFFLINE_MODE=true;
+    $("hname").textContent=DRIVER.nombre.split(" ")[0];if(ACC.es_flotillero)$("navdr").classList.remove("hide");
+    fillClientes($("cli"));fillClientes($("ccli"));prefillCliente();
+    $("incchips").innerHTML=INCID.map(c=>`<span class="chip" data-i="${esc(c.id)}">${esc(c.nombre)}</span>`).join("");
+    renderStepper();await restoreOfflineRoute();await loadCan();
+    setNetStatus("Sin conexión · el check-in, check-out y las fotos se guardarán en este dispositivo.",true);
+    return;
+  }
+  try{
+    const [d,cl,ca,ic]=await Promise.all([
+      sb.from("drivers").select("*").eq("id",ME.id).single(),
+      sb.from("clientes").select("id,nombre,cedis(id,nombre,lat,lng,radio_m)").eq("activo",true).order("nombre"),
+      sb.from("causas_fallo").select("*").order("orden"),
+      sb.from("tipos_incidencia").select("*").order("orden")]);
+    const failed=[d.error,cl.error,ca.error,ic.error].find(Boolean);if(failed)throw failed;
+    DRIVER=d.data;CLI=cl.data||[];CAUSAS=ca.data||[];INCID=ic.data||[];
+  }catch(e){
+    if(!networkError(e)||!cached)throw e;
+    ({driver:DRIVER,clients:CLI,causes:CAUSAS,incidents:INCID,access:ACC}=cached);
+    OFFLINE_MODE=true;
+    $("hname").textContent=DRIVER.nombre.split(" ")[0];if(ACC.es_flotillero)$("navdr").classList.remove("hide");
+    fillClientes($("cli"));fillClientes($("ccli"));prefillCliente();
+    $("incchips").innerHTML=INCID.map(c=>`<span class="chip" data-i="${esc(c.id)}">${esc(c.nombre)}</span>`).join("");
+    renderStepper();await restoreOfflineRoute();await loadCan();
+    setNetStatus("Conexión intermitente · el check-in, check-out y las fotos se guardarán en este dispositivo.",true);
+    return;
+  }
   if(!DRIVER){toast("No se encontró tu perfil de driver");return}
   $("hname").textContent=DRIVER.nombre.split(" ")[0];
-  $("opslink").classList.toggle("hide",!["ops","ih","master","coordinador","finanzas"].includes(DRIVER.rol));
   fillClientes($("cli"));fillClientes($("ccli"));prefillCliente();
   $("incchips").innerHTML=INCID.map(c=>`<span class="chip" data-i="${esc(c.id)}">${esc(c.nombre)}</span>`).join("");
   renderStepper();
-  const ac=await sb.rpc("mi_acceso_ganancias");if(ac.data)ACC=ac.data;
-  await Promise.all([loadPerfil(),loadGan(),loadCan(),resumeRoute()]);
+  const ac=await sb.rpc("mi_acceso_ganancias");if(ac.error&&networkError(ac.error)){OFFLINE_MODE=true;ACC=cached?cached.access:ACC}else if(ac.error)throw ac.error;else if(ac.data)ACC=ac.data;
+  await localPut("cache",{key:ME.id,driver:DRIVER,clients:CLI,causes:CAUSAS,incidents:INCID,access:ACC});
+  if(OFFLINE_MODE){
+    $("hname").textContent=DRIVER.nombre.split(" ")[0];if(ACC.es_flotillero)$("navdr").classList.remove("hide");
+    await restoreOfflineRoute();await loadCan();
+    setNetStatus("Conexión intermitente · el check-in, check-out y las fotos se guardarán en este dispositivo.",true);
+    return;
+  }
+  try{await Promise.all([loadPerfil(),loadGan(),loadCan(),resumeRoute()])}
+  catch(e){if(!networkError(e))throw e;OFFLINE_MODE=true;await restoreOfflineRoute();await loadCan();setNetStatus("Conexión intermitente · el check-in, check-out y las fotos se guardarán en este dispositivo.",true);return}
+  if(navigator.onLine)await syncPendingCancellations();
   suscribirAvisos();
   if(ACC.es_flotillero){$("navdr").classList.remove("hide");loadDrivers()}
+  setNetStatus("");
 }
 
 // ---------- Navegación ----------
@@ -89,6 +162,8 @@ const cedObj=(cid,eid)=>{const c=CLI.find(x=>String(x.id)===String(cid));return 
 function distM(a,b,c,d){const R=6371000,r=x=>x*Math.PI/180,h=Math.sin(r(c-a)/2)**2+Math.cos(r(a))*Math.cos(r(c))*Math.sin(r(d-b)/2)**2;return Math.round(2*R*Math.asin(Math.sqrt(h)))}
 const fmtDist=m=>m<1000?m+" m":(m/1000).toFixed(1)+" km";
 const cliName=id=>(CLI.find(x=>String(x.id)===String(id))||{}).nombre||"";
+const cedObjById=id=>CLI.flatMap(c=>c.cedis.map(e=>({...e,cliente_id:c.id,cliente_nombre:c.nombre}))).find(e=>String(e.id)===String(id));
+const cedNameById=id=>cedObjById(id)?.nombre||"";
 const cedName=(cid,eid)=>{const c=CLI.find(x=>String(x.id)===String(cid));const e=c&&c.cedis.find(y=>String(y.id)===String(eid));return e?e.nombre:""};
 $("cli").onchange=()=>{fillCedis($("cedis"),$("cli").value);checkIn()};
 function resetFoto(){if(canBlob){canBlob=null;$("cv").classList.add("hide");$("cmeta").innerHTML='<span style="color:var(--bad)">Cambiaste el CEDIS: vuelve a tomar la foto para validar tu ubicación.</span>'}}
@@ -108,12 +183,113 @@ function setStage(n){
     $("hstate").className="pill ok";$("hstate").textContent="En ruta"}
 }
 async function resumeRoute(){
+  const saved=await localGet("routes",routeLocalKey());
+  if(saved){
+    await restoreOfflineRoute(saved);
+    if(navigator.onLine)await syncPendingRoute();
+    return;
+  }
   const {data}=await sb.from("rutas").select("*,cedis(id,nombre,cliente_id)").eq("driver_id",ME.id).eq("estado","en_ruta").order("checkin_at",{ascending:false}).limit(1);
   if(!data||!data.length)return;const r=data[0];
   S.route={unidad:r.tipo_unidad,dbId:r.id,cli:cliName(r.cedis.cliente_id),cliId:r.cedis.cliente_id,cedis:r.cedis.nombre,cedisId:r.cedis.id,pk:r.paquetes_asignados,rid:r.id_ruta,zonas:r.zonas,
     hora:new Date(r.hora_llegada_cedis).toTimeString().slice(0,5),checkin:new Date(r.checkin_at)};
-  prefillCan();setStage(1);updFin();
+  await localPut("routes",{key:routeLocalKey(),driverId:ME.id,status:"active",serverRouteId:r.id,
+    routeInfo:{unidad:r.tipo_unidad,cli:S.route.cli,cliId:S.route.cliId,cedis:S.route.cedis,cedisId:S.route.cedisId,pk:S.route.pk,rid:S.route.rid,zonas:S.route.zonas,hora:S.route.hora,checkin:S.route.checkin.toISOString()},
+    routePayload:{driver_id:ME.id,cedis_id:r.cedis.id,id_ruta:r.id_ruta,paquetes_asignados:r.paquetes_asignados,zonas:r.zonas,hora_llegada_cedis:r.hora_llegada_cedis,tipo_unidad:r.tipo_unidad,checkin_at:r.checkin_at},checkout:null,manifests:[],remoteManifests:[]});
+  prefillCan();setStage(1);updFin();if(requiereManif())await loadManif();
 }
+async function restoreOfflineRoute(record){
+  if(!record)return;
+  const r=record.routeInfo;
+  S.route={...r,dbId:record.serverRouteId||null,localKey:record.key,checkin:new Date(r.checkin)};
+  S.zonas=[...r.zonas];prefillCan();setStage(1);updFin();
+  if(record.checkout){
+    S.result={ent:record.checkout.ent, fal:record.checkout.fal};
+    S.inc=record.checkout.hubo_incidencias;
+    S.incSel=new Set(record.checkout.incidencias.map(x=>String(x.incidencia_id)));
+    S.routeLocalCheckout=record.checkout;
+    showRouteDone(true);
+  }else if(requiereManif()){
+    MANIF=[...(record.remoteManifests||[]).map(m=>({...m,local:false,url:""})),...(record.manifests||[]).map(m=>({...m,local:true}))];
+    drawManif();enableOut();
+  }
+}
+async function syncPendingRoute(){
+  if(syncBusy||!ME||!navigator.onLine)return false;
+  const key=routeLocalKey();let record;
+  try{record=await localGet("routes",key)}catch(e){setNetStatus(e.message,true);return false}
+  if(!record){OFFLINE_MODE=false;setNetStatus("");return true}
+  syncBusy=true;
+  try{
+    if(!record.serverRouteId){
+      const {data:existing,error:lookupError}=await sb.from("rutas").select("id")
+        .eq("driver_id",record.routePayload.driver_id)
+        .eq("id_ruta",record.routePayload.id_ruta)
+        .eq("checkin_at",record.routePayload.checkin_at)
+        .maybeSingle();
+      if(lookupError)throw lookupError;
+      let route=existing;
+      if(!route){
+        const inserted=await sb.from("rutas").insert(record.routePayload).select("id").single();
+        if(inserted.error)throw inserted.error;
+        route=inserted.data;
+      }
+      record.serverRouteId=route.id;record.status="active";await localPut("routes",record);
+      if(S.route)S.route.dbId=route.id;
+    }
+    for(let i=0;i<(record.manifests||[]).length;i++){
+      const photo=record.manifests[i];
+      if(!photo.photoPath){
+        const path=`${ME.id}/${record.serverRouteId}/offline-${photo.id}.jpg`;
+        const {error}=await sb.storage.from("manifiestos").upload(path,photo.blob,{contentType:"image/jpeg",upsert:true});
+        if(error)throw error;
+        photo.photoPath=path;await localPut("routes",record);
+      }
+      if(!photo.rowSaved){
+        const {data:existing,error:lookupError}=await sb.from("ruta_manifiestos").select("id")
+          .eq("ruta_id",record.serverRouteId).eq("foto_path",photo.photoPath).maybeSingle();
+        if(lookupError)throw lookupError;
+        if(!existing){
+          const {error}=await sb.from("ruta_manifiestos").insert({ruta_id:record.serverRouteId,foto_path:photo.photoPath});
+          if(error)throw error;
+        }
+        photo.rowSaved=true;await localPut("routes",record);
+      }
+    }
+    if(record.manifests&&record.manifests.length){record.manifests=[];await localPut("routes",record)}
+    if(record.checkout){
+      if(record.checkout.fallos.length){const rows=record.checkout.fallos.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_fallos").upsert(rows);if(error)throw error}
+      if(record.checkout.incidencias.length){const rows=record.checkout.incidencias.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_incidencias").upsert(rows);if(error)throw error}
+      const {error}=await sb.from("rutas").update({estado:"cerrada",checkout_at:record.checkout.checkoutAt,
+        entregados:record.checkout.ent,fallidos:record.checkout.fal,hubo_incidencias:record.checkout.hubo_incidencias,...record.checkout.extras}).eq("id",record.serverRouteId);
+      if(error)throw error;
+      await localDelete("routes",key);S.routeLocalCheckout=record.checkout;showRouteDone(false);
+    }else{
+      record.status="active";await localPut("routes",record);
+      if(S.route)S.route.dbId=record.serverRouteId;
+      if(requiereManif())await loadManif();
+    }
+    OFFLINE_MODE=false;setNetStatus("");
+    return true;
+  }catch(e){
+    if(networkError(e)){OFFLINE_MODE=true;setNetStatus("Conexión intermitente · hay registros guardados en este dispositivo y se enviarán al recuperar la red.",true)}
+    else{const target=record.checkout?"outerr":"inerr";err(target,e);setNetStatus("No se pudo sincronizar. Tus datos siguen guardados en este dispositivo.",true)}
+    return false;
+  }finally{syncBusy=false}
+}
+function routeDoneMarkup(pending){
+  const r=S.route,res=S.result,t=S.routeLocalCheckout?new Date(S.routeLocalCheckout.checkoutAt):new Date();
+  const incs=S.incSel.size?[...S.incSel].map(i=>(INCID.find(x=>String(x.id)===String(i))||{}).nombre).filter(Boolean):[];
+  ["s2","s3","s4","sresume"].forEach(x=>$(x).classList.add("hide"));$("sdone").classList.remove("hide");
+  $("sdone").innerHTML=`<div class="${pending?"alerta w":"okbox"}"><b>${pending?"📴 Ruta guardada en este dispositivo":"🏁 Ruta finalizada"}</b><br>${pending?"Se enviará automáticamente al recuperar conexión.":""}<br>${esc(r.cli)} · ${esc(r.cedis)} · ${esc(r.rid)}</div>
+  <div class="kv"><span>Entregados</span><b>${esc(res.ent)}</b></div><div class="kv"><span>Fallidos</span><b>${esc(res.fal)}</b></div>
+  <div class="kv"><span>Efectividad</span><b>${Math.round(res.ent/r.pk*100)}%</b></div>
+  <div class="kv"><span>Incidencias</span><b>${incs.length?incs.join(", "):"Ninguna"}</b></div>
+  <div class="kv"><span>Check-out</span><b>${t.toTimeString().slice(0,5)}</b></div><button class="btn" id="bnew">Iniciar nueva ruta</button>`;
+  $("hstate").className=`pill ${pending?"w":"ok"}`;$("hstate").textContent=pending?"Pendiente de envío":"Ruta cerrada";
+  $("bnew").onclick=()=>location.reload();
+}
+function showRouteDone(pending=false){routeDoneMarkup(pending)}
 function prefillCan(){const r=S.route;$("ccli").value=r.cliId;fillCedis($("ccedis"),r.cliId);$("ccedis").value=r.cedisId;$("crid").value=r.rid}
 
 $("zinp").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();addZona()}});
@@ -130,11 +306,25 @@ function checkIn(){syncUnidad();const ok=$("cli").value&&$("cedis").value&&(!esC
 $("bin").onclick=async()=>{
   $("bin").disabled=true;err("inerr",null);
   const hoy=new Date().toLocaleDateString("en-CA");
-  const llegada=new Date(`${hoy}T${$("hora").value}`).toISOString();
-  const {data,error}=await sb.from("rutas").insert({driver_id:ME.id,cedis_id:+$("cedis").value,id_ruta:$("rid").value.trim(),paquetes_asignados:+$("pk").value,zonas:S.zonas,hora_llegada_cedis:llegada,tipo_unidad:esCoppel()?$("unidad").value:null}).select().single();
-  if(error){err("inerr",error);$("bin").disabled=false;return}
-  S.route={dbId:data.id,cli:cliName($("cli").value),cliId:$("cli").value,cedis:cedName($("cli").value,$("cedis").value),cedisId:$("cedis").value,pk:data.paquetes_asignados,rid:data.id_ruta,zonas:[...S.zonas],hora:$("hora").value,checkin:new Date(data.checkin_at),unidad:data.tipo_unidad};
-  prefillCan();setStage(1);toast("Check-in registrado · ¡Buena ruta!");$("ent").value="";$("fal").value="";updFin();
+  const checkinAt=new Date(),llegada=new Date(`${hoy}T${$("hora").value}`).toISOString();
+  const routePayload={driver_id:ME.id,cedis_id:+$("cedis").value,id_ruta:$("rid").value.trim(),paquetes_asignados:+$("pk").value,zonas:[...S.zonas],hora_llegada_cedis:llegada,tipo_unidad:esCoppel()?$("unidad").value:null,checkin_at:checkinAt.toISOString()};
+  const routeInfo={cli:cliName($("cli").value),cliId:$("cli").value,cedis:cedName($("cli").value,$("cedis").value),cedisId:$("cedis").value,pk:+$("pk").value,rid:$("rid").value.trim(),zonas:[...S.zonas],hora:$("hora").value,checkin:checkinAt.toISOString(),unidad:routePayload.tipo_unidad};
+  let data=null;
+  if(navigator.onLine){
+    try{
+      const result=await sb.from("rutas").insert(routePayload).select().single();
+      if(result.error){if(!networkError(result.error))throw result.error;OFFLINE_MODE=true}
+      else data=result.data;
+    }catch(e){if(!networkError(e)){err("inerr",e);$("bin").disabled=false;return}OFFLINE_MODE=true}
+  }else OFFLINE_MODE=true;
+  const record={key:routeLocalKey(),driverId:ME.id,status:data?"active":"checkin_pending",serverRouteId:data&&data.id||null,routeInfo,routePayload,checkout:null,manifests:[]};
+  try{await localPut("routes",record)}
+  catch(e){if(!data){err("inerr",e);$("bin").disabled=false;return}toast("Check-in registrado, pero no se pudo guardar una copia local.");}
+  S.route={...routeInfo,dbId:data&&data.id||null,localKey:record.key,checkin:checkinAt};
+  prefillCan();setStage(1);$("ent").value="";$("fal").value="";updFin();
+  $("hstate").className=`pill ${data?"ok":"w"}`;$("hstate").textContent=data?"En ruta":"Check-in pendiente de enviar";
+  if(data){toast("Check-in registrado · ¡Buena ruta!");if(OFFLINE_MODE)setNetStatus("Conexión intermitente · la ruta quedó registrada y se guardó una copia local.",true)}
+  else{setNetStatus("Sin conexión · check-in guardado en este dispositivo; se enviará al recuperar la red.",true);toast("Check-in guardado en este dispositivo")}
 };
 
 ["ent","fal"].forEach(id=>$(id).addEventListener("input",updFin));
@@ -160,37 +350,71 @@ const CLI_EXTRAS=["FULLER","PRIVALIA","SODEXO","SMURFIT","TTAIO"];
 const llevaExtras=()=>S.route&&CLI_EXTRAS.includes(String(S.route.cli||"").toUpperCase().replace(/[^A-Z0-9]/g,""));
 const requiereManif=()=>S.route&&S.route.unidad==="3.5T"&&/^COPPEL/i.test(S.route.cli||"");
 let MANIF=[],manifCargado=false;
-async function loadManif(){manifCargado=true;const {data}=await sb.from("ruta_manifiestos").select("id,foto_path").eq("ruta_id",S.route.dbId).order("id");
-  const paths=(data||[]).map(x=>x.foto_path);const u=paths.length?(await sb.storage.from("manifiestos").createSignedUrls(paths,3600)).data||[]:[];
-  MANIF=(data||[]).map(x=>({...x,url:(u.find(y=>y.path===x.foto_path)||{}).signedUrl}));drawManif();enableOut()}
-function drawManif(){$("manif-grid").innerHTML=MANIF.map(m=>`<div style="position:relative"><img src="${esc(m.url||"")}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px"><button type="button" data-mx="${esc(m.id)}" style="position:absolute;top:4px;right:4px;border:0;border-radius:99px;width:24px;height:24px;background:#000a;color:#fff">✕</button></div>`).join("");
+let MANIF_URLS=[];
+async function loadManif(){
+  manifCargado=true;
+  const record=await localGet("routes",routeLocalKey()),local=(record&&record.manifests||[]).map(m=>({...m,local:true}));
+  let remote=[];
+  if(S.route.dbId&&navigator.onLine){
+    const {data,error}=await sb.from("ruta_manifiestos").select("id,foto_path").eq("ruta_id",S.route.dbId).order("id");
+    if(error){if(!networkError(error)){err("manif-err",error);return}OFFLINE_MODE=true}
+    else{
+      if(record){record.remoteManifests=(data||[]).map(x=>({id:x.id,foto_path:x.foto_path}));await localPut("routes",record)}
+      const paths=(data||[]).map(x=>x.foto_path),signed=paths.length?(await sb.storage.from("manifiestos").createSignedUrls(paths,3600)):null;
+      if(signed&&signed.error){if(!networkError(signed.error)){err("manif-err",signed.error);return}OFFLINE_MODE=true}
+      remote=(data||[]).map(x=>({...x,url:((signed&&signed.data)||[]).find(y=>y.path===x.foto_path)?.signedUrl}));
+    }
+  }
+  MANIF=[...remote,...local];drawManif();enableOut()
+}
+function drawManif(){
+  MANIF_URLS.forEach(url=>URL.revokeObjectURL(url));MANIF_URLS=[];
+  $("manif-grid").innerHTML=MANIF.map(m=>{
+    const src=m.local&&m.blob?URL.createObjectURL(m.blob):m.url||"";
+    if(m.local&&m.blob)MANIF_URLS.push(src);
+    return `<div style="position:relative">${src?`<img src="${esc(src)}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px">`:'<div class="doc" style="justify-content:center;height:100%;background:var(--bg);border-radius:10px">🖼️<small>Foto ya enviada</small></div>'}<button type="button" data-mx="${esc(m.id)}" style="position:absolute;top:4px;right:4px;border:0;border-radius:99px;width:24px;height:24px;background:#000a;color:#fff">✕</button></div>`;
+  }).join("");
   $("manif-add").textContent=`📷 Agregar fotos (${esc(MANIF.length)}/10)`;$("manif-add").disabled=MANIF.length>=10;
-  $("manif-grid").querySelectorAll("[data-mx]").forEach(b=>b.onclick=async()=>{const m=MANIF.find(x=>x.id==b.dataset.mx);await sb.storage.from("manifiestos").remove([m.foto_path]);await sb.from("ruta_manifiestos").delete().eq("id",m.id);await loadManif()})}
+  $("manif-grid").querySelectorAll("[data-mx]").forEach(b=>b.onclick=async()=>{
+    const m=MANIF.find(x=>String(x.id)===b.dataset.mx);if(!m)return;
+    if(m.local){
+      const record=await localGet("routes",routeLocalKey());record.manifests=record.manifests.filter(x=>x.id!==m.id);await localPut("routes",record);MANIF=MANIF.filter(x=>x!==m);drawManif();enableOut();return;
+    }
+    if(!navigator.onLine){err("manif-err",new Error("No se pueden eliminar fotos sincronizadas sin conexión."));return}
+    const removed=await sb.storage.from("manifiestos").remove([m.foto_path]);if(removed.error){err("manif-err",removed.error);return}
+    const deleted=await sb.from("ruta_manifiestos").delete().eq("id",m.id);if(deleted.error){err("manif-err",deleted.error);return}
+    await loadManif();
+  })}
 async function comprimir(file){const bmp=await createImageBitmap(file);const k=Math.min(1,1600/Math.max(bmp.width,bmp.height));const c=document.createElement("canvas");c.width=Math.round(bmp.width*k);c.height=Math.round(bmp.height*k);c.getContext("2d").drawImage(bmp,0,0,c.width,c.height);return new Promise(r=>c.toBlob(r,"image/jpeg",0.8))}
 $("manif-add").onclick=()=>$("manif-file").click();
-$("manif-file").onchange=async e=>{err("manif-err",null);const fs=[...e.target.files].slice(0,10-MANIF.length);e.target.value="";if(!fs.length)return;$("manif-add").disabled=true;
-  for(const [i,f] of fs.entries()){try{const blob=await comprimir(f);const path=`${esc(ME.id)}/${esc(S.route.dbId)}/${Date.now()}-${i}.jpg`;
-    const up=await sb.storage.from("manifiestos").upload(path,blob,{contentType:"image/jpeg"});if(up.error)throw up.error;
-    const ins=await sb.from("ruta_manifiestos").insert({ruta_id:S.route.dbId,foto_path:path});if(ins.error)throw ins.error}catch(x){err("manif-err",x);break}}
-  await loadManif()};
+$("manif-file").onchange=async e=>{
+  err("manif-err",null);const fs=[...e.target.files].slice(0,10-MANIF.length);e.target.value="";if(!fs.length)return;$("manif-add").disabled=true;
+  try{
+    const record=await localGet("routes",routeLocalKey());if(!record)throw new Error("No existe un registro local de la ruta para guardar las fotos.");
+    for(const f of fs){const blob=await comprimir(f);if(!blob)throw new Error("No se pudo procesar una de las fotos.");record.manifests.push({id:crypto.randomUUID(),blob,name:f.name,createdAt:new Date().toISOString(),photoPath:null,rowSaved:false})}
+    await localPut("routes",record);MANIF=(record.manifests||[]).map(m=>({...m,local:true}));drawManif();enableOut();
+    if(navigator.onLine){const ok=await syncPendingRoute();if(ok)await loadManif()}
+    else setNetStatus("Sin conexión · foto guardada en este dispositivo y pendiente de envío.",true);
+  }catch(x){err("manif-err",x)}
+  $("manif-add").disabled=MANIF.length>=10;
+};
 function enableOut(){const rm=!!requiereManif();$("manif").classList.toggle("hide",!rm);if(rm&&!manifCargado&&S.route)loadManif();$("extras").classList.toggle("hide",!llevaExtras());const ok=(S.inc===false||(S.inc===true&&S.incSel.size>0))&&(!rm||MANIF.length>0);if(S.stage>=2)setStage((S.inc===false||(S.inc===true&&S.incSel.size>0))?3:2);$("bout").disabled=!(ok&&S.stage>=3)}
 $("bout").onclick=async()=>{
   $("bout").disabled=true;err("outerr",null);const r=S.route,res=S.result;
-  const fl=Object.entries(S.fallos).filter(([,q])=>q>0).map(([c,q])=>({ruta_id:r.dbId,causa_id:+c,cantidad:q}));
-  const ic=S.inc?[...S.incSel].map(i=>({ruta_id:r.dbId,incidencia_id:+i,comentario:$("inctxt").value.trim()||null})):[];
-  let e1=null;
-  if(fl.length)e1=(await sb.from("ruta_fallos").upsert(fl)).error;
-  if(!e1&&ic.length)e1=(await sb.from("ruta_incidencias").upsert(ic)).error;
-  if(!e1)e1=(await sb.from("rutas").update({estado:"cerrada",checkout_at:new Date().toISOString(),entregados:res.ent,fallidos:res.fal,hubo_incidencias:!!S.inc,...(llevaExtras()?{maniobras:$("x-man").value.trim()||null,estadia:$("x-est").value.trim()||null,otros:$("x-otr").value.trim()||null}:{})}).eq("id",r.dbId)).error;
-  if(e1){err("outerr",e1);$("bout").disabled=false;return}
-  const t=new Date(),incs=ic.map(x=>(INCID.find(i=>i.id===x.incidencia_id)||{}).nombre);
-  ["s2","s3","s4","sresume"].forEach(x=>$(x).classList.add("hide"));$("sdone").classList.remove("hide");
-  $("sdone").innerHTML=`<div class="okbox"><b>🏁 Ruta finalizada</b><br>${esc(r.cli)} · ${esc(r.cedis)} · ${esc(r.rid)}</div>
-  <div class="kv"><span>Entregados</span><b>${esc(res.ent)}</b></div><div class="kv"><span>Fallidos</span><b>${esc(res.fal)}</b></div>
-  <div class="kv"><span>Efectividad</span><b>${Math.round(res.ent/r.pk*100)}%</b></div>
-  <div class="kv"><span>Incidencias</span><b>${incs.length?incs.join(", "):"Ninguna"}</b></div>
-  <div class="kv"><span>Check-out</span><b>${t.toTimeString().slice(0,5)}</b></div><button class="btn" id="bnew">Iniciar nueva ruta</button>`;
-  $("hstate").className="pill w";$("hstate").textContent="Ruta cerrada";$("bnew").onclick=()=>location.reload();
+  let record;
+  try{record=await localGet("routes",routeLocalKey());if(!record)throw new Error("No existe una copia local de esta ruta. No se cerró para evitar perder el registro.")}catch(e){err("outerr",e);$("bout").disabled=false;return}
+  const checkoutAt=new Date().toISOString();
+  const fl=Object.entries(S.fallos).filter(([,q])=>q>0).map(([c,q])=>({causa_id:+c,cantidad:q}));
+  const ic=S.inc?[...S.incSel].map(i=>({incidencia_id:+i,comentario:$("inctxt").value.trim()||null})):[];
+  record.status="checkout_pending";
+  record.checkout={checkoutAt,ent:res.ent,fal:res.fal,hubo_incidencias:!!S.inc,fallos:fl,incidencias:ic,
+    extras:llevaExtras()?{maniobras:$("x-man").value.trim()||null,estadia:$("x-est").value.trim()||null,otros:$("x-otr").value.trim()||null}:{}};
+  try{await localPut("routes",record)}catch(e){err("outerr",e);$("bout").disabled=false;return}
+  S.routeLocalCheckout=record.checkout;
+  let synced=false;
+  if(navigator.onLine)synced=await syncPendingRoute();
+  else{OFFLINE_MODE=true;setNetStatus("Sin conexión · check-out guardado en este dispositivo; se enviará al recuperar la red.",true)}
+  showRouteDone(!synced);
 };
 
 // ---------- Cancelación ----------
@@ -224,20 +448,55 @@ async function stamp(img){
 function checkCan(){$("bcan").disabled=!(canBlob&&$("ccli").value&&$("ccedis").value)}
 $("bcan").onclick=async()=>{
   $("bcan").disabled=true;err("canerr",null);
-  const path=`${esc(ME.id)}/${Date.now()}.jpg`;
-  const up=await sb.storage.from("cancelaciones").upload(path,canBlob,{contentType:"image/jpeg"});
-  if(up.error){err("canerr",up.error);$("bcan").disabled=false;return}
-  const {error}=await sb.from("cancelaciones").insert({driver_id:ME.id,ruta_id:S.route?S.route.dbId:null,cedis_id:+$("ccedis").value,id_ruta:$("crid").value.trim()||null,foto_path:path,lat:canMeta.loc?canMeta.loc.lat:null,lng:canMeta.loc?canMeta.loc.lng:null,capturado_at:canMeta.d.toISOString()});
-  if(error){err("canerr",error);$("bcan").disabled=false;return}
-  toast("Cancelación registrada y enviada a Operaciones");canBlob=null;$("cv").classList.add("hide");$("cmeta").textContent="";checkCan();loadCan();
+  try{
+    const record={key:crypto.randomUUID(),driver_id:ME.id,ruta_id:S.route?S.route.dbId:null,cedis_id:+$("ccedis").value,id_ruta:$("crid").value.trim()||null,
+      lat:canMeta.loc?canMeta.loc.lat:null,lng:canMeta.loc?canMeta.loc.lng:null,capturado_at:canMeta.d.toISOString(),blob:canBlob};
+    await localPut("cancellations",record);
+    canBlob=null;$("cv").classList.add("hide");$("cmeta").textContent="";checkCan();
+    if(navigator.onLine&&await syncPendingCancellations())toast("Cancelación registrada y enviada a Operaciones");
+    else{OFFLINE_MODE=true;setNetStatus("Sin conexión o red intermitente · cancelación y foto guardadas en este dispositivo, pendientes de envío.",true);toast("Cancelación guardada en este dispositivo")}
+    await loadCan();
+  }catch(error){err("canerr",error);$("bcan").disabled=false}
 };
 let CAN2=[],NOT=[];
 const cuentaReg=v=>{const ms=new Date(v)-Date.now();if(ms<=0)return null;const m=Math.floor(ms/60000);return `${Math.floor(m/60)} h ${String(m%60).padStart(2,"0")} min`};
 const estC=x=>((x.estatus==="aclaracion"||x.estatus==="rechazada")&&x.plazo_vence&&new Date(x.plazo_vence)<Date.now())?"vencida":x.estatus;
-async function loadCan(){const {data}=await sb.rpc("mis_cancelaciones_estatus");CAN2=data||[];drawCan()}
+async function loadCan(){
+  const {data,error}=navigator.onLine?await sb.rpc("mis_cancelaciones_estatus"):{data:[],error:null};
+  if(error&&!networkError(error)){err("canerr",error);return}
+  const pending=await localGetAll("cancellations");
+  CAN2=[...(data||[]),...pending.map(x=>({id:x.key,fecha:x.capturado_at,cliente:cedObjById(x.cedis_id)?.cliente_nombre||"Cliente",cedis:cedNameById(x.cedis_id)||"CEDIS",id_ruta:x.id_ruta,estatus:"pendiente",es_mia:true,local:true}))];
+  drawCan()
+}
+async function syncPendingCancellations(){
+  if(syncCancelBusy||!ME||!navigator.onLine)return false;
+  syncCancelBusy=true;
+  try{
+    const pending=await localGetAll("cancellations");
+    for(const record of pending){
+      const path=`${ME.id}/offline-${record.key}.jpg`;
+      const {error:uploadError}=await sb.storage.from("cancelaciones").upload(path,record.blob,{contentType:"image/jpeg",upsert:true});
+      if(uploadError)throw uploadError;
+      const {data:existing,error:lookupError}=await sb.from("cancelaciones").select("id")
+        .eq("driver_id",record.driver_id).eq("capturado_at",record.capturado_at).eq("foto_path",path).maybeSingle();
+      if(lookupError)throw lookupError;
+      if(!existing){
+        const {driver_id,ruta_id,cedis_id,id_ruta,lat,lng,capturado_at}=record;
+        const {error}=await sb.from("cancelaciones").insert({driver_id,ruta_id,cedis_id,id_ruta,lat,lng,capturado_at,foto_path:path});
+        if(error)throw error;
+      }
+      await localDelete("cancellations",record.key);
+    }
+    return true;
+  }catch(error){
+    if(networkError(error)){OFFLINE_MODE=true;setNetStatus("Conexión intermitente · la cancelación y su foto siguen guardadas en este dispositivo.",true)}
+    else{err("canerr",error);setNetStatus("No se pudo sincronizar la cancelación. La foto sigue guardada en este dispositivo.",true)}
+    return false;
+  }finally{syncCancelBusy=false}
+}
 function drawCan(){const L=CAN2.filter(x=>x.es_mia).slice(0,10);
   $("canlist").innerHTML=L.length?L.map(r=>{const d=new Date(r.fecha),k=estC(r),esp=(r.estatus==="aclaracion"||r.estatus==="rechazada")&&k!==("vencida"),q=r.plazo_vence?cuentaReg(r.plazo_vence):null;
-    const caja=esp?`<div class="note" style="margin-top:8px;background:#fff4d6;color:#7a4b00;padding:10px;border-radius:10px"><b>${r.estatus==="aclaracion"?"Chazki te pide una aclaración":"Chazki rechazó tu cancelación"}</b><br>${esc(r.ultimo_mensaje||"")}<br><b>⏱ Te quedan ${q}</b> para ${r.estatus==="aclaracion"?"responder":"apelar"}.<br><button class="btn sm" type="button" data-resp="${esc(r.id)}" style="margin-top:8px">${r.estatus==="aclaracion"?"Responder":"Apelar"}</button></div>`:(k==="vencida"?`<div class="note" style="margin-top:6px;color:#b42318">El plazo de 12 horas venció${r.estatus==="rechazada"?"; la decisión queda firme.":" sin respuesta."}</div>`:"");
+    const caja=r.local?'<div class="note" style="margin-top:6px;color:#946200">Guardada en este dispositivo; pendiente de sincronización.</div>':esp?`<div class="note" style="margin-top:8px;background:#fff4d6;color:#7a4b00;padding:10px;border-radius:10px"><b>${r.estatus==="aclaracion"?"Chazki te pide una aclaración":"Chazki rechazó tu cancelación"}</b><br>${esc(r.ultimo_mensaje||"")}<br><b>⏱ Te quedan ${q}</b> para ${r.estatus==="aclaracion"?"responder":"apelar"}.<br><button class="btn sm" type="button" data-resp="${esc(r.id)}" style="margin-top:8px">${r.estatus==="aclaracion"?"Responder":"Apelar"}</button></div>`:(k==="vencida"?`<div class="note" style="margin-top:6px;color:#b42318">El plazo de 12 horas venció${r.estatus==="rechazada"?"; la decisión queda firme.":" sin respuesta."}</div>`:"");
     return `<div class="item" style="display:block"><div style="display:flex;justify-content:space-between;gap:8px"><div><b>${esc(r.cliente)}</b> · ${esc(r.cedis)}<small>${d.toLocaleDateString("es-MX",{weekday:"long",day:"2-digit",month:"2-digit"})} · ${d.toTimeString().slice(0,5)}${esc(r.id_ruta?" · Ruta "+r.id_ruta:"")}</small></div>${pillE(k)}</div>${caja}</div>`}).join(""):'<div class="note">Aún no hay cancelaciones.</div>';
   document.querySelectorAll("[data-resp]").forEach(b=>b.onclick=()=>abrirRespuesta(+b.dataset.resp))}
 setInterval(()=>{if(CAN2.length)drawCan()},30000);
@@ -336,7 +595,7 @@ async function loadEstatus(){
   const fl=ACC.es_flotillero,f=x=>new Date(x).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
   const rows=(r.data||[]).map(x=>`<div class="item"><div><b>Ruta ${esc(x.id_ruta)}</b><small>${f(x.fecha)} · ${esc(x.cliente)} · ${esc(x.cedis)}${esc(fl?" · "+x.driver:"")} · ${x.entregados==null?"—":x.entregados}/${esc(x.asignados)}</small></div>${pillE(x.estatus)}</div>`).join("");
   const can=(c.data||[]).map(x=>`<div class="item"><div><b>Cancelación${esc(x.id_ruta?" · Ruta "+x.id_ruta:"")}</b><small>${f(x.fecha)} · ${esc(x.cliente)} · ${esc(x.cedis)}${esc(fl?" · "+x.driver:"")}</small></div>${pillE(estC(x))}</div>`).join("");
-  box.innerHTML=`<h3 style="margin:4px 0">Rutas</h3>${esc(rows||'<div class="note">Aún no tienes rutas.</div>')}<h3 style="margin:14px 0 4px">Cancelaciones</h3>${esc(can||'<div class="note">Aún no tienes cancelaciones.</div>')}`}
+  box.innerHTML=`<h3 style="margin:4px 0">Rutas</h3>${rows||'<div class="note">Aún no tienes rutas.</div>'}<h3 style="margin:14px 0 4px">Cancelaciones</h3>${can||'<div class="note">Aún no tienes cancelaciones.</div>'}`}
 const parseF=s=>{const [y,m,d]=s.split("-");return new Date(+y,m-1,+d)};
 const monday=d=>{const x=new Date(d);x.setHours(0,0,0,0);x.setDate(x.getDate()-((x.getDay()+6)%7));return x};
 function drawG(){
@@ -424,6 +683,17 @@ $("docfile").onchange=e=>{const f=e.target.files[0];e.target.value="";if(!f||!do
   const base=DOCS[docTarget]||{numero:"•••• ----"};DOCS[docTarget]={...base,revision:true};drawDocs();toast("Documento enviado a revisión (ejemplo): "+f.name)};
 drawDocs();
 
+window.addEventListener("offline",()=>{OFFLINE_MODE=true;setNetStatus("Sin conexión · el check-in, check-out y las fotos se guardarán en este dispositivo.",true)});
+window.addEventListener("online",async()=>{
+  if(!ME)return;
+  const wasOffline=OFFLINE_MODE,routeOk=await syncPendingRoute(),cancelOk=await syncPendingCancellations();
+  if(routeOk&&cancelOk&&wasOffline)location.reload();
+});
+setInterval(async()=>{
+  if(!ME||!navigator.onLine)return;
+  const wasOffline=OFFLINE_MODE,routeOk=await syncPendingRoute(),cancelOk=await syncPendingCancellations();
+  if(routeOk&&cancelOk&&wasOffline)location.reload();
+},20000);
 sb.auth.onAuthStateChange(ev=>{if(ev==="SIGNED_OUT")location.reload()});
 if("serviceWorker" in navigator&&location.protocol.startsWith("http"))navigator.serviceWorker.register("sw.js").catch(()=>{});
-boot();
+boot().catch(e=>{const message=e&&e.message?e.message:"No se pudo iniciar la app.";setNetStatus(message,true);$("auth").classList.remove("hide");$("amsg").innerHTML=`<div class="errbox">${esc(message)}</div>`});
