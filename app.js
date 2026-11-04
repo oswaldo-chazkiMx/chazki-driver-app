@@ -400,7 +400,7 @@ async function capturarFotoAuxiliar(stage){
     `CEDIS: ${cedis||"—"} · Ruta: ${routeId||"—"}`,
     `Unidad: ${unit||"—"} · Placa: ${VEHICULO?.placas||"—"}`,
     `Fecha y hora: ${time}`,
-    loc?`GPS: ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}`:"GPS: no disponible"
+    loc?`GPS: ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)} · ±${Math.round(loc.accuracy)} m`:"GPS no disponible · activa Ubicación y concede permiso"
   ];
   const fontSize=Math.max(15,Math.round(canvas.width/48)),padding=fontSize*.7,lineHeight=fontSize*1.35;
   ctx.font=`${fontSize}px sans-serif`;
@@ -561,8 +561,22 @@ $("bout").onclick=async()=>{
 let canBlob=null,canMeta=null;
 $("bcam").onclick=()=>$("cfile").click();
 $("cfile").onchange=e=>{const f=e.target.files[0];if(!f)return;const img=new Image();img.onload=()=>stamp(img);img.src=URL.createObjectURL(f);e.target.value=""};
-function getLoc(){return new Promise(res=>{if(!navigator.geolocation)return res(null);const t=setTimeout(()=>res(null),8000);
-  try{navigator.geolocation.getCurrentPosition(p=>{clearTimeout(t);res({lat:p.coords.latitude,lng:p.coords.longitude})},()=>{clearTimeout(t);res(null)},{timeout:7000,enableHighAccuracy:true})}catch(e){clearTimeout(t);res(null)}})}
+function getLoc(){
+  if(!navigator.geolocation)return Promise.resolve(null);
+  const locate=options=>new Promise(resolve=>{
+    try{
+      navigator.geolocation.getCurrentPosition(
+        p=>resolve({lat:p.coords.latitude,lng:p.coords.longitude,accuracy:p.coords.accuracy}),
+        ()=>resolve(null),
+        options
+      );
+    }catch{resolve(null)}
+  });
+  return (async()=>{
+    const accurate=await locate({enableHighAccuracy:true,timeout:20000,maximumAge:30000});
+    return accurate||await locate({enableHighAccuracy:false,timeout:12000,maximumAge:120000});
+  })();
+}
 async function stamp(img){
   $("cmeta").textContent="Obteniendo ubicación…";err("canerr",null);
   const loc=await getLoc();
