@@ -311,6 +311,25 @@ async function syncPendingRoute(){
     return false;
   }finally{syncBusy=false}
 }
+async function retryPendingRouteSync(){
+  const button=$("sync-route");
+  if(button.disabled)return;
+  button.disabled=true;button.textContent="⏳";
+  try{
+    if(!ME)throw new Error("Inicia sesión para sincronizar la ruta.");
+    if(!navigator.onLine){setNetStatus("Sin conexión · la ruta sigue guardada en este dispositivo.",true);toast("Conéctate a internet e inténtalo de nuevo.");return}
+    if(syncBusy){toast("La sincronización ya está en curso.");return}
+    const record=await localGet("routes",routeLocalKey());
+    if(!record){toast("No hay rutas pendientes de sincronizar.");return}
+    const wasOffline=OFFLINE_MODE,synced=await syncPendingRoute();
+    if(synced){toast("Ruta sincronizada correctamente.");if(wasOffline)location.reload()}
+    else toast("No se pudo sincronizar. La ruta sigue guardada en el dispositivo.");
+  }catch(e){
+    setNetStatus(`No se pudo sincronizar la ruta: ${e.message||e}`,true);
+    toast("No se pudo sincronizar. La ruta sigue guardada en el dispositivo.");
+  }finally{button.disabled=false;button.textContent="🔄"}
+}
+$("sync-route").onclick=retryPendingRouteSync;
 function routeDoneMarkup(pending){
   const r=S.route,res=S.result,t=S.routeLocalCheckout?new Date(S.routeLocalCheckout.checkoutAt):new Date();
   const incs=S.incSel.size?[...S.incSel].map(i=>(INCID.find(x=>String(x.id)===String(i))||{}).nombre).filter(Boolean):[];
