@@ -92,13 +92,14 @@ async function boot(){
     return;
   }
   try{
-    const [d,cl,ca,ic]=await Promise.all([
+    const [d,cl,ce,ca,ic]=await Promise.all([
       sb.from("drivers").select("*").eq("id",ME.id).single(),
-      sb.from("clientes").select("id,nombre,cedis(id,nombre,lat,lng,radio_m)").eq("activo",true).order("nombre"),
+      sb.from("clientes").select("id,nombre").eq("activo",true).order("nombre"),
+      sb.from("cedis").select("id,nombre,lat,lng,radio_m,cliente_id"),
       sb.from("causas_fallo").select("*").order("orden"),
       sb.from("tipos_incidencia").select("*").order("orden")]);
-    const failed=[d.error,cl.error,ca.error,ic.error].find(Boolean);if(failed)throw failed;
-    DRIVER=d.data;CLI=cl.data||[];CAUSAS=ca.data||[];INCID=ic.data||[];
+    const failed=[d.error,cl.error,ce.error,ca.error,ic.error].find(Boolean);if(failed)throw failed;
+    DRIVER=d.data;CLI=(cl.data||[]).map(c=>({...c,cedis:(ce.data||[]).filter(x=>String(x.cliente_id)===String(c.id))}));CAUSAS=ca.data||[];INCID=ic.data||[];
   }catch(e){
     if(!networkError(e)||!cached)throw e;
     ({driver:DRIVER,clients:CLI,causes:CAUSAS,incidents:INCID,access:ACC}=cached);VEHICULO=cached.vehicle||null;
