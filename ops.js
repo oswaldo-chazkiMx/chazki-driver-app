@@ -1,11 +1,12 @@
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);const $=id=>document.getElementById(id);
-let R=[],C=[],tab="r",photos={},LIQ={},DRV=[],PRV=[],TAR=null,ANU=[],ANUERR="",AUD={},AUDERR="",DOCOPS=[],DOCOPSERR="",PNR_OPS=[],PNR_OPS_ERR="",NO_SHOW_OPS=[],NO_SHOW_EVENTS=[],NO_SHOW_CLIENTS=[],NO_SHOW_ERR="",analyticsGrain="dia",financeGrain="dia";
+let R=[],C=[],tab="r",photos={},LIQ={},DRV=[],PRV=[],TAR=null,ANU=[],ANUERR="",AUD={},AUDERR="",DOCOPS=[],DOCOPSERR="",PNR_OPS=[],PNR_OPS_ERR="",NO_SHOW_OPS=[],NO_SHOW_EVENTS=[],NO_SHOW_CLIENTS=[],NO_SHOW_ERR="",CLIENTES_NOMBRE={},analyticsGrain="dia",financeGrain="dia";
 const fd=m=>m==null?"—":(m<1000?m+" m":(m/1000).toFixed(1)+" km");
 const hh=s=>s?new Date(s).toTimeString().slice(0,5):"—";
 const dd=s=>new Date(s).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
 const dominioOk=e=>/^[^@\s]+@chazki\.com$/i.test((e||"").trim());
-let ROL=null,PEND=[],BAJ=[],CAMB=[],DSET=[],DLOG=[];
+let ROL=null,PEND=[],BAJ=[],CAMB=[],DSET=[],DLOG=[],NOTIF_UID=null;
+let CAMBIOS_TARIFARIO=[],CAMBIOS_TARIFARIO_ERR="",CSV_ASIGNACIONES_RESULT=null;
 $("apw-toggle").onclick=e=>{e.preventDefault();$("apw").classList.toggle("hide")};
 // Google Workspace: la cuenta debe ser de la organización; el dominio se vuelve a exigir en la base de datos
 $("agoogle").onclick=async()=>{
@@ -25,7 +26,7 @@ $("abtn").onclick=async()=>{
   if(!dominioOk(email)){$("amsg").innerHTML='<div class="errbox">Solo personal de Chazki: usa tu correo @chazki.com.</div>';return}
   const r=await sb.auth.signInWithPassword({email,password});
   if(r.error){$("amsg").innerHTML='<div class="errbox">Correo o contraseña incorrectos.</div>';return}boot()};
-const TABS={master:"rvalbkcifpedtnxyzgqn",ops:"rvalbkcifpdtnxyzgqn",coordinador:"rvalbkcifpdtxyzqn",finanzas:"rlcpdxyzq",ih:"rvabkcifdxn"};
+const TABS={master:"rvalbkcifpedtnxyzgqnhw",ops:"rvalbkcifpdtnxyzgqnw",coordinador:"rvalbkcifpdtxyzqnw",finanzas:"rlcpdxyzq",ih:"rvabkcifdxnw"};
 const puede=t=>(TABS[ROL]||"").includes(t);
 const veFin=()=>["master","ops","coordinador","finanzas"].includes(ROL);
 const cargaFin=()=>veFin()||ROL==="ih";
@@ -49,17 +50,27 @@ const NAV_INFO={
   b:["Desactivaciones","−","Gestiona solicitudes de desactivación de drivers."],
   k:["Cambios de datos","✎","Revisa solicitudes de actualización de perfiles."],
   t:["Tarifario","$","Consulta y administra tarifas operativas."],
-  d:["Descargas","⇩","Genera reportes y exportaciones."],
+  h:["Cambios tarifarios","✓","Aprueba o rechaza los cambios de tarifas y penalizaciones propuestos."],
+  d:["Reportes","⇩","Genera reportes y exportaciones."],
   p:["Proveedores y drivers","♙","Administra proveedores y sus conductores."],
+  w:["Invitaciones","✉","Invita flotilleros y drivers independientes, y aprueba los drivers que piden los flotilleros."],
   e:["Equipo","♧","Gestiona el acceso del equipo administrativo."]
 };
 function seleccionarTab(b){
   document.querySelectorAll(".role-nav button").forEach(x=>x.classList.toggle("on",x===b));
-  tab=b.dataset.t;
+  const prevTab=tab;tab=b.dataset.t;
+  document.querySelectorAll(".nav-sub").forEach(sub=>{
+    const parent=sub.dataset.parent;
+    if(tab===parent&&document.querySelector(`.role-nav button[data-t="${parent}"]`))sub.classList.toggle("open",prevTab===tab?!sub.classList.contains("open"):true);
+    else if(sub.contains(b))sub.classList.add("open");
+  });
   document.querySelector(".bar").classList.toggle("hide",tab==="n");
   const [title,,description]=NAV_INFO[tab]||["Operación","",""];
   $("page-title").textContent=title;
   $("page-description").textContent=description;
+  if(tab==="h"){cargarCambiosTarifario();return}
+  if(tab==="w"){render();cargarInvitaciones().then(()=>{if(tab==="w")render()});return}
+  if(tab==="e"){render();cargarAsignacionesEquipo().then(()=>{if(tab==="e")render()});return}
   if(["l","x","y","z","g","q","n"].includes(tab)){load();return}
   render();
 }
@@ -68,6 +79,10 @@ function aplicarRol(){
     if(!puede(b.dataset.t)){b.remove();return}
     const [label,icon]=NAV_INFO[b.dataset.t]||[b.textContent,"•"];
     b.innerHTML=`<span class="nav-icon" aria-hidden="true">${icon}</span><span>${label}</span>`;
+  });
+  document.querySelectorAll(".nav-sub").forEach(sub=>{
+    if(!sub.querySelector("button"))sub.remove();
+    else if(!document.querySelector(`.role-nav button[data-t="${sub.dataset.parent}"]`))sub.classList.add("open");
   });
   document.querySelectorAll(".nav-group").forEach(group=>group.classList.toggle("hide",!group.querySelector("button")));
   document.querySelectorAll(".nav-caption").forEach(caption=>caption.classList.toggle("hide",caption.nextElementSibling.classList.contains("hide")));
@@ -115,7 +130,9 @@ async function boot(){
   ROL=me.rol;aplicarRol();suscribirAvisos(session.user.id);DSET=(await sb.rpc("datasets_disponibles")).data||[];cargaLog();
   $("auth").classList.add("hide");$("panel").classList.remove("hide");$("who").textContent=me.nombre+" · "+(ROLES_TXT[me.rol]||me.rol);
   const hoy=new Date().toLocaleDateString("en-CA");$("d1").value=hoy;$("d2").value=hoy;
-  const {data:cl}=await sb.from("clientes").select("id,nombre").order("nombre");
+  const {data:cl,error:clientError}=await sb.from("clientes").select("id,nombre").order("nombre");
+  if(clientError){toast("No se pudieron cargar los clientes: "+clientError.message);return}
+  CLIENTES_NOMBRE=Object.fromEntries((cl||[]).map(c=>[String(c.id),c.nombre]));
   $("fcli").innerHTML='<option value="">Todos los clientes</option>'+(cl||[]).map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join("");
   try{await load()}finally{$("loading").classList.add("hide")}
 }
@@ -130,10 +147,13 @@ async function load(){
   let routeRows,cancelRows;
   try{
     [routeRows,cancelRows]=await Promise.all([
-      fetchPaged(()=>sb.from("rutas").select("*,drivers(nombre,codigo,cliente_default_id),cedis(*,clientes(nombre)),ruta_fallos(cantidad,causas_fallo(nombre)),ruta_incidencias(comentario,tipos_incidencia(nombre)),ruta_manifiestos(foto_path)").gte("checkin_at",a).lte("checkin_at",b).order("checkin_at",{ascending:false})),
-      fetchPaged(()=>sb.from("cancelaciones").select("*,drivers(nombre,codigo),cedis(*,clientes(nombre))").gte("capturado_at",a).lte("capturado_at",b).order("capturado_at",{ascending:false}))
+      fetchPaged(()=>sb.from("rutas").select("*,drivers(nombre,codigo,cliente_default_id),cedis(*),ruta_fallos(cantidad,causas_fallo(nombre)),ruta_incidencias(comentario,tipos_incidencia(nombre)),ruta_manifiestos(foto_path)").gte("checkin_at",a).lte("checkin_at",b).order("checkin_at",{ascending:false})),
+      fetchPaged(()=>sb.from("cancelaciones").select("*,drivers(nombre,codigo),cedis(*)").gte("capturado_at",a).lte("capturado_at",b).order("capturado_at",{ascending:false}))
     ]);
   }catch(error){toast("No se pudieron cargar las rutas y cancelaciones: "+(error.message||error));return}
+  for(const row of routeRows.concat(cancelRows)){
+    if(row.cedis)row.cedis.clientes={nombre:CLIENTES_NOMBRE[String(row.cedis.cliente_id)]||""}
+  }
   const f=$("fcli").value;const keep=x=>!f||String(x.cedis.cliente_id)===f;
   R=routeRows.filter(keep);C=cancelRows.filter(keep);
   const paths=C.map(x=>x.foto_path);photos={};
@@ -182,7 +202,21 @@ async function cargarNoShowsOps(){
       try{
         const [cases,clients]=await Promise.all([
           fetchPaged(()=>sb.from("no_show_casos").select("*").order("creado_en",{ascending:false}).limit(1000)),
-          fetchPaged(()=>sb.from("clientes").select("id,nombre,cedis(id,nombre,cliente_id)").order("nombre"))
+          (async()=>{
+            const [clientResult,cedisResult]=await Promise.all([
+              fetchPaged(()=>sb.from("clientes").select("id,nombre").order("nombre")),
+              fetchPaged(()=>sb.from("cedis").select("id,nombre,cliente_id").order("nombre"))
+            ]);
+            if(clientResult.length&&!Object.keys(CLIENTES_NOMBRE).length){
+              CLIENTES_NOMBRE=Object.fromEntries(clientResult.map(client=>[String(client.id),client.nombre]))
+            }
+            const cedisPorCliente={};
+            cedisResult.forEach(cedis=>{
+              if(!cedisPorCliente[cedis.cliente_id])cedisPorCliente[cedis.cliente_id]=[];
+              cedisPorCliente[cedis.cliente_id].push(cedis)
+            });
+            return clientResult.map(client=>({...client,cedis:cedisPorCliente[client.id]||[]}))
+          })()
         ]);
         NO_SHOW_OPS=cases;
         NO_SHOW_CLIENTS=clients;
@@ -302,7 +336,7 @@ function render(){
     (rows.map(({x,i})=>`<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${esc(x.cedis.clientes.nombre)} · ${esc(x.cedis.nombre)}</td><td><span class="pill bad">${esc(i.tipos_incidencia.nombre)}</span></td><td>${esc(i.comentario||"—")}</td></tr>`).join("")||`<tr><td colspan="5">Sin incidencias en este periodo.</td></tr>`)+`</table>`}
   if(tab==="f"){const m={};R.forEach(x=>x.ruta_fallos.forEach(f=>{m[f.causas_fallo.nombre]=(m[f.causas_fallo.nombre]||0)+f.cantidad}));const e=Object.entries(m).sort((a,b)=>b[1]-a[1]);
   h=`<table><tr><th>Causa</th><th>Paquetes</th></tr>`+(e.map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")||`<tr><td colspan="2">Sin fallidos en este periodo.</td></tr>`)+`</table>`}
-  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();if(tab==="t")h=vistaTarifario();if(tab==="x")h=vistaIndicadores();if(tab==="y")h=vistaFinanzas();if(tab==="z")h=vistaDesempeno();if(tab==="g")h=vistaDocumentosOps();if(tab==="q")h=vistaPnrsOps();if(tab==="n")h=vistaNoShowsOps();
+  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();if(tab==="t")h=vistaTarifario();if(tab==="h")h=vistaCambiosTarifario();if(tab==="x")h=vistaIndicadores();if(tab==="y")h=vistaFinanzas();if(tab==="z")h=vistaDesempeno();if(tab==="g")h=vistaDocumentosOps();if(tab==="q")h=vistaPnrsOps();if(tab==="n")h=vistaNoShowsOps();if(tab==="w")h=vistaInvitaciones();
   $("view").innerHTML=h;enlazar();
   document.querySelectorAll("img.th").forEach(i=>i.onclick=()=>{$("lbimg").src=i.dataset.u;$("lb").classList.remove("hide")});
 }
@@ -321,11 +355,15 @@ async function cargaExtra(){
     ids.length&&veFin()?cargarLiquidaciones(ids):Promise.resolve([]),
     sb.from("drivers").select("id,nombre,codigo,rol,estatus,proveedor_id").order("nombre"),
     sb.from("proveedores").select("*").order("nombre"),
-    sb.from("validaciones_pendientes").select("*,rutas(id_ruta,entregados,paquetes_asignados,drivers(nombre),cedis(nombre,clientes(nombre)))").eq("estatus","pendiente").order("solicitado_en"),
+    sb.from("validaciones_pendientes").select("*,rutas(id_ruta,entregados,paquetes_asignados,drivers(nombre),cedis(nombre,cliente_id))").eq("estatus","pendiente").order("solicitado_en"),
     sb.from("bajas_solicitudes").select("*").order("solicitado_en",{ascending:false}).limit(50),
     sb.from("cambios_perfil").select("*").order("solicitado_en",{ascending:false}).limit(50)]);
   BAJ=bj.data||[];CAMB=cm.data||[];
-  PEND=pe.data||[];
+  PEND=(pe.data||[]).map(request=>{
+    const route=request.rutas;
+    if(route?.cedis)route.cedis.clientes={nombre:CLIENTES_NOMBRE[String(route.cedis.cliente_id)]||""};
+    return request
+  });
   (l||[]).forEach(x=>LIQ[x.ruta_id]=x);DRV=d.data||[];PRV=p.data||[];
   window.INV=ROL==="master"?((await sb.from("staff_invitados").select("*").order("creado_en",{ascending:false})).data||[]):[];
 }
@@ -400,9 +438,10 @@ function vistaPorValidar(){const l=porValidar();
 async function verDetalleRuta(id){
   let ru=R.find(x=>String(x.id)===String(id));
   if(!ru){
-    const {data,error}=await sb.from("rutas").select("*,drivers(nombre,codigo),cedis(*,clientes(nombre)),ruta_fallos(cantidad,causas_fallo(nombre)),ruta_incidencias(comentario,tipos_incidencia(nombre)),ruta_manifiestos(foto_path)").eq("id",id).maybeSingle();
+    const {data,error}=await sb.from("rutas").select("*,drivers(nombre,codigo),cedis(*),ruta_fallos(cantidad,causas_fallo(nombre)),ruta_incidencias(comentario,tipos_incidencia(nombre)),ruta_manifiestos(foto_path)").eq("id",id).maybeSingle();
     if(error){toast("No se pudo cargar el detalle de la ruta: "+error.message);return}
     ru=data;
+    if(ru?.cedis)ru.cedis.clientes={nombre:CLIENTES_NOMBRE[String(ru.cedis.cliente_id)]||""}
   }
   if(!ru){toast("No se encontró el detalle de esta ruta");return}
   let liq=LIQ[ru.id];
@@ -597,37 +636,47 @@ function estPill(x){const k=estK(x),e=ESTC[k]||ESTC.por_validar;let h=`<span cla
   if(x.estatus==="respondida"||x.estatus==="apelada")h+=`<br><small><b>💬 Nueva respuesta</b></small>`;return h}
 function estCan(x){const h=estPill(x);
   if(!["master","ops","coordinador","ih"].includes(ROL)||x.estatus==="aprobada")return h;
-  return h+`<br><button class="btn sm" data-rev="${esc(x.id)}">Revisar</button>`}
+  const approvals=x.ubicacion_validada==="dentro"?`<br><small>Supervisor ${x.aprob_supervisor?"✓":"pendiente"} · Coordinador ${x.aprob_coord?"✓":"pendiente"}</small>`:"";
+  return h+approvals+`<br><button class="btn sm" data-rev="${esc(x.id)}">Revisar</button>`}
 async function cargaEventos(){CEV={};EVP={};if(!C.length)return;const ids=C.map(x=>x.id);const r=await sb.from("cancelacion_eventos").select("*").in("cancelacion_id",ids).order("creado_en");
   (r.data||[]).forEach(e=>(CEV[e.cancelacion_id]=CEV[e.cancelacion_id]||[]).push(e));
   const ps=(r.data||[]).map(e=>e.foto_path).filter(Boolean);if(ps.length){const s=await sb.storage.from("cancelaciones").createSignedUrls(ps,3600);(s.data||[]).forEach(x=>EVP[x.path]=x.signedUrl)}}
 const EVL={rechazo:"Chazki rechazó",aclaracion:"Chazki pidió aclaración",aprobacion:"Chazki aprobó",respuesta:"El driver respondió",apelacion:"El driver apeló"};
 function revisarCan(id){const x=C.find(y=>y.id===id);if(!x)return;const m=$("modal");m.classList.remove("hide");
+  const aprobacionDoble=x.ubicacion_validada==="dentro";
+  const puedeAprobar=!aprobacionDoble||["ih","coordinador"].includes(ROL);
+  const estadoAprobacion=aprobacionDoble?`<div class="note">Aprobación dentro del CEDIS: Supervisor ${x.aprob_supervisor?"✓ autorizó":"pendiente"} · Coordinador ${x.aprob_coord?"✓ autorizó":"pendiente"}. Se requieren ambos.</div>`:"";
   const hist=(CEV[id]||[]).map(e=>`<div style="padding:6px 0;border-bottom:1px solid var(--line)"><b>${esc(EVL[e.tipo]||e.tipo)}</b> <small>${dd(e.creado_en)} ${hh(e.creado_en)}</small><br>${esc(e.texto||"")}${e.foto_path&&EVP[e.foto_path]?`<br><a href="${EVP[e.foto_path]}" target="_blank" rel="noopener"><img src="${EVP[e.foto_path]}" style="max-width:160px;border-radius:8px;margin-top:4px"></a>`:""}</div>`).join("")||'<small>Sin movimientos.</small>';
   m.innerHTML=`<div class="box" style="max-height:90vh;overflow:auto"><h2 style="margin:0 0 4px">Cancelación · ${esc(x.drivers.nombre)}</h2><div style="color:var(--mut);font-size:13px">${esc(x.cedis.clientes.nombre)} · ${esc(x.cedis.nombre)} · ${dd(x.capturado_at)} ${hh(x.capturado_at)}${esc(x.id_ruta?" · Ruta "+x.id_ruta:"")}</div>
-   <div style="margin-top:8px">${estPill(x)}</div>
+   <div style="margin-top:8px">${estPill(x)}</div>${estadoAprobacion}
    ${photos[x.foto_path]?`<img src="${photos[x.foto_path]}" style="max-width:100%;max-height:220px;border-radius:10px;margin-top:8px">`:""}
    <h3 style="margin:12px 0 4px">Historial</h3>${hist}
    <label>Mensaje para el driver (obligatorio al rechazar o pedir aclaración)</label><textarea id="rv-t" rows="3"></textarea>
    <div class="note">Al rechazar o pedir aclaración, el driver recibe un aviso y tiene 12 horas para apelar o responder. Pasado ese plazo la decisión queda firme.</div><div id="rv-e"></div>
-   <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="btn" data-rva="aprobar">Aprobar</button><button class="btn ghost" data-rva="aclarar">Pedir aclaración</button><button class="btn ghost" data-rva="rechazar" style="color:#b42318">Rechazar</button><button class="btn ghost" id="rv-x">Cerrar</button></div></div>`;
+   <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">${puedeAprobar?'<button class="btn" data-rva="aprobar">Aprobar</button>':""}<button class="btn ghost" data-rva="aclarar">Pedir aclaración</button><button class="btn ghost" data-rva="rechazar" style="color:#b42318">Rechazar</button><button class="btn ghost" id="rv-x">Cerrar</button></div></div>`;
   $("rv-x").onclick=()=>m.classList.add("hide");
   m.querySelectorAll("[data-rva]").forEach(b=>b.onclick=async()=>{const a=b.dataset.rva,t=$("rv-t").value.trim();if(a!=="aprobar"&&!t){$("rv-e").innerHTML='<div class="errbox">Escribe el mensaje para el driver</div>';return}
-    m.querySelectorAll("[data-rva]").forEach(z=>z.disabled=true);const {error}=await sb.rpc("resolver_cancelacion",{p_id:id,p_accion:a,p_texto:t||null});
+    m.querySelectorAll("[data-rva]").forEach(z=>z.disabled=true);const {data,error}=await sb.rpc("resolver_cancelacion_asignada",{p_id:id,p_accion:a,p_texto:t||null});
     if(error){$("rv-e").innerHTML=`<div class="errbox">${esc(error.message)}</div>`;m.querySelectorAll("[data-rva]").forEach(z=>z.disabled=false);return}
-    m.classList.add("hide");toast(a==="aprobar"?"Cancelación aprobada":a==="rechazar"?"Rechazada · el driver tiene 12 h para apelar":"Aclaración solicitada · el driver tiene 12 h");await load()})}
+    m.classList.add("hide");await load();
+    toast(data==="pendiente_coordinador"?"Aprobación registrada; falta el coordinador asignado":data==="pendiente_supervisor"?"Aprobación registrada; falta el supervisor asignado":a==="aprobar"?"Cancelación aprobada":a==="rechazar"?"Rechazada · el driver tiene 12 h para apelar":"Aclaración solicitada · el driver tiene 12 h")})}
 let NOT=[];
-async function loadNotifs(){const {data}=await sb.from("notificaciones").select("*").order("creada_en",{ascending:false}).limit(30);NOT=data||[];drawBell()}
+async function loadNotifs(){
+  if(!NOTIF_UID)return;
+  const {data,error}=await sb.from("notificaciones").select("*").eq("usuario",NOTIF_UID).order("creada_en",{ascending:false}).limit(30);
+  if(error){toast("No se pudieron cargar los avisos: "+error.message);return}
+  NOT=data||[];drawBell()
+}
 function drawBell(){const n=NOT.filter(x=>!x.leida_en).length;$("bellc").textContent=n>9?"9+":n;$("bellc").classList.toggle("hide",!n)}
 function abrirAvisos(){const m=$("modal");m.classList.remove("hide");const f=x=>new Date(x).toLocaleString("es-MX",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"});
   const perm=("Notification" in window&&Notification.permission==="default")?'<button class="btn ghost sm" id="nt-perm">Activar avisos del navegador</button>':"";
   m.innerHTML=`<div class="box" style="max-height:90vh;overflow:auto"><h2 style="margin:0 0 8px">🔔 Avisos</h2>${perm}${NOT.length?NOT.map(n=>`<div class="item" data-nt="${esc(n.id)}" style="display:block;padding:10px;border-bottom:1px solid var(--line);cursor:pointer;${n.leida_en?"opacity:.6":"background:#f3f0ff"}"><b>${esc(n.titulo)}</b>${n.cuerpo?`<br><small>${esc(n.cuerpo)}</small>`:""}<br><small style="color:var(--mut)">${f(n.creada_en)}</small></div>`).join(""):"<small>Sin avisos.</small>"}<div style="margin-top:12px"><button class="btn ghost" id="nt-x">Cerrar</button></div></div>`;
   $("nt-x").onclick=()=>m.classList.add("hide");const pr=$("nt-perm");if(pr)pr.onclick=async()=>{await Notification.requestPermission();abrirAvisos()};
-  const ir={cancelacion:"c",cambio_perfil:"k",baja:"b",validacion:"a"};
-  m.querySelectorAll("[data-nt]").forEach(el=>el.onclick=()=>{const n=NOT.find(x=>x.id==el.dataset.nt);m.classList.add("hide");const t=n&&ir[n.ref_tipo];const b=t&&document.querySelector(`.tabs button[data-t=${esc(t)}]`);if(b)b.click()});
+  const ir={cancelacion:"c",cancelacion_nueva:"c",cambio_perfil:"k",baja:"b",validacion:"a",ruta_registrada:"r",configuracion_operativa:"h"};
+  m.querySelectorAll("[data-nt]").forEach(el=>el.onclick=()=>{const n=NOT.find(x=>x.id==el.dataset.nt);m.classList.add("hide");const t=n&&ir[n.tipo]||n&&ir[n.ref_tipo];const b=t&&document.querySelector(`.role-nav button[data-t="${t}"]`);if(b)b.click()});
   sb.rpc("marcar_notificaciones_leidas",{p_ids:null}).then(()=>{NOT.forEach(n=>n.leida_en=n.leida_en||new Date().toISOString());drawBell()})}
 $("bell").onclick=abrirAvisos;
-function suscribirAvisos(uid){loadNotifs();setInterval(loadNotifs,60000);
+function suscribirAvisos(uid){NOTIF_UID=uid;loadNotifs();setInterval(loadNotifs,60000);
   sb.channel("avisos-"+uid).on("postgres_changes",{event:"INSERT",schema:"public",table:"notificaciones",filter:"usuario=eq."+uid},p=>{NOT.unshift(p.new);drawBell();toast("🔔 "+p.new.titulo);
     if("Notification" in window&&Notification.permission==="granted")try{new Notification(p.new.titulo,{body:p.new.cuerpo||""})}catch(e){}
     if((p.new.tipo||"").startsWith("cancelacion"))load()}).subscribe()}
@@ -643,8 +692,162 @@ async function resolverCambio(id,ok){const {error}=await sb.rpc("resolver_cambio
 async function verManif(id){const ru=R.find(x=>x.id===id);const paths=ru.ruta_manifiestos.map(x=>x.foto_path);
   const s=await sb.storage.from("manifiestos").createSignedUrls(paths,3600);const m=$("modal");m.classList.remove("hide");
   m.innerHTML=`<div class="box"><h2 style="margin:0 0 8px">Manifiestos · Ruta ${esc(ru.id_ruta)}</h2><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${(s.data||[]).map(x=>`<a href="${esc(x.signedUrl)}" target="_blank" rel="noopener"><img src="${esc(x.signedUrl)}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px"></a>`).join("")}</div><div style="margin-top:12px"><button class="btn ghost" id="mf-x">Cerrar</button></div></div>`;$("mf-x").onclick=()=>m.classList.add("hide")}
-let TF=null,TFL={cuenta:"",q:"",veh:"",esq:"",act:true};
-async function cargaTF(){const [t,g]=await Promise.all([sb.from("tarifas").select("*").order("cuenta").order("ubicacion").order("tipo_unidad").limit(2000),sb.from("reglas_penalizacion").select("*").order("cuenta").order("aplica_a").order("prioridad")]);if(t.error){toast(t.error.message);return}TF=t.data||[];RGL=g.data||[];render()}
+let TF=null,TFERR="",TFL={cuenta:"",q:"",veh:"",esq:"",act:true};
+async function cargaTF(){
+  TFERR="";
+  const [t,g]=await Promise.all([
+    sb.from("tarifas").select("*").order("cuenta").order("ubicacion").order("tipo_unidad").limit(2000),
+    sb.from("reglas_penalizacion").select("*").order("cuenta").order("aplica_a").order("prioridad")
+  ]);
+  if(t.error||g.error){TFERR=(t.error||g.error).message;toast("No se pudo cargar el tarifario: "+TFERR);return}
+  TFERR="";TF=t.data||[];RGL=g.data||[];render()
+}
+async function cargarCambiosTarifario(){
+  CAMBIOS_TARIFARIO=[];CAMBIOS_TARIFARIO_ERR="";
+  if(ROL!=="master"){CAMBIOS_TARIFARIO_ERR="Solo la cuenta maestra puede consultar esta sección.";render();return}
+  const [pending,recent]=await Promise.all([
+    sb.from("cambios_tarifario_solicitudes").select("*").eq("estado","pendiente").order("solicitada_en",{ascending:true}),
+    sb.from("cambios_tarifario_solicitudes").select("*").neq("estado","pendiente").order("solicitada_en",{ascending:false}).limit(50)
+  ]);
+  if(pending.error||recent.error)CAMBIOS_TARIFARIO_ERR=(pending.error||recent.error).message;
+  else CAMBIOS_TARIFARIO=[...(pending.data||[]),...(recent.data||[])];
+  render()
+}
+function parseCsvTable(text){
+  const sample=text.slice(0,8192);let quoted=false,commas=0,semicolons=0;
+  for(let i=0;i<sample.length;i++){
+    const c=sample[i];
+    if(c==='"'&&quoted&&sample[i+1]==='"'){i++;continue}
+    if(c==='"'){quoted=!quoted;continue}
+    if(!quoted){if(c===",")commas++;if(c===";")semicolons++;if(c==="\n")break}
+  }
+  const delimiter=semicolons>commas?";":",",rows=[];let row=[],cell="",inside=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(c==='"'&&inside&&text[i+1]==='"'){cell+='"';i++;continue}
+    if(c==='"'){inside=!inside;continue}
+    if(!inside&&c===delimiter){row.push(cell);cell="";continue}
+    if(!inside&&(c==="\n"||c==="\r")){
+      if(c==="\r"&&text[i+1]==="\n")i++;
+      row.push(cell);if(row.some(value=>value.trim()))rows.push(row);
+      row=[];cell="";continue
+    }
+    cell+=c
+  }
+  row.push(cell);if(row.some(value=>value.trim()))rows.push(row);
+  if(inside)throw new Error("El CSV contiene una comilla sin cerrar.");
+  if(rows.length<2)throw new Error("El archivo no contiene filas de datos.");
+  const headers=rows[0].map(value=>value.trim().replace(/^\uFEFF/,"").toUpperCase());
+  const column=(startsWith)=>headers.findIndex(value=>value.startsWith(startsWith)&&!/(CORREO|EMAIL|MAIL|CONTACTO)/.test(value));
+  const emailColumn=(role)=>headers.findIndex(value=>/(CORREO|EMAIL|MAIL)/.test(value)&&value.includes(role)&&!(value.includes("SUPERVISOR")&&value.includes("COORDINADOR")));
+  const indexes={CLIENTE:column("CLIENTE"),CEDIS:column("CEDIS"),"CORREO SUPERVISOR":emailColumn("SUPERVISOR"),"CORREO COORDINADOR":emailColumn("COORDINADOR")};
+  const missing=Object.entries(indexes).filter(([,index])=>index<0).map(([name])=>name);
+  if(missing.length)throw new Error("Faltan columnas requeridas: "+missing.join(", ")+". Agrega una columna con el correo de cada supervisor y otra con el de cada coordinador.");
+  const data=rows.slice(1).map(row=>Object.fromEntries(Object.entries(indexes).map(([key,index])=>[key,(row[index]||"").trim()])))
+    .filter(row=>Object.values(row).some(Boolean));
+  if(!data.length)throw new Error("El archivo no contiene asignaciones.");
+  return data
+}
+const normTxt=s=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/\s+/g," ").trim();
+let ASG_FORM=null,ASG_FILTRO="";
+const buscarPorNombre=(lista,texto)=>{const n=normTxt(texto);if(!n)return null;return lista.find(x=>normTxt(x.nombre)===n)||lista.find(x=>normTxt(x.nombre).includes(n)||n.includes(normTxt(x.nombre)))||null};
+function abrirFormAsignacion(row){
+  const clientes=Object.entries(CLIENTES_NOMBRE).map(([id,nombre])=>({id,nombre}));
+  const cliente=buscarPorNombre(clientes,row.cliente);
+  const cedisCliente=Object.values(EQ_CEDIS).filter(c=>cliente&&String(c.cliente_id)===cliente.id);
+  const cedis=buscarPorNombre(cedisCliente,row.cedis);
+  ASG_FORM={
+    cliente_id:cliente?.id||(row.cliente_id!=null?String(row.cliente_id):""),
+    cedis_id:cedis?String(cedis.id):(row.cedis_id!=null?String(row.cedis_id):""),
+    supervisor_id:row.supervisor_id||EQ_PERSONAS.find(p=>p.rol==="ih"&&p.email===normTxt(row.supervisor))?.id||"",
+    coordinador_id:row.coordinador_id||EQ_PERSONAS.find(p=>p.rol==="coordinador"&&p.email===normTxt(row.coordinador))?.id||"",
+    origen:row.cliente?`Fila del CSV: ${row.cliente} · ${row.cedis} · ${row.supervisor} · ${row.coordinador}`:""
+  };
+  render()
+}
+function leerFormAsignacion(){
+  if(!ASG_FORM)return;
+  ASG_FORM.cliente_id=$("asg-cli")?.value||"";
+  ASG_FORM.cedis_id=$("asg-ced")?.value||"";
+  ASG_FORM.supervisor_id=$("asg-sup")?.value||"";
+  ASG_FORM.coordinador_id=$("asg-coo")?.value||""
+}
+function formAsignacion(){
+  if(!ASG_FORM)return "";
+  const f=ASG_FORM,sel=(a,b)=>String(a)===String(b)?"selected":"";
+  const clientes=Object.entries(CLIENTES_NOMBRE).sort((a,b)=>a[1].localeCompare(b[1]));
+  const cedis=Object.values(EQ_CEDIS).filter(c=>String(c.cliente_id)===String(f.cliente_id)).sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  const personas=rol=>EQ_PERSONAS.filter(d=>d.rol===rol).sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  const st='style="padding:9px;border:1px solid var(--line);border-radius:10px;min-width:180px"';
+  return `<div class="note" style="margin-top:12px"><b>Ajuste manual de responsables</b>${f.origen?`<br><small>${esc(f.origen)}</small>`:""}
+   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+    <select id="asg-cli" ${st}><option value="">Cliente…</option>${clientes.map(([id,n])=>`<option value="${esc(id)}" ${sel(f.cliente_id,id)}>${esc(n)}</option>`).join("")}</select>
+    <select id="asg-ced" ${st}><option value="">CEDIS…</option>${cedis.map(c=>`<option value="${esc(c.id)}" ${sel(f.cedis_id,c.id)}>${esc(c.nombre)}</option>`).join("")}</select>
+    <select id="asg-sup" ${st}><option value="">Supervisor…</option>${personas("ih").map(d=>`<option value="${esc(d.id)}" ${sel(f.supervisor_id,d.id)}>${esc(d.nombre)} — ${esc(d.email)}</option>`).join("")}</select>
+    <select id="asg-coo" ${st}><option value="">Coordinador…</option>${personas("coordinador").map(d=>`<option value="${esc(d.id)}" ${sel(f.coordinador_id,d.id)}>${esc(d.nombre)} — ${esc(d.email)}</option>`).join("")}</select>
+    <button class="btn" id="asg-save">Guardar asignación</button><button class="btn ghost" id="asg-cancel">Cancelar</button></div><div id="asg-msg"></div></div>`
+}
+function tablaAsignaciones(){
+  const q=normTxt(ASG_FILTRO),nombre=id=>personaTxt(id);
+  const filas=EQ_ASIG.map(a=>({...a,cliente:CLIENTES_NOMBRE[String(a.cliente_id)]||"Sin cliente",cedis:EQ_CEDIS[String(a.cedis_id)]?.nombre||"CEDIS "+a.cedis_id,sup:nombre(a.supervisor_id),coo:nombre(a.coordinador_id)}))
+    .filter(a=>!q||normTxt([a.cliente,a.cedis,a.sup,a.coo].join(" ")).includes(q))
+    .sort((a,b)=>a.cliente.localeCompare(b.cliente)||a.cedis.localeCompare(b.cedis));
+  const rows=filas.slice(0,200).map(a=>`<tr><td>${esc(a.cliente)}</td><td>${esc(a.cedis)}</td><td>${esc(a.sup)}</td><td>${esc(a.coo)}</td><td><button class="btn ghost sm" data-asg-edit="${esc(a.cliente_id)}|${esc(a.cedis_id)}">Editar</button> <button class="btn ghost sm" data-asg-del="${esc(a.cliente_id)}|${esc(a.cedis_id)}">Quitar</button></td></tr>`).join("");
+  return `<h3 style="margin-top:20px">Asignaciones actuales (${EQ_ASIG.length})</h3><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px"><input id="asg-q" placeholder="Buscar cliente, CEDIS o responsable" value="${esc(ASG_FILTRO)}" style="padding:9px;border:1px solid var(--line);border-radius:10px;min-width:260px"><button class="btn" id="asg-new">Agregar asignación</button></div>
+   <div style="overflow:auto;max-height:420px"><table><tr><th>Cliente</th><th>CEDIS</th><th>Supervisor</th><th>Coordinador</th><th></th></tr>${rows||'<tr><td colspan="5">Sin asignaciones.</td></tr>'}</table></div>${filas.length>200?`<small>Se muestran 200 de ${filas.length}. Usa el buscador para acotar.</small>`:""}`
+}
+async function guardarAsignacionManual(){
+  leerFormAsignacion();const f=ASG_FORM,box=$("asg-msg");
+  if(!f.cliente_id||!f.cedis_id||!f.supervisor_id||!f.coordinador_id){box.innerHTML='<div class="errbox">Completa cliente, CEDIS, supervisor y coordinador.</div>';return}
+  $("asg-save").disabled=true;
+  const {error}=await sb.rpc("guardar_asignacion_operativa",{p_cliente_id:Number(f.cliente_id),p_cedis_id:Number(f.cedis_id),p_supervisor_id:f.supervisor_id,p_coordinador_id:f.coordinador_id});
+  if(error){$("asg-save").disabled=false;box.innerHTML=`<div class="errbox">${esc(error.message)}${/function|schema cache/i.test(error.message)?" — ejecuta operational-assignments-manual-adjustments.sql en Supabase.":""}</div>`;return}
+  const pendiente=f.origen;ASG_FORM=null;
+  if(pendiente&&CSV_ASIGNACIONES_RESULT?.errores){CSV_ASIGNACIONES_RESULT={...CSV_ASIGNACIONES_RESULT,errores:CSV_ASIGNACIONES_RESULT.errores.filter(e=>`Fila del CSV: ${e.cliente} · ${e.cedis} · ${e.supervisor} · ${e.coordinador}`!==pendiente)}}
+  await cargarAsignacionesEquipo();render();toast("Asignación guardada")
+}
+async function quitarAsignacion(clave){
+  const [cli,ced]=clave.split("|");
+  if(!confirm("¿Quitar esta asignación? Las notificaciones de ese CEDIS irán a la cuenta maestra hasta asignar nuevos responsables."))return;
+  const {error}=await sb.rpc("eliminar_asignacion_operativa",{p_cliente_id:Number(cli),p_cedis_id:Number(ced)});
+  if(error){toast(error.message);return}
+  await cargarAsignacionesEquipo();render();toast("Asignación eliminada")
+}
+function vistaImportarResponsables(){
+  const result=CSV_ASIGNACIONES_RESULT;
+  const errorRows=result?.errores||[];
+  const errorTable=errorRows.length?`<div style="overflow:auto;max-height:260px"><table><tr><th>Cliente</th><th>CEDIS</th><th>Correo supervisor</th><th>Correo coordinador</th><th>Resolución</th><th></th></tr>${errorRows.slice(0,100).map((row,i)=>`<tr><td>${esc(row.cliente)}</td><td>${esc(row.cedis)}</td><td>${esc(row.supervisor)}</td><td>${esc(row.coordinador)}</td><td>Cliente ${row.cliente_resuelto?"✓":"×"} · CEDIS ${row.cedis_resuelto?"✓":"×"} · Supervisor ${row.supervisor_resuelto?"✓":"×"} · Coordinador ${row.coordinador_resuelto?"✓":"×"}</td><td><button class="btn sm" data-asg-fix="${i}">Corregir</button></td></tr>`).join("")}</table></div>${errorRows.length>100?`<small>Se muestran 100 de ${errorRows.length} filas con problemas.</small>`:""}`:"";
+  const resultHtml=result?`<div class="note">Asignaciones aplicadas: <b>${esc(result.importadas||0)}</b> · Filas para corregir: <b>${esc(errorRows.length)}</b></div>${errorTable}`:"";
+  return `<section style="padding:12px"><h3>Importar responsables por cliente y CEDIS</h3><p>Solo se usan Cliente, CEDIS, <b>CORREO SUPERVISOR</b> y <b>CORREO COORDINADOR</b> (un correo @chazki.com por columna). La columna general de correos y nombres no se usa. Las filas sin coincidencia exacta se informan para que las corrijas manualmente.</p><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input id="asignaciones-csv" type="file" accept=".csv,text/csv"><button class="btn" id="asignaciones-import">Importar CSV</button></div><div id="asignaciones-error"></div>${resultHtml}${formAsignacion()}${tablaAsignaciones()}</section>`
+}
+function vistaCambiosTarifario(){
+  if(ROL!=="master")return '<div class="errbox">Solo la cuenta maestra puede acceder.</div>';
+  const rows=CAMBIOS_TARIFARIO.map(request=>`<tr><td>${dd(request.solicitada_en)}<br><small>${esc(String(request.solicitada_por).slice(0,8))}</small></td><td>${request.entidad==="tarifas"?"Tarifa":"Penalización / bono"}<br><small>${request.entidad_id==null?"Nueva solicitud":"Registro "+esc(request.entidad_id)}</small></td><td>${esc(request.estado)}</td><td><details><summary>Ver propuesta</summary><pre style="white-space:pre-wrap;max-width:520px;overflow:auto">${esc(JSON.stringify({anterior:request.datos_anteriores,nuevo:request.datos_nuevos},null,2))}</pre></details>${request.nota_resolucion?`<small>${esc(request.nota_resolucion)}</small>`:""}</td><td>${request.estado==="pendiente"?`<button class="btn sm" data-tar-ok="${esc(request.id)}">Aprobar</button> <button class="btn ghost sm" data-tar-no="${esc(request.id)}">Rechazar</button>`:""}</td></tr>`).join("");
+  return `<section style="padding:12px"><h3>Cambios tarifarios pendientes y resueltos</h3>${CAMBIOS_TARIFARIO_ERR?`<div class="errbox">No se pudieron cargar las solicitudes: ${esc(CAMBIOS_TARIFARIO_ERR)}</div>`:""}<table><tr><th>Fecha / solicitante</th><th>Tipo</th><th>Estado</th><th>Detalle</th><th></th></tr>${rows||'<tr><td colspan="5">Sin solicitudes tarifarias.</td></tr>'}</table></section>`
+}
+async function importarAsignaciones(){
+  const input=$("asignaciones-csv"),box=$("asignaciones-error"),button=$("asignaciones-import"),file=input.files&&input.files[0];
+  box.innerHTML="";
+  if(!file){box.innerHTML='<div class="errbox">Selecciona un archivo CSV.</div>';return}
+  if(file.size>5*1024*1024){box.innerHTML='<div class="errbox">El archivo supera el límite de 5 MB.</div>';return}
+  button.disabled=true;
+  try{
+    const filas=parseCsvTable(await file.text());
+    if(filas.length>5000)throw new Error("El archivo supera el límite de 5,000 filas.");
+    const {data,error}=await sb.rpc("importar_asignaciones_operativas",{p_filas:filas});
+    if(error)throw error;
+    CSV_ASIGNACIONES_RESULT=data;await cargarAsignacionesEquipo();render();toast("Importación terminada. Revisa las filas que no tuvieron coincidencia única.")
+  }catch(error){box.innerHTML=`<div class="errbox">${esc(error.message||"No se pudo importar el archivo.")}</div>`}
+  finally{button.disabled=false}
+}
+async function resolverCambioTarifario(id,aprobar){
+  const nota=aprobar?null:(prompt("Motivo del rechazo (opcional):")??null);
+  if(nota===null&&!aprobar)return;
+  const {error}=await sb.rpc("resolver_cambio_tarifario",{p_id:id,p_aprobar:aprobar,p_nota:nota});
+  if(error){toast("No se pudo resolver el cambio: "+error.message);return}
+  if(aprobar){TF=null;TAR=null}
+  await cargarCambiosTarifario();toast(aprobar?"Cambio tarifario aprobado":"Cambio tarifario rechazado")
+}
 let TFV="t",RGL=null,RTD=[];
 const TIPO_R={porcentaje_descuento:"Penalización · descuento %",pago_fijo:"Penalización · pago fijo",bono_fijo:"Bono · monto fijo",bono_porcentaje:"Bono · % del pago base",bandera:"Bandera (informativa)"};
 const pcs=v=>v==null?"":(Math.round(Number(v)*10000)/100)+"%";
@@ -679,8 +882,15 @@ function leerRegla(p,alc){const n=i=>{const v=$(p+"-"+i).value.trim();return v==
   if(!b&&em==null&&!row.esquema&&!row.tipo_unidad)throw new Error("Define una condición de efectividad, un vehículo o un esquema");
   const d=$(p+"-d").value.trim();row.descripcion=d||null;return row}
 function autoDesc(r){return `${r.tipo_regla.startsWith("bono")?"Bono":"Penalización"}${r.tipo_unidad?" "+r.tipo_unidad:""}${r.esquema?" "+r.esquema:""}: ${condR(r).toLowerCase()} → ${valR(r)}${r.aplica_a==="cobro"?" (cobro)":""}`}
-async function guardarRegla(row,cuenta,id){const base={...row,cuenta,descripcion:row.descripcion||autoDesc(row),por_confirmar:false};
-  if(id)return sb.from("reglas_penalizacion").update(base).eq("id",id);return sb.from("reglas_penalizacion").insert({...base,vigencia_desde:new Date().toLocaleDateString("en-CA"),activo:true})}
+async function guardarRegla(row,cuenta,id){
+  const anterior=id?RGL.find(rule=>String(rule.id)===String(id)):null;
+  const base={...row,cuenta,descripcion:row.descripcion||autoDesc(row),por_confirmar:false,
+    activo:row.activo??true};
+  if(row.vigencia_desde||anterior?.vigencia_desde||!id)base.vigencia_desde=row.vigencia_desde||anterior?.vigencia_desde||new Date().toLocaleDateString("en-CA");
+  if(ROL==="coordinador")return sb.rpc("solicitar_cambio_tarifario",{p_entidad:"reglas_penalizacion",p_entidad_id:id,p_datos:base});
+  if(id)return sb.from("reglas_penalizacion").update(base).eq("id",id);
+  return sb.from("reglas_penalizacion").insert(base)
+}
 function formRegla(id){const g=id?RGL.find(x=>x.id===id):null;const m=$("modal");m.classList.remove("hide");
   m.innerHTML=`<div class="box" style="max-height:90vh;overflow:auto"><h2 style="margin:0 0 6px">${id?"Editar regla":"Nueva penalización o bono"}</h2>
    <label>Cliente</label><select id="rg-c" ${id?"disabled":""}><option value="">Elige…</option>${CUENTAS_TARIFARIO.map(c=>`<option ${g&&g.cuenta===c?"selected":""}>${c}</option>`).join("")}</select>
@@ -692,28 +902,29 @@ function formRegla(id){const g=id?RGL.find(x=>x.id===id):null;const m=$("modal")
   $("rg-ok").onclick=async()=>{const bad=t=>{$("rg-err").innerHTML=`<div class="errbox">${esc(t)}</div>`};let row;try{row=leerRegla("rg")}catch(e){return bad(e.message)}
     const cuenta=id?g.cuenta:$("rg-c").value;if(!cuenta)return bad("Elige el cliente");if(id)row.activo=$("rg-act").checked;
     $("rg-ok").disabled=true;const {error}=await guardarRegla(row,cuenta,id);if(error){$("rg-ok").disabled=false;return bad(error.message)}
-    m.classList.add("hide");toast(id?"Regla actualizada":"Regla agregada");cargaTF()}}
+    m.classList.add("hide");toast(ROL==="coordinador"?"Solicitud de cambio enviada a la cuenta maestra":id?"Regla actualizada":"Regla agregada");if(ROL!=="coordinador")cargaTF()}}
 let RGF={cuenta:"",tipo:""};
 function vistaReglas(){
-  const ed=esOps(),sty='style="padding:8px;border:1px solid var(--line);border-radius:10px"';
+  const ed=esCoord(),sty='style="padding:8px;border:1px solid var(--line);border-radius:10px"';
   const L=(RGL||[]).filter(g=>(!RGF.cuenta||g.cuenta===RGF.cuenta)&&(!RGF.tipo||(RGF.tipo==="bono"?esBono(g.tipo_regla):!esBono(g.tipo_regla))));
   const rows=L.map(g=>`<tr><td><b>${esc(g.cuenta)}</b></td><td>${esBono(g.tipo_regla)?'<span class="pill ok">Bono</span>':g.tipo_regla==="bandera"?'<span class="pill w">Bandera</span>':'<span class="pill bad">Penalización</span>'}<br><small>${esc(TIPO_R[g.tipo_regla]||g.tipo_regla)}</small></td><td>${g.aplica_a==="cobro"?"Cobro":"Pago"}</td><td>${esc(g.tipo_unidad||"Todos")}</td><td>${esc(g.esquema||"Todos")}</td><td>${esc(condR(g))}</td><td style="text-align:right"><b>${esc(valR(g))}</b></td><td><small>${esc(g.descripcion)}</small>${g.excepcion_validacion_supervisor?' <span class="pill w">Exonerable</span>':""}${g.por_confirmar?' <span class="pill w">Por confirmar</span>':""}</td><td>${g.activo?"":'<span class="pill bad">Inactiva</span>'}</td>${ed?`<td><button class="btn ghost sm" data-re="${esc(g.id)}">Editar</button></td>`:""}</tr>`).join("");
   return `<div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px;align-items:center"><select id="rg-fc" ${sty}><option value="">Todos los clientes</option>${CUENTAS_TARIFARIO.map(c=>`<option ${RGF.cuenta===c?"selected":""}>${c}</option>`).join("")}</select><select id="rg-ft" ${sty}><option value="">Penalizaciones y bonos</option><option value="pen" ${RGF.tipo==="pen"?"selected":""}>Solo penalizaciones</option><option value="bono" ${RGF.tipo==="bono"?"selected":""}>Solo bonos</option></select>${ed?'<button class="btn" id="rg-n">+ Nueva regla</button>':""}</div>
-   <div style="padding:0 8px 6px"><small>${ed?"Puedes agregar y editar. Los cambios aplican a rutas que se validen de ahora en adelante y quedan en bitácora.":"Solo consulta."}</small></div>
+   <div style="padding:0 8px 6px"><small>${ROL==="coordinador"?"Puedes proponer cambios; la cuenta maestra debe aprobarlos.":ed?"Puedes agregar y editar. Los cambios aplican a rutas que se validen de ahora en adelante y quedan en bitácora.":"Solo consulta."}</small></div>
    <table><tr><th>Cliente</th><th>Tipo</th><th>Aplica a</th><th>Vehículo</th><th>Esquema</th><th>Condición</th><th>Valor</th><th>Descripción</th><th></th>${ed?"<th></th>":""}</tr>${rows||'<tr><td colspan="10">Sin reglas.</td></tr>'}</table>`}
 
 const uniq=(k)=>[...new Set((TF||[]).map(x=>x[k]).filter(Boolean))].sort();
 const subTF=()=>`<div class="tabs" style="padding:8px 8px 0"><button class="${TFV==="t"?"on":""}" data-tfv="t">Tarifas</button><button class="${TFV==="r"?"on":""}" data-tfv="r">Penalizaciones y bonos</button></div>`;
 function vistaTarifario(){
+  if(TFERR)return `<div class="errbox">No se pudo cargar el tarifario. ${esc(TFERR)}</div>`;
   if(!TF){cargaTF();return '<div style="padding:16px">Cargando tarifario…</div>'}
   if(TFV==="r")return subTF()+vistaReglas();
   const L=TF.filter(x=>(!TFL.cuenta||x.cuenta===TFL.cuenta)&&(!TFL.veh||x.tipo_unidad===TFL.veh)&&(!TFL.esq||x.esquema===TFL.esq)&&(!TFL.act||x.activo)&&(!TFL.q||[x.ubicacion,x.ciudad,x.zona,x.variable,x.conc].join(" ").toUpperCase().includes(TFL.q.toUpperCase())));
   const op=(arr,v)=>`<option value="">Todos</option>`+arr.map(a=>`<option ${a===v?"selected":""}>${esc(a)}</option>`).join("");
   const sty='style="padding:8px;border:1px solid var(--line);border-radius:10px"';
-  const ed=esOps();
+  const ed=esCoord();
   const f=`<div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px;align-items:center"><select id="tf-c" ${sty}>${op(CUENTAS_TARIFARIO,TFL.cuenta).replace("Todos","Todos los clientes")}</select><input id="tf-q" placeholder="Buscar ubicación, zona…" value="${esc(TFL.q)}" ${sty}><select id="tf-v" ${sty}>${op(uniq("tipo_unidad"),TFL.veh).replace("Todos","Todos los vehículos")}</select><select id="tf-e" ${sty}>${op(uniq("esquema"),TFL.esq).replace("Todos","Todos los esquemas")}</select><label style="font-size:13px"><input type="checkbox" id="tf-a" ${TFL.act?"checked":""}> Solo activas</label>${ed?'<button class="btn" id="tf-n">+ Nueva tarifa</button>':""}</div>`;
   const rows=L.slice(0,300).map(x=>`<tr><td><b>${esc(x.cuenta)}</b>${x.cliente&&x.cliente!==x.cuenta?`<br><small>${esc(x.cliente)}</small>`:""}</td><td>${esc(x.ubicacion||"—")}${x.ciudad?`<br><small>${esc(x.ciudad)}</small>`:""}</td><td>${esc(x.zona||"—")}${x.variable?` <span class="pill w">${esc(x.variable)}</span>`:""}</td><td>${esc(x.tipo_unidad||"—")}</td><td>${esc(x.esquema||"—")}</td><td style="text-align:right"><b>${x.pago_base==null?"—":fm(x.pago_base)}</b></td><td style="text-align:right"><b>${x.tarifa_cliente==null?"—":fm(x.tarifa_cliente)}</b></td><td><small>${esc(x.vigencia_desde)}${x.vigencia_hasta?" → "+x.vigencia_hasta:" → abierta"}</small>${x.activo?"":' <span class="pill bad">Inactiva</span>'}</td>${ed?`<td><button class="btn ghost sm" data-te="${esc(x.id)}">Editar</button></td>`:""}</tr>`).join("");
-  return subTF()+f+`<div style="padding:0 8px 6px"><small>${esc(L.length)} tarifas${L.length>300?" (se muestran 300; afina el filtro)":""} · ${ed?"Puedes agregar y editar. Los cambios no alteran rutas ya validadas y quedan en bitácora.":"Solo consulta. Los cambios los hacen Operaciones y la cuenta maestra."}</small></div><table><tr><th>Cliente</th><th>Ubicación</th><th>Tipo de ruta</th><th>Vehículo</th><th>Esquema</th><th>Pago</th><th>Cobro</th><th>Vigencia</th>${ed?"<th></th>":""}</tr>${rows||'<tr><td colspan="9">Sin tarifas con ese filtro.</td></tr>'}</table>`}
+  return subTF()+f+`<div style="padding:0 8px 6px"><small>${esc(L.length)} tarifas${L.length>300?" (se muestran 300; afina el filtro)":""} · ${ROL==="coordinador"?"Puedes proponer cambios; requieren aprobación de la cuenta maestra.":ed?"Puedes agregar y editar. Los cambios no alteran rutas ya validadas y quedan en bitácora.":"Solo consulta. Los cambios los hacen Operaciones y la cuenta maestra."}</small></div><table><tr><th>Cliente</th><th>Ubicación</th><th>Tipo de ruta</th><th>Vehículo</th><th>Esquema</th><th>Pago</th><th>Cobro</th><th>Vigencia</th>${ed?"<th></th>":""}</tr>${rows||'<tr><td colspan="9">Sin tarifas con ese filtro.</td></tr>'}</table>`}
 function formTarifa(id){
   const t=id?TF.find(x=>x.id===id):{cuenta:"",ubicacion:"",ciudad:"",tipo_unidad:"",esquema:"",zona:"",variable:"",pago_base:"",tarifa_cliente:"",vigencia_desde:new Date().toLocaleDateString("en-CA"),vigencia_hasta:"",activo:true};
   const m=$("modal");m.classList.remove("hide");const dl=(i,k)=>`<datalist id="${i}">${uniq(k).map(v=>`<option value="${v}">`).join("")}</datalist>`;
@@ -740,7 +951,7 @@ function formTarifa(id){
       $("rt-ok").onclick=async()=>{let r;try{r=leerRegla("rt",true)}catch(e){$("rt-err").innerHTML=`<div class="errbox">${esc(e.message)}</div>`;return}
         const cx=ctx();if(!cx.c){$("rt-err").innerHTML='<div class="errbox">Primero elige el cliente de la tarifa</div>';return}
         r.tipo_unidad=$("rt-lu").checked?(cx.u||null):null;r.esquema=$("rt-le").checked?(cx.e||null):null;
-        if(id){const {error}=await guardarRegla(r,cx.c,null);if(error){$("rt-err").innerHTML=`<div class="errbox">${esc(error.message)}</div>`;return}const g=await sb.from("reglas_penalizacion").select("*");RGL=g.data||RGL;toast("Regla agregada")}
+        if(id){const {error}=await guardarRegla(r,cx.c,null);if(error){$("rt-err").innerHTML=`<div class="errbox">${esc(error.message)}</div>`;return}if(ROL!=="coordinador"){const g=await sb.from("reglas_penalizacion").select("*");if(g.error){$("rt-err").innerHTML=`<div class="errbox">${esc(g.error.message)}</div>`;return}RGL=g.data||RGL}toast(ROL==="coordinador"?"Solicitud de regla enviada a la cuenta maestra":"Regla agregada")}
         else{r._lu=$("rt-lu").checked;r._le=$("rt-le").checked;RTD.push(r)}
         $("rt-form").classList.add("hide");$("rt-form").innerHTML="";drawRT()}}};
   drawRT();["tf-fv","tf-fe","tf-fc"].forEach(i=>{const e=$(i);if(e)e.addEventListener("change",drawRT)});
@@ -752,10 +963,20 @@ function formTarifa(id){
     if(row.pago_base==null||row.tarifa_cliente==null||row.pago_base<0||row.tarifa_cliente<0)return bad("Captura pago y cobro (no negativos)");if(!row.vigencia_desde)return bad("Indica la vigencia");
     if(row.vigencia_hasta&&row.vigencia_hasta<row.vigencia_desde)return bad("La vigencia final es anterior a la inicial");
     row.conc=[row.ubicacion,row.tipo_unidad,row.esquema,row.zona,row.variable].filter(Boolean).join("");
-    const q=id?sb.from("tarifas").update(row).eq("id",id):sb.from("tarifas").insert({...row,cuenta,cliente:cuenta,fuente:"Panel"});
-    $("tf-ok").disabled=true;const {error}=await q;if(error){$("tf-ok").disabled=false;return bad(error.message)}
-    if(!id&&RTD.length){for(const r of RTD){const x={...r};x.tipo_unidad=r._lu?row.tipo_unidad:null;x.esquema=r._le?row.esquema:null;delete x._lu;delete x._le;const g=await guardarRegla(x,cuenta,null);if(g.error){toast("Tarifa creada, pero una regla falló: "+g.error.message)}}}
-    m.classList.add("hide");TF=null;TAR=null;toast(id?"Tarifa actualizada":"Tarifa agregada");cargaTF()}}
+    const anterior=id?TF.find(tarifa=>String(tarifa.id)===String(id)):null;
+    const payload={...row,cuenta,cliente:anterior?.cliente||cuenta,fuente:anterior?.fuente||"Panel"};
+    $("tf-ok").disabled=true;
+    const result=ROL==="coordinador"
+      ?await sb.rpc("solicitar_cambio_tarifario",{p_entidad:"tarifas",p_entidad_id:id,p_datos:payload})
+      :id?await sb.from("tarifas").update(row).eq("id",id):await sb.from("tarifas").insert(payload);
+    if(result.error){$("tf-ok").disabled=false;return bad(result.error.message)}
+    const ruleErrors=[];
+    if(!id&&RTD.length){for(const r of RTD){const x={...r};x.tipo_unidad=r._lu?row.tipo_unidad:null;x.esquema=r._le?row.esquema:null;delete x._lu;delete x._le;const g=await guardarRegla(x,cuenta,null);if(g.error)ruleErrors.push(g.error.message)}}
+    m.classList.add("hide");TF=null;TAR=null;
+    if(ROL==="coordinador")toast(ruleErrors.length?`Tarifa propuesta; ${ruleErrors.length} regla(s) no pudieron enviarse: ${ruleErrors[0]}`:"Propuesta de tarifa enviada a la cuenta maestra");
+    else toast(id?"Tarifa actualizada":"Tarifa agregada");
+    if(ROL!=="coordinador")cargaTF()
+  }}
 const NIVEL={master:"Cuenta maestra · acceso completo",ops:"Operaciones · acceso completo",coordinador:"Coordinador · operación y pagos, sin cobro ni utilidad",finanzas:"Finanzas · pagos, liquidaciones y utilidad",ih:"Supervisor · datos operativos, sin importes"};
 const CATALOGO={rutas:["Rutas","Cada ruta con driver, flotillero, cliente, CEDIS, paquetes, efectividad, estatus de validación, manifiestos y extras (maniobras, estadía, otros)."],
  cancelaciones:["Cancelaciones","Cancelaciones con ubicación, distancia al CEDIS, validación y estatus."],incidencias:["Incidencias","Incidencias reportadas por ruta, con comentario."],fallidos:["Fallidos por causa","Paquetes fallidos por causa y ruta."],
@@ -764,7 +985,7 @@ const CATALOGO={rutas:["Rutas","Cada ruta con driver, flotillero, cliente, CEDIS
 function vistaDescargas(){
   const l=(DSET||[]).map(k=>{const [label,description]=CATALOGO[k]||[k,""];return `<div class="item" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 8px;border-bottom:1px solid var(--line)"><div><b>${esc(label)}</b><br><small>${esc(description)}</small></div><button class="btn sm" data-dl="${esc(k)}">Descargar CSV</button></div>`}).join("");
   const lg=DLOG.map(x=>`<tr><td>${dd(x.en)} ${hh(x.en)}</td><td>${esc(x.rol)}</td><td>${(CATALOGO[x.dataset]||[x.dataset])[0]}</td><td>${esc(x.filas)}</td><td>${esc(x.desde)} → ${esc(x.hasta)}</td></tr>`).join("");
-  return `<h3 style="margin:12px 8px 0">Descarga de datos</h3><div style="padding:0 8px"><span class="pill ok">${esc(NIVEL[ROL]||ROL)}</span><br><small>Usa el rango de fechas y el cliente de la barra de arriba. Cada descarga queda registrada.</small></div>${l||'<div style="padding:12px">Tu nivel no tiene descargas.</div>'}
+  return `<h3 style="margin:12px 8px 0">Reportes</h3><div style="padding:0 8px"><span class="pill ok">${esc(NIVEL[ROL]||ROL)}</span><br><small>Usa el rango de fechas y el cliente de la barra de arriba. Cada descarga queda registrada.</small></div>${l||'<div style="padding:12px">Tu nivel no tiene descargas.</div>'}
    ${DLOG.length?`<h3 style="margin:16px 8px 0">Últimas descargas</h3><table><tr><th>Cuándo</th><th>Rol</th><th>Descarga</th><th>Filas</th><th>Periodo</th></tr>${lg}</table>`:""}`}
 const csvCell=v=>{if(v==null)return"";const s=String(v).replace(/"/g,'""');return /[",\n\r]/.test(s)?`"${s}"`:s};
 async function descargar(k,btn){btn.disabled=true;const t=btn.textContent;btn.textContent="Generando…";
@@ -781,7 +1002,7 @@ function vistaBajas(){
     const mia=q.estatus==="pendiente"&&((puedeS&&!q.aprob_supervisor)||(puedeC&&!q.aprob_coord));
     return `<tr><td>${esc(d?d.nombre:q.driver_id)}</td><td>${esc(p?p.nombre:"—")}</td><td>${esc(q.motivo)}<br><small>${dd(q.solicitado_en)}</small></td><td>Supervisor ${ck(q.aprob_supervisor)}<br>Coordinador ${ck(q.aprob_coord)}</td><td>${q.estatus==="pendiente"?"<span class='pill w'>Pendiente</span>":q.estatus==="aprobada"?"<span class='pill ok'>Desactivado</span>":"<span class='pill bad'>Rechazada</span>"}</td><td>${mia?`<button class="btn sm" data-bja="${esc(q.id)}">Autorizar desactivación</button> <button class="btn ghost sm" data-bjr="${esc(q.id)}">Rechazar</button>`:""}</td></tr>`}).join("");
   return `<h3 style="margin:12px 8px 0">Solicitudes de desactivación de drivers</h3><small style="padding:0 8px">Al completar las autorizaciones, el driver se desactiva sin eliminar su perfil, historial ni relación con el flotillero.</small><table><tr><th>Driver</th><th>Flotillero</th><th>Motivo</th><th>Autorizaciones</th><th>Estatus</th><th></th></tr>${f||'<tr><td colspan="6">Sin solicitudes.</td></tr>'}</table>`}
-async function resolverBaja(id,ok){const {data,error}=await sb.rpc("resolver_desactivacion_driver",{p_id:id,p_aprobar:ok,p_nota:null});
+async function resolverBaja(id,ok){const {data,error}=await sb.rpc("resolver_desactivacion_asignada",{p_id:id,p_aprobar:ok,p_nota:null});
   if(error){toast(error.message);return}await cargaExtra();render();toast(ok?"Autorización registrada ("+data+")":"Solicitud rechazada")}
 function vistaAprobar(){
   const f=PEND.map(q=>{const r=q.rutas||{};return `<tr><td>${esc(r.id_ruta||q.ruta_id)}</td><td>${esc(r.drivers?r.drivers.nombre:"")}</td><td>${esc(r.cedis?r.cedis.clientes.nombre+" · "+r.cedis.nombre:"")}</td><td>${esc(r.entregados)}/${esc(r.paquetes_asignados)}</td><td>No aplicar penalización al pago<br><small>${esc(q.motivo)}</small></td><td><button class="btn ghost sm" data-det="${esc(q.ruta_id)}">Detalle</button> ${esCoord()?`<button class="btn sm" data-ap="${esc(q.id)}">Aprobar</button> <button class="btn ghost sm" data-rc="${esc(q.id)}">Rechazar</button>`:'<span class="pill w">En espera</span>'}</td></tr>`}).join("");
@@ -798,9 +1019,55 @@ async function resolverVal(id,ok){
   await cargaExtra();render();
   toast(auditError?"Aprobada, pero no se registró el supervisor que validó: "+auditError.message:ok?"Aprobada: ruta validada y pago generado":"Solicitud rechazada");
 }
+let EQ_ASIG=[],EQ_CEDIS={},EQ_PERSONAS=[],EQ_ABIERTO=null,EQ_ERR="";
+async function cargarAsignacionesEquipo(){
+  EQ_ERR="";
+  try{
+    const [asig,cedis,clientes,personas]=await Promise.all([
+      fetchPaged(()=>sb.from("asignaciones_operativas").select("cliente_id,cedis_id,supervisor_id,coordinador_id").order("cedis_id")),
+      fetchPaged(()=>sb.from("cedis").select("id,nombre,cliente_id").order("nombre")),
+      fetchPaged(()=>sb.from("clientes").select("id,nombre").order("nombre")),
+      ROL==="master"?sb.rpc("listar_responsables_operativos"):Promise.resolve({data:[]})
+    ]);
+    if(personas.error)throw new Error(personas.error.message+" — ejecuta operational-assignments-by-email.sql en Supabase.");
+    EQ_PERSONAS=personas.data||[];
+    CLIENTES_NOMBRE=Object.fromEntries(clientes.map(c=>[String(c.id),c.nombre]));
+    EQ_CEDIS=Object.fromEntries(cedis.map(c=>[String(c.id),c]));
+    EQ_ASIG=asig
+  }catch(e){EQ_ASIG=[];EQ_ERR=e.message||"No se pudieron cargar las asignaciones. Verifica que operational-responsibility-approvals.sql esté ejecutado."}
+}
+const personaTxt=id=>{const p=EQ_PERSONAS.find(x=>x.id===id);return p?`${p.nombre} (${p.email})`:(DRV.find(x=>x.id===id)?.nombre||"—")};
+function detalleEquipo(d){
+  if(EQ_ERR)return `<div class="errbox">${esc(EQ_ERR)}</div>`;
+  const nombreCliente=id=>CLIENTES_NOMBRE[String(id)]||"Sin cliente";
+  const nombreCedis=id=>EQ_CEDIS[String(id)]?.nombre||"CEDIS "+id;
+  if(d.rol==="ih"){
+    const mias=EQ_ASIG.filter(a=>a.supervisor_id===d.id);
+    if(!mias.length)return "<small>Sin CEDIS asignados.</small>";
+    const coord=a=>personaTxt(a.coordinador_id);
+    return `<b>CEDIS a su cargo (${mias.length})</b><table><tr><th>Cliente</th><th>CEDIS</th><th>Coordinador</th></tr>${mias.map(a=>`<tr><td>${esc(nombreCliente(a.cliente_id))}</td><td>${esc(nombreCedis(a.cedis_id))}</td><td>${esc(coord(a))}</td></tr>`).join("")}</table>`
+  }
+  if(d.rol==="coordinador"){
+    const mias=EQ_ASIG.filter(a=>a.coordinador_id===d.id);
+    if(!mias.length)return "<small>Sin cuentas asignadas.</small>";
+    const cuentas=new Map();
+    mias.forEach(a=>{
+      const k=String(a.cliente_id);
+      if(!cuentas.has(k))cuentas.set(k,{cedis:[],supervisores:new Set()});
+      const c=cuentas.get(k);c.cedis.push(nombreCedis(a.cedis_id));c.supervisores.add(a.supervisor_id)
+    });
+    const sup=new Set(mias.map(a=>a.supervisor_id));
+    const supNombre=personaTxt;
+    const filas=[...cuentas].map(([k,c])=>`<tr><td>${esc(nombreCliente(k))}</td><td>${c.cedis.map(esc).join(", ")}</td><td>${[...c.supervisores].map(id=>esc(supNombre(id))).join(", ")}</td></tr>`).join("");
+    return `<b>Cuentas a su cargo (${cuentas.size})</b><table><tr><th>Cliente</th><th>CEDIS</th><th>Supervisores</th></tr>${filas}</table><p><b>Supervisores que le responden (${sup.size}):</b> ${[...sup].map(id=>esc(supNombre(id))).join(", ")}</p>`
+  }
+  return "<small>Este rol no tiene cuentas ni CEDIS asignados.</small>"
+}
 function vistaEquipo(){
   const st='style="padding:9px;border:1px solid var(--line);border-radius:10px"';
-  const eq=DRV.filter(d=>["master","ops","coordinador","ih","finanzas"].includes(d.rol)).map(d=>`<tr><td>${esc(d.nombre)}</td><td>${ROLES_TXT[d.rol]}</td><td>${esc(d.estatus)}</td></tr>`).join("");
+  const eq=DRV.filter(d=>["master","ops","coordinador","ih","finanzas"].includes(d.rol)).map(d=>{
+    const expandible=["ih","coordinador"].includes(d.rol),abierto=EQ_ABIERTO===d.id;
+    return `<tr><td>${expandible?`<button class="btn ghost sm" data-eq-d="${esc(d.id)}">${abierto?"▾":"▸"} ${esc(d.nombre)}</button>`:esc(d.nombre)}</td><td>${ROLES_TXT[d.rol]}</td><td>${esc(d.estatus)}</td></tr>${abierto?`<tr><td colspan="3">${detalleEquipo(d)}</td></tr>`:""}`}).join("");
   const inv=(window.INV||[]).map(i=>`<tr><td>${esc(i.email)}</td><td>${ROLES_TXT[i.rol]}</td></tr>`).join("");
   return `<h3 style="margin:12px 8px 0">Dar acceso al personal</h3><div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px">
    <input id="eq-m" type="email" placeholder="correo@chazki.com" ${st}>
@@ -808,7 +1075,7 @@ function vistaEquipo(){
    <button class="btn" id="eq-ok">Asignar</button></div>
    <small style="padding:0 8px">Entra con Google; el rol se activa en su primer ingreso (o al instante si ya entró).</small>
    <h3 style="margin:12px 8px 0">Equipo con acceso</h3><table><tr><th>Nombre</th><th>Rol</th><th>Estatus</th></tr>${eq}</table>
-   <h3 style="margin:12px 8px 0">Invitaciones</h3><table><tr><th>Correo</th><th>Rol</th></tr>${inv||'<tr><td colspan="2">Sin invitaciones.</td></tr>'}</table>`}
+   <h3 style="margin:12px 8px 0">Invitaciones</h3><table><tr><th>Correo</th><th>Rol</th></tr>${inv||'<tr><td colspan="2">Sin invitaciones.</td></tr>'}</table>${vistaImportarResponsables()}`}
 async function asignarRol(){const m=$("eq-m").value.trim().toLowerCase();
   if(!/^[^@\s]+@chazki\.com$/.test(m)){toast("Solo correos @chazki.com");return}
   const {data,error}=await sb.rpc("asignar_rol",{p_email:m,p_rol:$("eq-r").value});
@@ -827,10 +1094,66 @@ function vistaProveedores(){
     <button class="btn" id="np-ok">Crear</button></div>
     <h3 style="margin:12px 8px 0">Proveedores</h3><table><tr><th>Proveedor</th><th>Tipo</th><th>Registro fiscal</th><th>Titular (ve los pagos)</th></tr>${pv||'<tr><td colspan="4">Aún no hay proveedores.</td></tr>'}</table>
     <h3 style="margin:16px 8px 0">Drivers</h3><table><tr><th>Driver</th><th>Rol</th><th>Proveedor</th><th></th></tr>${dr}</table>`}
+let INVR=[],INVR_CEDIS=[],INVR_ERR="";
+const INV_TIPO={flotillero:"Flotillero",independiente:"Driver independiente",driver:"Driver de flotillero"};
+const INV_EST={pendiente_aprobacion:["Por aprobar","w"],enviada:["Enviada · espera registro","w"],aceptada:["Aceptada","ok"],rechazada:["Rechazada","bad"],cancelada:["Cancelada","bad"]};
+async function cargarInvitaciones(){
+  INVR_ERR="";
+  const [i,c]=await Promise.all([sb.from("invitaciones_red").select("*").order("creado_en",{ascending:false}).limit(300),sb.from("cedis").select("id,nombre,cliente_id").order("nombre")]);
+  if(i.error)INVR_ERR="No se pudieron cargar las invitaciones. Ejecuta network-invitations.sql en Supabase: "+i.error.message;
+  INVR=i.data||[];INVR_CEDIS=c.data||[];
+}
+function mensajeInvitacion(x){
+  const url=location.origin+"/";
+  return `Hola${x.nombre?" "+x.nombre:""}, Chazki te invita como ${INV_TIPO[x.tipo]||"driver"}. Descarga o abre la app de Driver (${url}) y regístrate con este correo: ${x.email}`;
+}
+function vistaInvitaciones(){
+  const cedisTxt=id=>{const c=INVR_CEDIS.find(y=>y.id===id);return c?`${CLIENTES_NOMBRE[String(c.cliente_id)]||""} · ${c.nombre}`:"—"};
+  const pend=INVR.filter(x=>x.estatus==="pendiente_aprobacion"&&x.invitado_por_rol==="flotillero");
+  const fila=x=>{const e=INV_EST[x.estatus]||[x.estatus,"w"];
+    const acc=x.estatus==="pendiente_aprobacion"&&x.invitado_por_rol==="flotillero"?`<button class="btn sm" data-inv-ok="${esc(x.id)}">Aprobar</button> <button class="btn ghost sm" data-inv-no="${esc(x.id)}">Rechazar</button>`
+      :x.estatus==="enviada"?`<a class="btn ghost sm" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(mensajeInvitacion(x))}">WhatsApp</a> <a class="btn ghost sm" href="mailto:${esc(x.email)}?subject=${encodeURIComponent("Invitación a Chazki")}&body=${encodeURIComponent(mensajeInvitacion(x))}">Correo</a> <button class="btn ghost sm" data-inv-x="${esc(x.id)}">Cancelar</button>`
+      :x.estatus==="pendiente_aprobacion"?`<button class="btn ghost sm" data-inv-x="${esc(x.id)}">Cancelar</button>`:"";
+    const prov=x.proveedor_id?PRV.find(p=>p.id===x.proveedor_id):null;
+    return `<tr><td>${esc(x.nombre||"—")}<br><small>${esc(x.email)}</small></td><td>${esc(INV_TIPO[x.tipo]||x.tipo)}${x.esquema?`<br><small>${esc(x.esquema)}</small>`:""}${prov?`<br><small>Flotilla: ${esc(prov.nombre)}</small>`:""}</td><td>${x.cedis_id?esc(cedisTxt(x.cedis_id)):"—"}</td><td>${x.invitado_por_rol==="flotillero"?"Flotillero":"Chazki"}</td><td><span class="pill ${e[1]}">${esc(e[0])}</span>${x.motivo?`<br><small>${esc(x.motivo)}</small>`:""}</td><td>${acc}</td></tr>`};
+  const st='style="padding:9px;border:1px solid var(--line);border-radius:10px"';
+  const cedOpts=`<option value="">CEDIS (opcional)…</option>`+INVR_CEDIS.map(c=>`<option value="${esc(c.id)}">${esc((CLIENTES_NOMBRE[String(c.cliente_id)]||"")+" · "+c.nombre)}</option>`).join("");
+  return `${INVR_ERR?`<div class="errbox">${esc(INVR_ERR)}</div>`:""}
+    <h3 style="margin:12px 8px 0">Invitar flotillero o driver independiente</h3>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px">
+      <input id="iv-n" placeholder="Nombre o razón social" ${st} style="flex:2;min-width:180px">
+      <input id="iv-m" type="email" placeholder="Correo" ${st} style="flex:2;min-width:200px">
+      <select id="iv-t" ${st}><option value="flotillero">Flotillero</option><option value="independiente">Driver independiente</option></select>
+      <select id="iv-r" ${st}><option value="">Esquema…</option><option value="FACTURA">Con factura</option><option value="SIN FACTURA">Libre (sin factura)</option></select>
+      <select id="iv-c" ${st}>${cedOpts}</select>
+      <button class="btn" id="iv-ok">Invitar</button></div>
+    <small style="padding:0 8px">Al registrarse con ese correo, su cuenta queda con la categoría que elijas. Comparte el aviso por WhatsApp o correo desde la tabla.</small>
+    <h3 style="margin:14px 8px 0">Drivers que piden los flotilleros (${esc(pend.length)} por aprobar)</h3>
+    <table><tr><th>Invitado</th><th>Categoría</th><th>CEDIS</th><th>Origen</th><th>Estatus</th><th></th></tr>${INVR.map(fila).join("")||'<tr><td colspan="6">Sin invitaciones.</td></tr>'}</table>`}
+function enlazarInvitaciones(){
+  const run=async(b,fn)=>{b.disabled=true;const {data,error}=await fn();if(error){toast(error.message);b.disabled=false;return}toast(data||"Listo");await cargarInvitaciones();render()};
+  const ok=$("iv-ok");if(ok)ok.onclick=()=>run(ok,()=>sb.rpc("invitar_a_red",{p_email:$("iv-m").value,p_nombre:$("iv-n").value,p_tipo:$("iv-t").value,p_esquema:$("iv-r").value||null,p_cedis_id:$("iv-c").value?+$("iv-c").value:null}));
+  document.querySelectorAll("[data-inv-ok]").forEach(b=>b.onclick=()=>run(b,()=>sb.rpc("resolver_invitacion_red",{p_id:+b.dataset.invOk,p_aprobar:true})));
+  document.querySelectorAll("[data-inv-no]").forEach(b=>b.onclick=()=>{const m=prompt("Motivo del rechazo");if(m===null)return;run(b,()=>sb.rpc("resolver_invitacion_red",{p_id:+b.dataset.invNo,p_aprobar:false,p_motivo:m}))});
+  document.querySelectorAll("[data-inv-x]").forEach(b=>b.onclick=()=>run(b,()=>sb.rpc("cancelar_invitacion_red",{p_id:+b.dataset.invX})));
+}
 function enlazar(){
+  if(tab==="w")enlazarInvitaciones();
   const ap=$("analytics-period");if(ap)ap.onchange=()=>{analyticsGrain=ap.value;render()};
   const fp=$("finance-period");if(fp)fp.onchange=()=>{financeGrain=fp.value;render()};
   const importDoc=$("doc-flota-save");if(importDoc)importDoc.onclick=importarDocumentoFlota;
+  document.querySelectorAll("[data-eq-d]").forEach(b=>b.onclick=()=>{EQ_ABIERTO=EQ_ABIERTO===b.dataset.eqD?null:b.dataset.eqD;render()});
+  document.querySelectorAll("[data-asg-fix]").forEach(b=>b.onclick=()=>abrirFormAsignacion(CSV_ASIGNACIONES_RESULT.errores[+b.dataset.asgFix]));
+  document.querySelectorAll("[data-asg-edit]").forEach(b=>b.onclick=()=>{const [cli,ced]=b.dataset.asgEdit.split("|"),a=EQ_ASIG.find(x=>String(x.cliente_id)===cli&&String(x.cedis_id)===ced);if(a)abrirFormAsignacion({cliente_id:a.cliente_id,cedis_id:a.cedis_id,supervisor_id:a.supervisor_id,coordinador_id:a.coordinador_id})});
+  document.querySelectorAll("[data-asg-del]").forEach(b=>b.onclick=()=>quitarAsignacion(b.dataset.asgDel));
+  const asgNew=$("asg-new");if(asgNew)asgNew.onclick=()=>{ASG_FORM={cliente_id:"",cedis_id:"",supervisor_id:"",coordinador_id:"",origen:""};render()};
+  const asgQ=$("asg-q");if(asgQ)asgQ.onchange=()=>{ASG_FILTRO=asgQ.value;render()};
+  const asgCli=$("asg-cli");if(asgCli)asgCli.onchange=()=>{leerFormAsignacion();ASG_FORM.cedis_id="";render()};
+  const asgSave=$("asg-save");if(asgSave)asgSave.onclick=guardarAsignacionManual;
+  const asgCancel=$("asg-cancel");if(asgCancel)asgCancel.onclick=()=>{ASG_FORM=null;render()};
+  const importAssignments=$("asignaciones-import");if(importAssignments)importAssignments.onclick=importarAsignaciones;
+  document.querySelectorAll("[data-tar-ok]").forEach(b=>b.onclick=()=>resolverCambioTarifario(+b.dataset.tarOk,true));
+  document.querySelectorAll("[data-tar-no]").forEach(b=>b.onclick=()=>resolverCambioTarifario(+b.dataset.tarNo,false));
   const pnrSave=$("pnr-new-save");if(pnrSave)pnrSave.onclick=crearPnROps;
   document.querySelectorAll("[data-pnr-action]").forEach(b=>b.onclick=()=>resolverPnROps(b.dataset.pnrId,b.dataset.pnrAction));
   const nsClient=$("ns-client");if(nsClient)nsClient.onchange=()=>actualizarCedisNoShow(nsClient.value);

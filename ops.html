@@ -23,6 +23,8 @@ header #bell{font-size:16px;padding:7px 11px;position:relative}
 .nav-caption{font-size:10px;font-weight:800;letter-spacing:.11em;text-transform:uppercase;color:#7f8ba0;padding:16px 12px 7px}
 .role-nav{display:flex;flex-direction:column;gap:4px;margin:0}
 .nav-group{display:flex;flex-direction:column;gap:4px}
+.nav-sub{display:none;flex-direction:column;gap:4px;padding-left:16px;grid-column:1/-1}
+.nav-sub.open{display:flex}
 .role-nav button{width:100%;display:flex;align-items:center;gap:11px;text-align:left;border:0;background:transparent;color:var(--navmut);padding:10px 12px;border-radius:9px;font-size:13px;font-weight:550;cursor:pointer;transition:background .15s,color .15s}
 .role-nav button:hover{background:#ffffff10;color:#fff}
 .role-nav button.on{background:#4b2fd033;color:#fff;box-shadow:inset 3px 0 var(--pri2)}
@@ -192,11 +194,15 @@ td select{padding:6px;border:1px solid var(--line);border-radius:8px;font-size:1
   <nav class="role-nav" aria-label="Secciones operativas">
     <div class="nav-caption">Operación diaria</div>
     <div class="nav-group" data-nav-group="operacion">
-      <button class="on" data-t="r">Rutas</button><button data-t="x">Indicadores</button><button data-t="v">Por validar</button><button data-t="a">Por aprobar</button><button data-t="l">Validadas</button><button data-t="c">Cancelaciones</button><button data-t="i">Incidencias</button><button data-t="f">Fallidos por causa</button>
+      <button class="on" data-t="r">Rutas</button><button data-t="v">Por validar</button><button data-t="a">Por aprobar</button><button data-t="l">Validadas</button><button data-t="z">Desempeño de flotilla</button><button data-t="c">Cancelaciones</button><button data-t="i">Incidencias</button><div class="nav-sub" data-parent="i"><button data-t="n">NO SHOW</button><button data-t="q">PNR y penalizaciones</button><button data-t="f">Fallidos por causa</button></div>
+    </div>
+    <div class="nav-caption">Financiero</div>
+    <div class="nav-group" data-nav-group="financiero">
+      <button data-t="x">Indicadores del negocio</button><button data-t="y">Finanzas por cliente</button><button data-t="t">Tarifario</button><button data-t="h">Cambios tarifarios</button>
     </div>
     <div class="nav-caption">Gestión y control</div>
     <div class="nav-group" data-nav-group="administracion">
-      <button data-t="y">Finanzas</button><button data-t="z">Desempeño de flotilla</button><button data-t="q">PNR y penalizaciones</button><button data-t="n">NO SHOW</button><button data-t="g">Documentos de drivers</button><button data-t="b">Desactivaciones</button><button data-t="k">Cambios de datos</button><button data-t="t">Tarifario</button><button data-t="d">Descargas</button><button data-t="p">Proveedores y drivers</button>
+      <button data-t="d">Reportes</button><button data-t="p">Proveedores y drivers</button><div class="nav-sub" data-parent="p"><button data-t="b">Desactivaciones</button><button data-t="g">Documentos de drivers</button><button data-t="k">Cambios de datos</button><button data-t="w">Invitaciones</button></div>
     </div>
   </nav>
 </aside>

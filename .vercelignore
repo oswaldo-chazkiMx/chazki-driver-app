@@ -1,0 +1,10 @@
+*.sql
+node_modules
+android
+.github
+.vscode
+scripts
+driver-app
+package-lock.json
+publish-sticky-header.cjs
+capacitor.config.json

@@ -1,0 +1,6 @@
+.vercel
+.env*
+node_modules
+*.private.sql
+.vscode
+.github/modernize
