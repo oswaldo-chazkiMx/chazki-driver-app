@@ -1064,9 +1064,13 @@ const DOC_TIPOS=[
   {k:"seguro",n:"Seguro del vehículo",ic:"🛡️"},
   {k:"licencia",n:"Licencia de conducir",ic:"🪪"},
   {k:"tarjeta",n:"Tarjeta de circulación",ic:"🚗"},
-  {k:"ine",n:"INE",ic:"🆔"}
+  {k:"ine",n:"INE",ic:"🆔"},
+  {k:"domicilio",n:"Comprobante de domicilio",ic:"🏠",sinVigencia:true},
+  {k:"constancia_fiscal",n:"Constancia de situación fiscal",ic:"📄",sinVigencia:true,soloFlotillero:true},
+  {k:"estado_cuenta",n:"Estado de cuenta a su nombre",ic:"📄",sinVigencia:true,soloFlotillero:true}
 ];
-let DOCS=[],DOC_ALERTS=[];
+const docTiposActuales=()=>DOC_TIPOS.filter(t=>!t.soloFlotillero||DRIVER?.rol==="flotillero");
+let DOCS=[],DOC_ALERTS=[],DOCS_ERR="";
 const docTypeName=k=>(DOC_TIPOS.find(x=>x.k===k)||{}).n||k;
 function diasVencimiento(value){
   if(!value)return null;
@@ -1077,30 +1081,31 @@ function diasVencimiento(value){
 function estadoDoc(d){
   if(!d)return {txt:"Sin registrar",cls:"w",dias:null};
   const dias=diasVencimiento(d.vigencia);
-  if(dias===null)return {txt:"Sin vigencia",cls:"w",dias:null};
+  if(dias===null)return {txt:d.vigencia?"Fecha inválida":"Sin vencimiento",cls:d.vigencia?"w":"ok",dias:null};
   if(dias<0)return {txt:`Vencido hace ${-dias} ${dias===-1?"día":"días"}`,cls:"bad",dias};
   if(dias<=15)return {txt:`Vence en ${dias} ${dias===1?"día":"días"}`,cls:"bad",dias};
   if(dias<=30)return {txt:`Vence en ${dias} días`,cls:"w",dias};
   return {txt:"Vigente",cls:"ok",dias};
 }
 async function loadDocs(){
+  DOCS_ERR="";
   const {data,error}=await sb.from("driver_documents").select("id,driver_id,tipo,storage_path,vigencia,estado,origen,creado_en,nota").eq("driver_id",ME.id).order("creado_en",{ascending:false});
-  if(error){DOCS=[];$("docs-note").textContent="No se pudieron cargar los documentos. Verifica que esté instalada la configuración de documentos en Supabase: "+error.message;drawDocs();return}
+  if(error){DOCS=[];DOC_ALERTS=[];DOCS_ERR="No se pudieron cargar los documentos. Verifica que esté instalada la configuración de documentos en Supabase: "+error.message;drawDocs();return}
   DOCS=data||[];
   const paths=DOCS.map(x=>x.storage_path).filter(Boolean);
   if(paths.length){
     const {data:urls,error:urlError}=await sb.storage.from("driver-documents").createSignedUrls(paths,3600);
-    if(urlError){$("docs-note").textContent="No se pudieron abrir los archivos: "+urlError.message}
+    if(urlError){DOCS_ERR="No se pudieron abrir los archivos: "+urlError.message}
     else DOCS=DOCS.map(x=>({...x,url:(urls||[]).find(y=>y.path===x.storage_path)?.signedUrl||null}));
   }
   const {data:alerts,error:alertError}=await sb.from("driver_document_alerts").select("id,driver_document_id,alert_date,message").eq("driver_id",ME.id).order("alert_date",{ascending:false}).limit(30);
   DOC_ALERTS=alertError?[]:alerts||[];
-  if(alertError)$("docs-note").textContent="No se pudieron cargar las alertas: "+alertError.message;
+  if(alertError)DOCS_ERR+=(DOCS_ERR?" ":"")+"No se pudieron cargar las alertas: "+alertError.message;
   drawDocs();
 }
 function drawDocs(){
   const alerts=[];
-  $("docs-list").innerHTML=DOC_TIPOS.map(t=>{
+  $("docs-list").innerHTML=docTiposActuales().map(t=>{
     const approved=DOCS.find(x=>x.tipo===t.k&&x.estado==="aprobado");
     const pending=DOCS.find(x=>x.tipo===t.k&&x.estado==="pendiente");
     const lastRejected=DOCS.find(x=>x.tipo===t.k&&x.estado==="rechazado");
@@ -1108,11 +1113,11 @@ function drawDocs(){
     if(approved&&state.dias!==null&&state.dias<=15&&!pending)alerts.push({cls:"bad",text:`${t.n}: ${state.txt.toLowerCase()}. Sube el reemplazo para dejar de recibir alertas.`});
     const date=approved?.vigencia?new Date(`${approved.vigencia}T00:00:00`).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"}):"";
     return `<div class="doc"><div class="ic">${esc(t.ic)}</div><div class="info"><b>${esc(t.n)}</b>
-      <small>${approved?`Vigencia hasta ${esc(date)}`:"Aún no hay un documento autorizado"}</small>
+      <small>${approved?(t.sinVigencia?"Sin fecha de vencimiento":`Vigencia hasta ${esc(date)}`):"Aún no hay un documento autorizado"}</small>
       <span class="pill ${approved?state.cls:"w"}" style="margin-top:6px">${approved?esc(state.txt):"Sin registrar"}</span>
       ${pending?`<small class="pill w" style="display:inline-block;margin-top:5px">Actualización enviada · en espera de Operaciones</small>`:""}
       ${lastRejected?`<small class="pill bad" style="display:inline-block;margin-top:5px">Último archivo rechazado${lastRejected.nota?`: ${esc(lastRejected.nota)}`:""}</small>`:""}
-      </div><div class="act">${approved?.url?`<a href="${esc(approved.url)}" target="_blank" rel="noopener">Ver</a>`:""}<button data-docsub="${esc(t.k)}" ${pending?"disabled":""}>${pending?"En revisión":"Actualizar"}</button></div></div>`;
+      </div><div class="act">${approved?.url?`<a href="${esc(approved.url)}" target="_blank" rel="noopener">Ver</a>`:""}<button data-docsub="${esc(t.k)}" ${pending?"disabled":""}>${pending?"En revisión":approved?"Actualizar":"Subir"}</button></div></div>`;
   }).join("");
   const today=new Date().toLocaleDateString("en-CA");
   const todayAlerts=DOC_ALERTS.filter(x=>{
@@ -1123,7 +1128,7 @@ function drawDocs(){
   $("docs-banner").innerHTML=alerts.map(a=>`<div class="alerta ${a.cls}">⚠️ ${esc(a.text)}</div>`).join("")+
     todayAlerts.map(a=>`<div class="alerta bad">⛔ ${esc(a.message)}</div>`).join("");
   document.querySelector("nav button[data-t=per]").classList.toggle("alerta-dot",alerts.length>0||todayAlerts.length>0);
-  $("docs-note").textContent="Los documentos se guardan de forma privada. La fecha que indiques se envía junto con el archivo y Operaciones debe aprobarla antes de reemplazar el documento vigente.";
+  $("docs-note").textContent=DOCS_ERR||"Los documentos son privados. La primera carga queda vigente; Operaciones debe aprobar los reemplazos.";
   document.querySelectorAll("[data-docsub]").forEach(b=>b.onclick=()=>abrirCargaDocumento(b.dataset.docsub));
   if(todayAlerts.length&&"Notification" in window&&Notification.permission==="granted"){
     const key=`doc-alert-${ME.id}-${today}`;
@@ -1134,14 +1139,16 @@ function drawDocs(){
   }
 }
 function abrirCargaDocumento(tipo){
-  abrirSheet(`<h2>Actualizar ${esc(docTypeName(tipo))}</h2><label for="doc-date">Fecha de vencimiento</label><input id="doc-date" type="date" required>
+  const config=docTiposActuales().find(t=>t.k===tipo);
+  if(!config){toast("Este documento no corresponde a tu categoría.");return}
+  abrirSheet(`<h2>Subir ${esc(docTypeName(tipo))}</h2><p>La primera carga queda vigente. Los reemplazos requieren aprobación de Operaciones.</p>${config.sinVigencia?"<p>Este documento no requiere fecha de vencimiento.</p>":'<label for="doc-date">Fecha de vencimiento</label><input id="doc-date" type="date" required>'}
     <label for="doc-file">Archivo (PDF o imagen, máximo 10 MB)</label><input id="doc-file" type="file" accept="image/*,application/pdf" required>
-    <div id="doc-upload-error"></div><div style="display:flex;gap:8px;margin-top:12px"><button class="btn" id="doc-upload">Enviar a Operaciones</button><button class="btn ghost" id="doc-upload-cancel">Cancelar</button></div>`);
+    <div id="doc-upload-error"></div><div style="display:flex;gap:8px;margin-top:12px"><button class="btn" id="doc-upload">Enviar documento</button><button class="btn ghost" id="doc-upload-cancel">Cancelar</button></div>`);
   $("doc-upload-cancel").onclick=()=>$("sheet").classList.add("hide");
   $("doc-upload").onclick=async()=>{
-    const file=$("doc-file").files[0],vigencia=$("doc-date").value,errorBox=$("doc-upload-error"),button=$("doc-upload");
+    const file=$("doc-file").files[0],vigencia=config.sinVigencia?null:$("doc-date").value,errorBox=$("doc-upload-error"),button=$("doc-upload");
     errorBox.innerHTML="";
-    if(!file||!vigencia){errorBox.innerHTML='<div class="errbox">Selecciona el documento y su fecha de vencimiento.</div>';return}
+    if(!file||(!config.sinVigencia&&!vigencia)){errorBox.innerHTML='<div class="errbox">Selecciona el documento y, cuando corresponda, su fecha de vencimiento.</div>';return}
     if(file.size>10*1024*1024){errorBox.innerHTML='<div class="errbox">El archivo supera el límite de 10 MB.</div>';return}
     if(!(file.type==="application/pdf"||["image/jpeg","image/png","image/webp"].includes(file.type))){errorBox.innerHTML='<div class="errbox">Solo se aceptan PDF, JPEG, PNG o WebP.</div>';return}
     button.disabled=true;
@@ -1149,14 +1156,18 @@ function abrirCargaDocumento(tipo){
     const storagePath=`${ME.id}/${tipo}/${crypto.randomUUID()}.${extension}`;
     const {error:uploadError}=await sb.storage.from("driver-documents").upload(storagePath,file,{contentType:file.type,upsert:false});
     if(uploadError){button.disabled=false;errorBox.innerHTML=`<div class="errbox">${esc(uploadError.message)}</div>`;return}
-    const {error:insertError}=await sb.from("driver_documents").insert({driver_id:ME.id,tipo,storage_path:storagePath,vigencia,estado:"pendiente",origen:"driver"});
+    const {data:estado,error:insertError}=await sb.rpc("enviar_documento_driver",{p_tipo:tipo,p_storage_path:storagePath,p_vigencia:vigencia});
     if(insertError){
       const {error:removeError}=await sb.storage.from("driver-documents").remove([storagePath]);
       button.disabled=false;
       errorBox.innerHTML=`<div class="errbox">${esc(insertError.message)}${removeError?` · No se pudo limpiar el archivo temporal: ${esc(removeError.message)}`:""}</div>`;
       return;
     }
-    $("sheet").classList.add("hide");toast("Documento enviado a Operaciones ✔");await loadDocs();
+    $("sheet").classList.add("hide");
+    if(estado==="aprobado")toast("Documento guardado y vigente ✔");
+    else if(estado==="pendiente")toast("Actualización enviada a Operaciones ✔");
+    else toast("Documento enviado, pero se recibió un estado inesperado. Revisa tu expediente.");
+    await loadDocs();
   };
 }
 drawDocs();

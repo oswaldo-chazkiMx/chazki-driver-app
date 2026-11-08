@@ -1,6 +1,6 @@
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);const $=id=>document.getElementById(id);
-let R=[],C=[],tab="r",photos={},LIQ={},DRV=[],PRV=[],TAR=null,ANU=[],ANUERR="",AUD={},AUDERR="",DOCOPS=[],DOCOPSERR="",PNR_OPS=[],PNR_OPS_ERR="",NO_SHOW_OPS=[],NO_SHOW_EVENTS=[],NO_SHOW_CLIENTS=[],NO_SHOW_ERR="",CLIENTES_NOMBRE={},analyticsGrain="dia",financeGrain="dia";
+let R=[],C=[],tab="r",photos={},LIQ={},DRV=[],PRV=[],TAR=null,ANU=[],ANUERR="",AUD={},AUDERR="",DOCOPS=[],DOCOPSERR="",DOCDRIVERS=[],DOCDRIVERSERR="",PNR_OPS=[],PNR_OPS_ERR="",NO_SHOW_OPS=[],NO_SHOW_EVENTS=[],NO_SHOW_CLIENTS=[],NO_SHOW_ERR="",CLIENTES_NOMBRE={},analyticsGrain="dia",financeGrain="dia";
 const fd=m=>m==null?"—":(m<1000?m+" m":(m/1000).toFixed(1)+" km");
 const hh=s=>s?new Date(s).toTimeString().slice(0,5):"—";
 const dd=s=>new Date(s).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
@@ -26,7 +26,7 @@ $("abtn").onclick=async()=>{
   if(!dominioOk(email)){$("amsg").innerHTML='<div class="errbox">Solo personal de Chazki: usa tu correo @chazki.com.</div>';return}
   const r=await sb.auth.signInWithPassword({email,password});
   if(r.error){$("amsg").innerHTML='<div class="errbox">Correo o contraseña incorrectos.</div>';return}boot()};
-const TABS={master:"rvalbkcifpedtnxyzgqnhwj",ops:"rvalbkcifpdtnxyzgqnwj",coordinador:"rvalbkcifpdtxyzqnwj",finanzas:"rlcpdxyzq",ih:"rvabkcifdxnwj"};
+const TABS={master:"rvalbkcifpedtnxyzgqnhwj",ops:"rvalbkcifpdtnxyzgqnwj",coordinador:"rvalbkcifpdtxyzqnwj",finanzas:"rlcpdxyzqg",ih:"rvabkcifpdxnwj"};
 const puede=t=>(TABS[ROL]||"").includes(t);
 const veFin=()=>["master","ops","coordinador","finanzas"].includes(ROL);
 const cargaFin=()=>veFin()||ROL==="ih";
@@ -65,12 +65,14 @@ function seleccionarTab(b){
     if(tab===parent&&document.querySelector(`.role-nav button[data-t="${parent}"]`))sub.classList.toggle("open",prevTab===tab?!sub.classList.contains("open"):true);
     else if(sub.contains(b))sub.classList.add("open");
   });
-  document.querySelector(".bar").classList.toggle("hide",tab==="n");
+  document.querySelector(".bar").classList.toggle("hide",["n","p","j","g"].includes(tab));
+  document.querySelector(".page-heading").classList.toggle("hide",["p","j","g"].includes(tab));
   const [title,,description]=NAV_INFO[tab]||["Operación","",""];
   $("page-title").textContent=title;
   $("page-description").textContent=description;
   if(tab==="h"){cargarCambiosTarifario();return}
-  if(tab==="w"){render();cargarInvitaciones().then(()=>{if(tab==="w")render()});return}
+  if(tab==="p"&&ROL!=="finanzas"){AFILIADOS_LOADING=true;render();cargarAfiliados().then(()=>{if(tab==="p")render()});return}
+  if(tab==="w"){if(INVR_LOADING){render();return}INVR_LOADING=true;render();cargarInvitaciones().then(()=>{if(tab==="w")render()});return}
   if(tab==="j"){PADRON_LOADING=true;render();cargarPadron().then(()=>{if(tab==="j")render()});return}
   if(tab==="e"){render();cargarAsignacionesEquipo().then(()=>{if(tab==="e")render()});return}
   if(["l","x","y","z","g","q","n"].includes(tab)){load();return}
@@ -139,6 +141,9 @@ async function boot(){
   try{await load()}finally{$("loading").classList.add("hide")}
 }
 async function load(){
+  if(tab==="g"&&ROL==="finanzas"){
+    await cargarDocumentosFinanzas();render();return;
+  }
   if(tab==="n"){
     await cargaExtra();
     await cargarNoShowsOps();
@@ -378,7 +383,9 @@ async function cargarLiquidaciones(ids){
   return rows;
 }
 async function cargarDocumentosOps(){
-  DOCOPS=[];DOCOPSERR="";
+  DOCOPS=[];DOCOPSERR="";DOCDRIVERS=[];DOCDRIVERSERR="";
+  try{DOCDRIVERS=await fetchPaged(()=>sb.from("drivers").select("id,nombre,codigo,rol,estatus,proveedor_id,proveedores!drivers_proveedor_id_fkey(nombre,tipo)").in("rol",["driver","flotillero"]).order("nombre").order("id"))}
+  catch(error){DOCDRIVERSERR=error.message||String(error)}
   try{DOCOPS=await fetchPaged(()=>sb.from("driver_documents").select("*,drivers(nombre,codigo,rol)").order("creado_en",{ascending:false}))}
   catch(error){DOCOPSERR=error.message||String(error);return}
   const paths=DOCOPS.map(x=>x.storage_path).filter(Boolean);
@@ -388,11 +395,35 @@ async function cargarDocumentosOps(){
     DOCOPS=DOCOPS.map(x=>({...x,url:(urls||[]).find(y=>y.path===x.storage_path)?.signedUrl||null}));
   }
 }
-const DOC_OPS_TIPOS=[["seguro","Seguro del vehículo"],["licencia","Licencia de conducir"],["tarjeta","Tarjeta de circulación"],["ine","INE"]];
+const DOC_OPS_TIPOS=[["seguro","Seguro del vehículo"],["licencia","Licencia de conducir"],["tarjeta","Tarjeta de circulación"],["ine","INE"],["domicilio","Comprobante de domicilio"],["constancia_fiscal","Constancia de situación fiscal"],["estado_cuenta","Estado de cuenta a su nombre"]];
+const DOC_SIN_VIGENCIA=["domicilio","constancia_fiscal","estado_cuenta"];
+const DOC_FLOTILLERO=["constancia_fiscal","estado_cuenta"];
+const tiposExpediente=d=>DOC_OPS_TIPOS.filter(([k])=>d.rol==="flotillero"||!DOC_FLOTILLERO.includes(k));
+async function cargarDocumentosFinanzas(){
+  DOCOPS=[];DOCOPSERR="";
+  try{DOCOPS=await fetchPaged(()=>sb.rpc("listar_documentos_finanzas"))}
+  catch(error){DOCOPSERR=error.message||String(error);return}
+  const paths=DOCOPS.map(d=>d.storage_path).filter(Boolean);
+  if(paths.length){
+    const {data:urls,error}=await sb.storage.from("driver-documents").createSignedUrls(paths,3600);
+    if(error){DOCOPSERR="No se pudieron abrir los archivos: "+error.message;return}
+    DOCOPS=DOCOPS.map(d=>({...d,url:(urls||[]).find(x=>x.path===d.storage_path)?.signedUrl||null}));
+    if(DOCOPS.some(d=>d.storage_path&&!d.url))DOCOPSERR="No se pudieron abrir uno o más archivos. Vuelve a intentarlo.";
+  }
+}
 function vistaDocumentosOps(){
+  if(ROL==="finanzas"){
+    const rows=DOCOPS.map(d=>`<tr><td>${esc(d.nombre)}<br><small>${esc(d.codigo||"")}</small></td><td>${esc(DOC_OPS_TIPOS.find(x=>x[0]===d.tipo)?.[1]||d.tipo)}</td><td>${esc(d.estado)}</td><td>${d.url?`<a href="${esc(d.url)}" target="_blank" rel="noopener">Ver archivo</a>`:"—"}</td></tr>`).join("");
+    return `<h3>Documentos fiscales y bancarios de flotilleros</h3><small>Consulta únicamente. Operaciones autoriza los cambios.</small>${DOCOPSERR?`<div class="errbox">No se pudieron cargar los documentos: ${esc(DOCOPSERR)}</div>`:""}<div class="doc-table-wrap"><table><thead><tr><th>Flotillero</th><th>Documento</th><th>Estado</th><th>Archivo</th></tr></thead><tbody>${rows||'<tr><td colspan="4">Sin documentos visibles.</td></tr>'}</tbody></table></div>`;
+  }
   if(!esOps())return '<div class="errbox">Solo Operaciones puede importar o autorizar documentos.</div>';
-  const drivers=DRV.filter(d=>d.rol==="driver");
-  const all=DOCOPS.map(d=>`<tr><td>${esc(d.drivers?.nombre||d.driver_id)}<br><small>${esc(d.drivers?.codigo||"")}</small></td><td>${esc(DOC_OPS_TIPOS.find(x=>x[0]===d.tipo)?.[1]||d.tipo)}</td><td>${esc(d.origen==="flota"?"Importado de Flota":"Driver")}</td><td>${new Date(`${d.vigencia}T00:00:00`).toLocaleDateString("es-MX")}</td><td><span class="pill ${d.estado==="aprobado"?"ok":d.estado==="pendiente"?"w":d.estado==="rechazado"?"bad":"w"}">${esc(d.estado)}</span>${d.nota?`<br><small>${esc(d.nota)}</small>`:""}</td><td>${d.url?`<a href="${esc(d.url)}" target="_blank" rel="noopener">Ver archivo</a>`:"—"}${d.estado==="pendiente"?`<br><button class="btn sm" data-doc-approve="${esc(d.id)}">Aprobar</button> <button class="btn ghost sm" data-doc-reject="${esc(d.id)}">Rechazar</button>`:""}</td></tr>`).join("");
+  const all=DOCOPS.map(d=>`<tr><td>${esc(d.drivers?.nombre||d.driver_id)}<br><small>${esc(d.drivers?.codigo||"")}</small></td><td>${esc(DOC_OPS_TIPOS.find(x=>x[0]===d.tipo)?.[1]||d.tipo)}</td><td>${esc(d.origen==="flota"?"Importado de Flota":"Driver")}</td><td>${d.vigencia?esc(new Date(`${d.vigencia}T00:00:00`).toLocaleDateString("es-MX")):"Sin vencimiento"}</td><td><span class="pill ${d.estado==="aprobado"?"ok":d.estado==="pendiente"?"w":d.estado==="rechazado"?"bad":"w"}">${esc(d.estado)}</span>${d.nota?`<br><small>${esc(d.nota)}</small>`:""}</td><td>${d.url?`<a href="${esc(d.url)}" target="_blank" rel="noopener">Ver archivo</a>`:"—"}${d.estado==="pendiente"?`<br><button class="btn sm" data-doc-approve="${esc(d.id)}">Aprobar</button> <button class="btn ghost sm" data-doc-reject="${esc(d.id)}">Rechazar</button>`:""}</td></tr>`).join("");
+  const expedientes=DOCDRIVERS.map(d=>{
+    const docs=DOCOPS.filter(x=>x.driver_id===d.id),tipos=tiposExpediente(d);
+    const estados=tipos.map(([k,n])=>{const pendiente=docs.some(x=>x.tipo===k&&x.estado==="pendiente"),aprobado=docs.find(x=>x.tipo===k&&x.estado==="aprobado");return `${esc(n)}: ${pendiente?"en revisión":aprobado?(aprobado.vigencia&&aprobado.vigencia<new Date().toLocaleDateString("en-CA")?"vencido":"aprobado"):"sin registrar"}`}).join(" · ");
+    const categoria=d.rol==="flotillero"?"Flotillero":d.proveedores?.tipo==="flotillero"?"Driver de flotillero":d.proveedores?.tipo==="independiente"?"Driver independiente":"Driver · categoría sin definir";
+    return `<tr><td>${esc(d.nombre)}<br><small>${esc(d.codigo||"")}</small></td><td>${esc(categoria)}</td><td>${esc(d.proveedores?.nombre||"Sin proveedor")}</td><td>${esc(d.estatus||"—")}</td><td>${DOCOPSERR?"No disponible: error al cargar documentos":estados}</td></tr>`;
+  }).join("");
   const missingTable=/Could not find the table ['"]public\.driver_documents['"] in the schema cache/i.test(DOCOPSERR);
   const loadError=DOCOPSERR?(missingTable
     ?'<div class="doc-error"><b>Aún no está configurado el expediente de documentos.</b>En Supabase, ejecuta el archivo <code>driver-documents-workflow.sql</code> completo y vuelve a cargar esta sección. Esto crea la tabla y sus permisos.</div>'
@@ -400,20 +431,23 @@ function vistaDocumentosOps(){
   return `<section class="doc-import">
     <div class="doc-import-head"><span class="doc-import-icon" aria-hidden="true">▧</span><div><h3>Importar documentos de Flota</h3><p>Selecciona el expediente del driver, el tipo de documento, su vigencia y el archivo descargado de la carpeta de la agencia. Se guardará en el almacenamiento privado de la aplicación.</p></div></div>
     <div class="doc-import-grid">
-      <label class="doc-import-field">Driver<select id="doc-flota-driver"><option value="">Selecciona un driver…</option>${drivers.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)} · ${esc(d.codigo||"")}</option>`).join("")}</select></label>
+      <label class="doc-import-field">Afiliado<select id="doc-flota-driver"><option value="">Selecciona un afiliado…</option>${DOCDRIVERS.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)} · ${esc(d.codigo||"")}</option>`).join("")}</select></label>
       <label class="doc-import-field">Documento<select id="doc-flota-type">${DOC_OPS_TIPOS.map(([k,n])=>`<option value="${k}">${n}</option>`).join("")}</select></label>
-      <label class="doc-import-field">Fecha de vencimiento<input id="doc-flota-date" type="date"></label>
+      <label class="doc-import-field" id="doc-flota-date-label">Fecha de vencimiento<input id="doc-flota-date" type="date"></label>
       <label class="doc-import-field">Archivo de Flota<input id="doc-flota-file" type="file" accept="image/jpeg,image/png,image/webp,application/pdf"></label>
     </div><div id="doc-flota-error"></div>
-    <div class="doc-import-footer"><span class="note">PDF o imagen (JPEG, PNG, WebP), máximo 10 MB. La vigencia es obligatoria.</span><button class="btn" id="doc-flota-save">Guardar documento aprobado</button></div>
+    <div class="doc-import-footer"><span class="note">PDF o imagen (JPEG, PNG, WebP), máximo 10 MB. Algunos documentos no requieren vencimiento.</span><button class="btn" id="doc-flota-save">Guardar documento aprobado</button></div>
   </section>
+  <div class="doc-section-title"><h3>Expedientes de afiliados</h3><span class="doc-count">${DOCDRIVERS.length} afiliados</span></div>${DOCDRIVERSERR?`<div class="errbox">No se pudieron cargar los afiliados: ${esc(DOCDRIVERSERR)}</div>`:""}
+  <div class="doc-table-wrap"><table><thead><tr><th>Afiliado</th><th>Categoría</th><th>Proveedor</th><th>Cuenta</th><th>Documentos</th></tr></thead><tbody>${expedientes||'<tr><td colspan="5">Sin afiliados disponibles.</td></tr>'}</tbody></table></div>
   <div class="doc-section-title"><h3>Solicitudes y documentos</h3><span class="doc-count">${DOCOPS.length} ${DOCOPS.length===1?"documento":"documentos"}</span></div>${loadError}
   <div class="doc-table-wrap"><table><thead><tr><th>Driver</th><th>Documento</th><th>Origen</th><th>Vigencia</th><th>Estado</th><th>Archivo / autorización</th></tr></thead><tbody>${all||'<tr><td colspan="6">Sin documentos registrados.</td></tr>'}</tbody></table></div>`;
 }
 async function importarDocumentoFlota(){
-  const errorBox=$("doc-flota-error"),button=$("doc-flota-save"),driverId=$("doc-flota-driver").value,tipo=$("doc-flota-type").value,vigencia=$("doc-flota-date").value,file=$("doc-flota-file").files[0];
+  const errorBox=$("doc-flota-error"),button=$("doc-flota-save"),driverId=$("doc-flota-driver").value,tipo=$("doc-flota-type").value,vigencia=DOC_SIN_VIGENCIA.includes(tipo)?null:$("doc-flota-date").value,file=$("doc-flota-file").files[0];
   errorBox.innerHTML="";
-  if(!driverId||!vigencia||!file){errorBox.innerHTML='<div class="errbox">Selecciona driver, vigencia y archivo.</div>';return}
+  const driver=DOCDRIVERS.find(d=>d.id===driverId);
+  if(!driver||!tiposExpediente(driver).some(([k])=>k===tipo)||(!DOC_SIN_VIGENCIA.includes(tipo)&&!vigencia)||!file){errorBox.innerHTML='<div class="errbox">Selecciona un afiliado, documento válido, archivo y fecha cuando corresponda.</div>';return}
   if(file.size>10*1024*1024||!(file.type==="application/pdf"||["image/jpeg","image/png","image/webp"].includes(file.type))){errorBox.innerHTML='<div class="errbox">Usa un PDF o imagen JPEG, PNG o WebP de máximo 10 MB.</div>';return}
   button.disabled=true;
   const ext=(file.name.split(".").pop()||"bin").toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,8)||"bin";
@@ -1082,21 +1116,35 @@ async function asignarRol(){const m=$("eq-m").value.trim().toLowerCase();
   if(!/^[^@\s]+@chazki\.com$/.test(m)){toast("Solo correos @chazki.com");return}
   const {data,error}=await sb.rpc("asignar_rol",{p_email:m,p_rol:$("eq-r").value});
   if(error){toast(error.message);return}toast(data);await cargaExtra();render()}
+let AFILIADOS=[],AFILIADOS_ERR="",AFILIADOS_LOADING=false,AFILIADO_ABIERTO=null,AFILIADO_EDITAR=null,INV_PRESELECCION=null,SOL_VINCULACION=[],SOL_VINCULACION_ERR="";
+async function cargarAfiliados(){
+  AFILIADOS_LOADING=true;AFILIADOS_ERR="";SOL_VINCULACION_ERR="";
+  try{AFILIADOS=await fetchPaged(()=>sb.rpc("listar_afiliados_supervisor"))}
+  catch(error){AFILIADOS=[];AFILIADOS_ERR="No se pudieron cargar los afiliados. Verifica gestion-flotillas-supervisor.sql en Supabase: "+error.message}
+  try{SOL_VINCULACION=await fetchPaged(()=>sb.rpc("listar_solicitudes_vinculacion_flota"))}
+  catch(error){SOL_VINCULACION=[];SOL_VINCULACION_ERR="No se pudieron cargar las solicitudes de vinculación. Verifica solicitudes-vinculacion-flotilla.sql en Supabase: "+error.message}
+  finally{AFILIADOS_LOADING=false}
+}
+function categoriaAfiliado(d){
+  if(d.rol==="flotillero")return "Flotillero";
+  if(d.proveedor_tipo==="flotillero")return "Driver de flotillero";
+  if(d.proveedor_tipo==="independiente")return "Driver independiente";
+  return "Driver · categoría sin definir";
+}
 function vistaProveedores(){
-  const opts=sel=>`<option value="">Sin proveedor</option>`+PRV.map(p=>`<option value="${esc(p.id)}" ${sel==p.id?"selected":""}>${esc(p.nombre)}</option>`).join("");
-  const conductores=DRV.filter(d=>["driver","flotillero"].includes(d.rol));
-  const dr=conductores.map(d=>`<tr><td>${esc(d.nombre)}<br><small>${esc(d.codigo||"")}</small></td><td><select data-rol="${esc(d.id)}">${["driver","flotillero","ops","coordinador","ih","finanzas","master"].map(r=>`<option ${d.rol===r?"selected":""}>${r}</option>`).join("")}</select></td><td><select data-prov="${esc(d.id)}">${opts(d.proveedor_id)}</select></td><td><button class="btn sm" data-gd="${esc(d.id)}">Guardar</button></td></tr>`).join("");
   const pv=PRV.map(p=>{const t=DRV.find(d=>d.id===p.titular_id);return `<tr><td>${esc(p.nombre)}</td><td>${esc(p.tipo)}</td><td>${p.tipo_registro?esc(p.tipo_registro):'<span class="pill w">Sin definir</span>'}</td><td>${esc(t?t.nombre:"—")}</td></tr>`}).join("");
-  const st='style="padding:9px;border:1px solid var(--line);border-radius:10px"';
-  if(!esOps())return `<h3 style="margin:12px 8px 0">Proveedores</h3><table><tr><th>Proveedor</th><th>Tipo</th><th>Registro fiscal</th><th>Titular</th></tr>${pv}</table>`;
-  return `<h3 style="margin:12px 8px 0">Alta de proveedor</h3><div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px">
-    <input id="np-n" placeholder="Nombre del proveedor" ${st} style="flex:2;min-width:180px;padding:9px;border:1px solid var(--line);border-radius:10px">
-    <select id="np-t" ${st}><option value="independiente">Independiente</option><option value="flotillero">Flotillero</option></select>
-    <select id="np-r" ${st}><option value="">Registro fiscal…</option><option>FACTURA</option><option>SIN FACTURA</option></select>
-    <select id="np-u" ${st}><option value="">Quién ve sus pagos…</option>${conductores.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join("")}</select>
-    <button class="btn" id="np-ok">Crear</button></div>
-    <h3 style="margin:12px 8px 0">Proveedores</h3><table><tr><th>Proveedor</th><th>Tipo</th><th>Registro fiscal</th><th>Titular (ve los pagos)</th></tr>${pv||'<tr><td colspan="4">Aún no hay proveedores.</td></tr>'}</table>
-    <h3 style="margin:16px 8px 0">Drivers y flotilleros</h3><small style="padding:0 8px">El personal administrativo se consulta en Equipo.</small><table><tr><th>Driver</th><th>Rol</th><th>Proveedor</th><th></th></tr>${dr||'<tr><td colspan="4">No hay drivers ni flotilleros registrados.</td></tr>'}</table>`}
+  if(ROL==="finanzas")return `<h3 style="margin:12px 8px 0">Proveedores</h3><table><tr><th>Proveedor</th><th>Tipo</th><th>Registro fiscal</th><th>Titular</th></tr>${pv}</table>`;
+  const flotillasVisibles=new Set(AFILIADOS.filter(d=>d.rol==="flotillero"&&d.proveedor_id&&d.proveedor_tipo==="flotillero"&&d.titular_id===d.id).map(d=>String(d.proveedor_id)));
+  const dr=AFILIADOS.filter(d=>d.rol!=="driver"||!d.proveedor_id||!flotillasVisibles.has(String(d.proveedor_id))).map(d=>{
+    const titular=d.rol==="flotillero",valido=titular&&d.proveedor_id&&d.proveedor_tipo==="flotillero"&&d.titular_id===d.id;
+    const abierto=valido&&AFILIADO_ABIERTO===d.id;
+    const hijos=AFILIADOS.filter(x=>x.rol==="driver"&&valido&&String(x.proveedor_id)===String(d.proveedor_id));
+    const lista=hijos.map(x=>`<tr><td>${esc(x.nombre)}<br><small>${esc(x.codigo||"")}</small></td><td>${esc(x.estatus||"—")}</td><td><button class="btn ghost sm" data-af-editar="${esc(x.id)}">Editar driver</button></td></tr>${AFILIADO_EDITAR===x.id?`<tr><td colspan="3"><div style="display:flex;gap:8px;flex-wrap:wrap"><label>Nombre <input id="af-nombre" value="${esc(x.nombre)}"></label><label>Teléfono <input id="af-telefono" value="${esc(x.telefono||"")}"></label><label>Correo de contacto <input id="af-correo" type="email" value="${esc(x.correo_contacto||"")}"></label><button class="btn sm" data-af-guardar="${esc(x.id)}">Guardar contacto</button><button class="btn ghost sm" data-af-cancelar>Cancelar</button></div><small>El correo de contacto no cambia el correo de acceso.</small></td></tr>`:""}`).join("");
+    const detalle=abierto?`<tr><td colspan="4"><strong>Drivers de ${esc(d.nombre)}</strong> <button class="btn sm" data-af-vincular="${esc(d.proveedor_id)}" ${d.proveedor_activo?"":"disabled"}>Añadir driver</button> <button class="btn ghost sm" data-af-invitar="${esc(d.proveedor_id)}" ${d.proveedor_activo?"":"disabled"}>Invitar driver nuevo</button>${d.proveedor_activo?"":" <small>La flotilla está inactiva.</small>"}<table><tr><th>Driver</th><th>Estatus</th><th></th></tr>${lista||'<tr><td colspan="3">Esta flotilla no tiene drivers registrados.</td></tr>'}</table></td></tr>`:"";
+    return `<tr><td>${valido?`<button class="btn ghost sm" data-af-ver="${esc(d.id)}" aria-expanded="${abierto}">${abierto?"▾":"▸"} ${esc(d.nombre)}</button>`:esc(d.nombre)}<br><small>${esc(d.codigo||"")}</small></td><td>${esc(categoriaAfiliado(d))}</td><td>${esc(d.proveedor_nombre||"Sin proveedor")}</td><td>${titular&&!valido?"Sin flotilla vinculada":esc(d.estatus||"—")}</td></tr>${detalle}`;
+  }).join("");
+  return `<h3 style="margin:16px 8px 0">Drivers y flotilleros</h3><small style="padding:0 8px">Abre un flotillero para ver, editar, invitar o solicitar vincular drivers. El personal administrativo se consulta en Equipo. La aprobación y el traslado seguro aún no están habilitados.</small>${AFILIADOS_ERR?`<div class="errbox">${esc(AFILIADOS_ERR)}</div>`:""}${AFILIADOS_LOADING?"<p>Cargando afiliados…</p>":`<table><tr><th>Driver</th><th>Categoría</th><th>Proveedor</th><th>Estatus</th></tr>${dr||'<tr><td colspan="4">No hay drivers ni flotilleros registrados.</td></tr>'}</table>`}
+    <h3 style="margin:16px 8px 0">Solicitudes de vinculación pendientes</h3><small>La solicitud no cambia la flotilla. La aprobación segura está pendiente de implementación.</small>${SOL_VINCULACION_ERR?`<div class="errbox">${esc(SOL_VINCULACION_ERR)}</div>`:""}<table><tr><th>Driver</th><th>Flotillero solicitado</th><th>Fecha</th><th></th></tr>${SOL_VINCULACION.map(s=>`<tr><td>${esc(s.driver_nombre)}</td><td>${esc(s.flotillero_nombre)}</td><td>${esc(new Date(s.solicitada_en).toLocaleString("es-MX"))}</td><td><button class="btn ghost sm" data-af-cancelar-solicitud="${esc(s.id)}">Cancelar solicitud</button></td></tr>`).join("")||'<tr><td colspan="4">Sin solicitudes visibles.</td></tr>'}</table>`}
 let PADRON=[],PADRON_ERR="",PADRON_Q="",PADRON_OFFSET=0,PADRON_MAS=false,PADRON_LOADING=false;
 async function cargarPadron(){
   PADRON_LOADING=true;PADRON_ERR="";
@@ -1130,22 +1178,29 @@ function enlazarPadron(){
   $("padron-prev").onclick=()=>{PADRON_OFFSET=Math.max(0,PADRON_OFFSET-50);cargar()};
   $("padron-next").onclick=()=>{PADRON_OFFSET+=50;cargar()};
 }
-let INVR=[],INVR_CEDIS=[],INVR_FLOTAS=[],INVR_AUD=[],INVR_ERR="";
+let INVR=[],INVR_CEDIS=[],INVR_FLOTAS=[],INVR_AUD=[],INVR_ERR="",INVR_LOADING=false;
 const INV_TIPO={flotillero:"Flotillero",independiente:"Driver independiente",driver:"Driver de flotillero"};
 const INV_EST={pendiente_aprobacion:["Por aprobar","w"],enviada:["Registrada · espera cuenta","w"],aceptada:["Aplicada a la cuenta","ok"],rechazada:["Rechazada","bad"],cancelada:["Cancelada","bad"]};
 async function cargarInvitaciones(){
   INVR_ERR="";
-  const [i,c,p]=await Promise.all([sb.from("invitaciones_red").select("*").order("creado_en",{ascending:false}).limit(300),sb.from("cedis").select("id,nombre,cliente_id").order("nombre"),sb.from("proveedores").select("id,nombre").eq("tipo","flotillero").eq("activo",true).order("nombre")]);
+  try{
+  const [i,c,p]=await Promise.all([sb.from("invitaciones_red").select("*").order("creado_en",{ascending:false}).limit(300),sb.from("cedis").select("id,nombre,cliente_id").order("nombre"),fetchPaged(()=>sb.rpc("listar_flotilleros_invitacion")).then(data=>({data,error:null}),error=>({data:null,error}))]);
   if(i.error)INVR_ERR="No se pudieron cargar las invitaciones. Un administrador debe ejecutar network-invitations.sql en el editor SQL de Supabase y verificar los permisos: "+i.error.message;
   if(c.error)INVR_ERR+=(INVR_ERR?" ":"")+"No se pudieron cargar los CEDIS: "+c.error.message;
-  if(p.error)INVR_ERR+=(INVR_ERR?" ":"")+"No se pudieron cargar los flotilleros: "+p.error.message;
+  if(p.error)INVR_ERR+=(INVR_ERR?" ":"")+"No se pudieron cargar los flotilleros. Verifica invitaciones-flotillero-pendiente.sql en Supabase: "+p.error.message;
   INVR=i.data||[];INVR_CEDIS=c.data||[];INVR_FLOTAS=p.data||[];
+  if(INV_PRESELECCION&&!INVR_FLOTAS.some(x=>`${x.tipo}:${x.id}`===INV_PRESELECCION)){
+    INVR_ERR+=(INVR_ERR?" ":"")+"El flotillero seleccionado ya no está disponible; selecciona otro.";
+    INV_PRESELECCION=null;
+  }
   INVR_AUD=[];
   if(INVR.length){
     const {data,error}=await sb.from("invitaciones_red_auditoria").select("invitacion_id,evento,actor_id,registrado_en,estado").in("invitacion_id",INVR.map(x=>x.id)).order("registrado_en",{ascending:false});
     if(error)INVR_ERR+=(INVR_ERR?" ":"")+"No se pudo cargar el registro de avisos. Verifica invitation-status-audit.sql en Supabase: "+error.message;
     else INVR_AUD=data||[];
   }
+  }catch(error){INVR=[];INVR_CEDIS=[];INVR_FLOTAS=[];INVR_AUD=[];INVR_ERR="No se pudieron cargar las invitaciones y flotilleros: "+(error.message||error)}
+  finally{INVR_LOADING=false}
 }
 function avisosEstadoInvitacion(estado,fecha=new Date()){
   const avisos=[];
@@ -1168,36 +1223,41 @@ async function confirmarEstadoInvitacion(email){
 }
 function mensajeInvitacion(x){
   const url=location.origin+"/";
-  return `Hola${x.nombre?" "+x.nombre:""}, Chazki te invita como ${INV_TIPO[x.tipo]||"driver"}. Abre la app de Driver (${url}) y ${x.estatus==="aceptada"?"entra":"regístrate o entra"} con este correo: ${x.email}`;
+  const espera=x.tipo==="driver"&&x.invitacion_flotillero_id&&!x.proveedor_id?" Primero debe registrarse tu flotillero; después podrás registrarte.":"";
+  return `Hola${x.nombre?" "+x.nombre:""}, Chazki te invita como ${INV_TIPO[x.tipo]||"driver"}.${espera} Abre la app de Driver (${url}) y ${x.estatus==="aceptada"?"entra":"regístrate o entra"} con este correo: ${x.email}`;
+}
+function gmailInvitacion(x){
+  return `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(x.email)}&su=${encodeURIComponent("Invitación a Chazki")}&body=${encodeURIComponent(mensajeInvitacion(x))}`;
 }
 function vistaInvitaciones(){
   const cedisTxt=id=>{const c=INVR_CEDIS.find(y=>y.id===id);return c?`${CLIENTES_NOMBRE[String(c.cliente_id)]||""} · ${c.nombre}`:"—"};
   const pend=INVR.filter(x=>x.estatus==="pendiente_aprobacion"&&x.invitado_por_rol==="flotillero");
   const fila=x=>{const e=INV_EST[x.estatus]||[x.estatus,"w"];
     const acc=x.estatus==="pendiente_aprobacion"&&x.invitado_por_rol==="flotillero"?`<button class="btn sm" data-inv-ok="${esc(x.id)}">Aprobar</button> <button class="btn ghost sm" data-inv-no="${esc(x.id)}">Rechazar</button>`
-      :["enviada","aceptada"].includes(x.estatus)?`<a class="btn ghost sm" data-inv-compartir="${esc(x.id)}" data-canal="whatsapp" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(mensajeInvitacion(x))}">WhatsApp</a> <a class="btn ghost sm" data-inv-compartir="${esc(x.id)}" data-canal="correo" href="mailto:${encodeURIComponent(x.email)}?subject=${encodeURIComponent("Invitación a Chazki")}&body=${encodeURIComponent(mensajeInvitacion(x))}">Preparar / reenviar correo</a>${x.estatus==="enviada"?` <button class="btn ghost sm" data-inv-x="${esc(x.id)}">Cancelar</button>`:""}`
+      :["enviada","aceptada"].includes(x.estatus)?`<a class="btn ghost sm" data-inv-compartir="${esc(x.id)}" data-canal="whatsapp" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(mensajeInvitacion(x))}">WhatsApp</a> <a class="btn ghost sm" data-inv-compartir="${esc(x.id)}" data-canal="correo" target="_blank" rel="noopener" href="${esc(gmailInvitacion(x))}">Preparar / reenviar correo</a>${x.estatus==="enviada"?` <button class="btn ghost sm" data-inv-editar="${esc(x.id)}">Editar invitación</button> <button class="btn ghost sm" data-inv-x="${esc(x.id)}">Cancelar</button>`:""}`
       :x.estatus==="pendiente_aprobacion"?`<button class="btn ghost sm" data-inv-x="${esc(x.id)}">Cancelar</button>`:"";
-    const prov=x.proveedor_id?PRV.find(p=>p.id===x.proveedor_id):null;
+    const prov=x.proveedor_id?(PRV.find(p=>p.id===x.proveedor_id)||INVR_FLOTAS.find(p=>p.tipo==="proveedor"&&String(p.id)===String(x.proveedor_id))):INVR_FLOTAS.find(p=>p.tipo==="invitacion"&&String(p.id)===String(x.invitacion_flotillero_id));
     const auditoria=INVR_AUD.filter(a=>a.invitacion_id===x.id).map(a=>{
       const avisos=avisosEstadoInvitacion(a.estado,new Date(a.registrado_en));
       const evento={solicitud:"Solicitud registrada",invitacion:"Invitación registrada",correo:"Correo preparado",whatsapp:"WhatsApp preparado"}[a.evento]||"Actividad registrada";
       return avisos.length?`<br><small>${esc(evento)} ${esc(new Date(a.registrado_en).toLocaleString("es-MX"))} por ${esc(a.actor_id)}: ${esc(avisos.join(" "))}</small>`:"";
     }).join("");
-    return `<tr><td>${esc(x.nombre||"—")}<br><small>${esc(x.email)}</small></td><td>${esc(INV_TIPO[x.tipo]||x.tipo)}${x.esquema?`<br><small>${esc(x.esquema)}</small>`:""}${prov?`<br><small>Flotilla: ${esc(prov.nombre)}</small>`:""}</td><td>${x.cedis_id?esc(cedisTxt(x.cedis_id)):"—"}</td><td>${x.invitado_por_rol==="flotillero"?"Flotillero":"Chazki"}</td><td><span class="pill ${e[1]}">${esc(e[0])}</span>${x.motivo?`<br><small>${esc(x.motivo)}</small>`:""}${auditoria}</td><td>${acc}</td></tr>`};
+    return `<tr><td>${esc(x.nombre||"—")}<br><small>${esc(x.email)}</small></td><td>${esc(INV_TIPO[x.tipo]||x.tipo)}${x.esquema?`<br><small>${esc(x.esquema)}</small>`:""}${prov?`<br><small>Flotilla: ${esc(prov.nombre)}</small>`:""}</td><td>${x.cedis_id?esc(cedisTxt(x.cedis_id)):"—"}</td><td>${x.invitado_por_rol==="flotillero"?"Flotillero":"Chazki"}</td><td><span class="pill ${e[1]}">${esc(e[0])}</span>${x.tipo==="driver"&&x.invitacion_flotillero_id&&!x.proveedor_id&&x.estatus==="enviada"?`<br><small>Espera el registro del flotillero. Si ya se registró, contacta al administrador.</small>`:""}${x.motivo?`<br><small>${esc(x.motivo)}</small>`:""}${auditoria}</td><td>${acc}</td></tr>`};
   const st='style="padding:9px;border:1px solid var(--line);border-radius:10px"';
   const cedOpts=`<option value="">CEDIS (opcional)…</option>`+INVR_CEDIS.map(c=>`<option value="${esc(c.id)}">${esc((CLIENTES_NOMBRE[String(c.cliente_id)]||"")+" · "+c.nombre)}</option>`).join("");
-  const flotOpts=`<option value="">Selecciona un flotillero…</option>`+INVR_FLOTAS.map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)}</option>`).join("");
+  const flotOpts=`<option value="">${INVR_LOADING?"Cargando flotilleros…":INVR_FLOTAS.length?"Selecciona un flotillero…":"No hay flotilleros activos o invitados disponibles"}</option>`+INVR_FLOTAS.map(p=>`<option value="${esc(p.tipo)}:${esc(p.id)}">${esc(p.nombre)} · ${p.tipo==="invitacion"?"invitado, pendiente de registro":"activo"}</option>`).join("");
   return `${INVR_ERR?`<div class="errbox">${esc(INVR_ERR)}</div>`:""}
     <h3 style="margin:12px 8px 0">Invitar flotillero o driver</h3>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px">
+    ${INVR_LOADING?'<p style="padding:0 8px" role="status">Cargando invitaciones y flotilleros…</p>':""}
+    <fieldset ${INVR_LOADING?"disabled":""} style="display:flex;gap:8px;flex-wrap:wrap;padding:8px;border:0;margin:0">
       <input id="iv-n" placeholder="Nombre o razón social" ${st} style="flex:2;min-width:180px">
       <input id="iv-m" type="email" placeholder="Correo" ${st} style="flex:2;min-width:200px">
-      <select id="iv-t" ${st}><option value="flotillero">Flotillero</option><option value="independiente">Driver independiente</option><option value="driver">Driver de flotillero</option></select>
+      <select id="iv-t" ${st}><option value="flotillero">Flotillero</option><option value="independiente">Driver independiente</option><option value="driver"${INV_PRESELECCION?" selected":""}>Driver de flotillero</option></select>
       <select id="iv-r" ${st}><option value="">Esquema…</option><option value="FACTURA">Con factura</option><option value="SIN FACTURA">Libre (sin factura)</option></select>
       <select id="iv-c" ${st}>${cedOpts}</select>
       <select id="iv-p" ${st} class="hide" disabled>${flotOpts}</select>
-      <button class="btn" id="iv-ok">Invitar</button></div>
-    <small style="padding:0 8px">El registro requiere una invitación aprobada. El correo se prepara aquí y se envía manualmente. Para flotilleros e independientes, supervisores y coordinadores deben elegir un CEDIS asignado.</small>
+      <button class="btn" id="iv-ok">Invitar</button></fieldset>
+    <small style="padding:0 8px">Para vincular desde el inicio, selecciona «Driver de flotillero» y después el flotillero activo o invitado. Si el flotillero aún no se registra, el driver debe esperar a que complete su registro. El correo se abre preparado en Gmail y se envía manualmente. Para flotilleros e independientes, supervisores y coordinadores deben elegir un CEDIS asignado.</small>
     <h3 style="margin:14px 8px 0">Invitaciones y solicitudes (${esc(pend.length)} por aprobar; hasta 300 recientes)</h3>
     <table><tr><th>Invitado</th><th>Categoría</th><th>CEDIS</th><th>Origen</th><th>Estatus</th><th></th></tr>${INVR.map(fila).join("")||'<tr><td colspan="6">Sin invitaciones.</td></tr>'}</table>`}
 function enlazarInvitaciones(){
@@ -1209,17 +1269,27 @@ function enlazarInvitaciones(){
   };
   const tipo=$("iv-t"),esquema=$("iv-r"),cedis=$("iv-c"),flotilla=$("iv-p");
   if(tipo){
+    if(INV_PRESELECCION&&INVR_FLOTAS.length){
+      flotilla.value=INV_PRESELECCION;
+      if(!flotilla.value)toast("El flotillero ya no está disponible; selecciona otro.");
+      INV_PRESELECCION=null;
+    }
     const actualizar=()=>{const esDriver=tipo.value==="driver";esquema.disabled=esDriver;cedis.disabled=esDriver;cedis.classList.toggle("hide",esDriver);flotilla.disabled=!esDriver;flotilla.classList.toggle("hide",!esDriver)};
     tipo.onchange=actualizar;actualizar();
   }
   const ok=$("iv-ok");if(ok)ok.onclick=()=>{
     const params={p_email:$("iv-m").value,p_nombre:$("iv-n").value,p_tipo:$("iv-t").value,p_esquema:$("iv-r").value||null,p_cedis_id:$("iv-c").value?+$("iv-c").value:null};
     if(params.p_tipo==="driver"){
-      const proveedor=$("iv-p").value;
-      if(!proveedor){toast("Selecciona un flotillero activo.");return}
-      confirmarYEnviar(ok,params.p_email,()=>sb.rpc("invitar_driver_flotillero",{p_email:params.p_email,p_nombre:params.p_nombre,p_proveedor_id:+proveedor}));
+      const seleccion=$("iv-p").value;
+      const flotillero=INVR_FLOTAS.find(p=>`${p.tipo}:${p.id}`===seleccion);
+      if(!flotillero){toast("Selecciona un flotillero activo o invitado.");return}
+      const base={p_email:params.p_email,p_nombre:params.p_nombre};
+      confirmarYEnviar(ok,params.p_email,()=>flotillero.tipo==="invitacion"
+        ?sb.rpc("invitar_driver_flotillero_pendiente",{...base,p_invitacion_flotillero_id:flotillero.id})
+        :sb.rpc("invitar_driver_flotilla_sin_traslado",{...base,p_proveedor_id:flotillero.id}));
     }else confirmarYEnviar(ok,params.p_email,()=>sb.rpc("invitar_a_red",params));
   };
+  document.querySelectorAll("[data-inv-editar]").forEach(b=>b.onclick=()=>editarInvitacion(+b.dataset.invEditar));
   document.querySelectorAll("[data-inv-ok]").forEach(b=>b.onclick=()=>{
     const id=+b.dataset.invOk,inv=INVR.find(x=>x.id===id);
     if(!inv){toast("No se encontró la solicitud; actualiza la lista.");return}
@@ -1231,20 +1301,54 @@ function enlazarInvitaciones(){
     if(!inv){toast("No se encontró la invitación; actualiza la lista.");return}
     if(a.dataset.ocupado==="1")return;
     a.dataset.ocupado="1";
-    const ventana=canal==="whatsapp"?window.open("","_blank"):null;
-    if(canal==="whatsapp"&&!ventana){a.dataset.ocupado="";toast("Permite las ventanas emergentes para abrir WhatsApp.");return}
-    if(ventana)ventana.opener=null;
+    const ventana=window.open("","_blank");
+    if(!ventana){a.dataset.ocupado="";toast(`Permite las ventanas emergentes para abrir ${canal==="correo"?"Gmail":"WhatsApp"}.`);return}
+    ventana.opener=null;
     try{
-      if(!await confirmarEstadoInvitacion(inv.email)){if(ventana)ventana.close();return}
+      if(!await confirmarEstadoInvitacion(inv.email)){ventana.close();return}
       const {error}=await sb.rpc("registrar_preparacion_invitacion_red",{p_id:id,p_canal:canal});
       if(error)throw new Error("No se pudo registrar la preparación: "+error.message);
-      if(ventana)ventana.location.href=a.href;else window.location.href=a.href;
+      ventana.location.href=a.href;
       await cargarInvitaciones();if(tab==="w")render();
-    }catch(error){if(ventana)ventana.close();toast(error.message)}
+    }catch(error){ventana.close();toast(error.message)}
     finally{a.dataset.ocupado=""}
   });
   document.querySelectorAll("[data-inv-no]").forEach(b=>b.onclick=()=>{const m=prompt("Motivo del rechazo");if(m===null)return;run(b,()=>sb.rpc("resolver_invitacion_red",{p_id:+b.dataset.invNo,p_aprobar:false,p_motivo:m}))});
   document.querySelectorAll("[data-inv-x]").forEach(b=>b.onclick=()=>run(b,()=>sb.rpc("cancelar_invitacion_red",{p_id:+b.dataset.invX})));
+}
+function editarInvitacion(id){
+  const inv=INVR.find(x=>x.id===id&&x.estatus==="enviada");
+  if(!inv){toast("La invitación ya no está disponible; actualiza la lista.");return}
+  const modal=$("modal");
+  const seleccion=inv.proveedor_id?`proveedor:${inv.proveedor_id}`:inv.invitacion_flotillero_id?`invitacion:${inv.invitacion_flotillero_id}`:"";
+  const flotillas=INVR_FLOTAS.map(p=>`<option value="${esc(p.tipo)}:${esc(p.id)}" ${seleccion===`${p.tipo}:${p.id}`?"selected":""}>${esc(p.nombre)} · ${p.tipo==="invitacion"?"invitado":"activo"}</option>`).join("");
+  const cedis=INVR_CEDIS.map(c=>`<option value="${esc(c.id)}" ${String(c.id)===String(inv.cedis_id)?"selected":""}>${esc((CLIENTES_NOMBRE[String(c.cliente_id)]||"")+" · "+c.nombre)}</option>`).join("");
+  modal.innerHTML=`<div class="box"><h2>Editar invitación</h2>
+    <p>Solo para invitaciones sin cuenta. Los cambios no envían correo automáticamente.</p>
+    <label>Nombre</label><input id="ie-nombre" type="text" maxlength="200" value="${esc(inv.nombre||"")}">
+    <label>Correo de invitación</label><input id="ie-email" type="text" maxlength="254" value="${esc(inv.email)}">
+    <label>Categoría</label><select id="ie-tipo">${Object.entries(INV_TIPO).map(([v,n])=>`<option value="${v}" ${inv.tipo===v?"selected":""}>${esc(n)}</option>`).join("")}</select>
+    <div id="ie-independiente"><label>Esquema</label><select id="ie-esquema"><option value="">Sin definir</option><option value="FACTURA" ${inv.esquema==="FACTURA"?"selected":""}>Con factura</option><option value="SIN FACTURA" ${inv.esquema==="SIN FACTURA"?"selected":""}>Sin factura</option></select>
+    <label>CEDIS</label><select id="ie-cedis"><option value="">Selecciona un CEDIS…</option>${cedis}</select></div>
+    <div id="ie-driver"><label>Flotillero</label><select id="ie-flotilla"><option value="">Selecciona un flotillero…</option>${flotillas}</select></div>
+    <div id="ie-error"></div><div style="display:flex;gap:8px;margin-top:14px"><button class="btn ghost" id="ie-cancelar">Cancelar</button><button class="btn" id="ie-guardar">Guardar cambios</button></div></div>`;
+  modal.classList.remove("hide");
+  const actualizar=()=>{const driver=$("ie-tipo").value==="driver";$("ie-driver").classList.toggle("hide",!driver);$("ie-independiente").classList.toggle("hide",driver)};
+  $("ie-tipo").onchange=actualizar;actualizar();
+  $("ie-cancelar").onclick=()=>modal.classList.add("hide");
+  $("ie-guardar").onclick=async()=>{
+    const b=$("ie-guardar"),errorBox=$("ie-error"),tipo=$("ie-tipo").value,email=$("ie-email").value.trim();
+    const original={email:inv.email,nombre:inv.nombre??null,tipo:inv.tipo,esquema:inv.esquema??null,cedis_id:inv.cedis_id??null,proveedor_id:inv.proveedor_id??null,invitacion_flotillero_id:inv.invitacion_flotillero_id??null};
+    const fleet=tipo==="driver"?INVR_FLOTAS.find(p=>`${p.tipo}:${p.id}`===$("ie-flotilla").value):null;
+    if(tipo==="driver"&&!fleet){errorBox.innerHTML='<div class="errbox">Selecciona un flotillero disponible.</div>';return}
+    b.disabled=true;errorBox.innerHTML="";
+    try{
+      if(!await confirmarEstadoInvitacion(email)){b.disabled=false;return}
+      const {data,error}=await sb.rpc("editar_invitacion_red",{p_id:id,p_original:original,p_email:email,p_nombre:$("ie-nombre").value,p_tipo:tipo,p_esquema:tipo==="driver"?null:$("ie-esquema").value||null,p_cedis_id:tipo==="driver"?null:($("ie-cedis").value?+$("ie-cedis").value:null),p_proveedor_id:fleet?.tipo==="proveedor"?fleet.id:null,p_invitacion_flotillero_id:fleet?.tipo==="invitacion"?fleet.id:null});
+      if(error)throw error;
+      modal.classList.add("hide");await cargarInvitaciones();if(tab==="w")render();toast(data);
+    }catch(error){errorBox.innerHTML=`<div class="errbox">${esc(error.message||error)}</div>`;b.disabled=false}
+  };
 }
 function enlazar(){
   if(tab==="w")enlazarInvitaciones();
@@ -1252,6 +1356,15 @@ function enlazar(){
   const ap=$("analytics-period");if(ap)ap.onchange=()=>{analyticsGrain=ap.value;render()};
   const fp=$("finance-period");if(fp)fp.onchange=()=>{financeGrain=fp.value;render()};
   const importDoc=$("doc-flota-save");if(importDoc)importDoc.onclick=importarDocumentoFlota;
+  const docDriver=$("doc-flota-driver"),docTipo=$("doc-flota-type");
+  if(docDriver&&docTipo){
+    const actualizarTipos=()=>{const d=DOCDRIVERS.find(x=>x.id===docDriver.value),actual=docTipo.value;
+      docTipo.innerHTML=(d?tiposExpediente(d):DOC_OPS_TIPOS.filter(([k])=>!DOC_FLOTILLERO.includes(k))).map(([k,n])=>`<option value="${esc(k)}">${esc(n)}</option>`).join("");
+      if([...docTipo.options].some(o=>o.value===actual))docTipo.value=actual;
+      actualizarFecha()};
+    const actualizarFecha=()=>{const sin=DOC_SIN_VIGENCIA.includes(docTipo.value);$("doc-flota-date-label").classList.toggle("hide",sin);$("doc-flota-date").disabled=sin;if(sin)$("doc-flota-date").value=""};
+    docDriver.onchange=actualizarTipos;docTipo.onchange=actualizarFecha;actualizarTipos();
+  }
   document.querySelectorAll("[data-eq-d]").forEach(b=>b.onclick=()=>{EQ_ABIERTO=EQ_ABIERTO===b.dataset.eqD?null:b.dataset.eqD;render()});
   document.querySelectorAll("[data-asg-fix]").forEach(b=>b.onclick=()=>abrirFormAsignacion(CSV_ASIGNACIONES_RESULT.errores[+b.dataset.asgFix]));
   document.querySelectorAll("[data-asg-edit]").forEach(b=>b.onclick=()=>{const [cli,ced]=b.dataset.asgEdit.split("|"),a=EQ_ASIG.find(x=>String(x.cliente_id)===cli&&String(x.cedis_id)===ced);if(a)abrirFormAsignacion({cliente_id:a.cliente_id,cedis_id:a.cedis_id,supervisor_id:a.supervisor_id,coordinador_id:a.coordinador_id})});
@@ -1275,8 +1388,14 @@ function enlazar(){
   document.querySelectorAll("[data-det]").forEach(b=>b.onclick=()=>verDetalleRuta(b.dataset.det));
   document.querySelectorAll("[data-val]").forEach(b=>b.onclick=()=>abrirValidar(+b.dataset.val));
   document.querySelectorAll("[data-anu]").forEach(b=>b.onclick=()=>anular(+b.dataset.anu));
-  document.querySelectorAll("[data-gd]").forEach(b=>b.onclick=()=>guardarDriver(b.dataset.gd));
-  const ok=$("np-ok");if(ok)ok.onclick=crearProveedor;document.querySelectorAll("[data-cpa]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpa,true));document.querySelectorAll("[data-cpr]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpr,false));document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-rev]").forEach(b=>b.onclick=()=>revisarCan(+b.dataset.rev));
+  document.querySelectorAll("[data-af-ver]").forEach(b=>b.onclick=()=>{AFILIADO_ABIERTO=AFILIADO_ABIERTO===b.dataset.afVer?null:b.dataset.afVer;AFILIADO_EDITAR=null;render()});
+  document.querySelectorAll("[data-af-editar]").forEach(b=>b.onclick=()=>{AFILIADO_EDITAR=b.dataset.afEditar;render()});
+  document.querySelectorAll("[data-af-cancelar]").forEach(b=>b.onclick=()=>{AFILIADO_EDITAR=null;render()});
+  document.querySelectorAll("[data-af-guardar]").forEach(b=>b.onclick=()=>guardarContactoFlota(b));
+  document.querySelectorAll("[data-af-vincular]").forEach(b=>b.onclick=()=>abrirSolicitudVinculacion(b.dataset.afVincular));
+  document.querySelectorAll("[data-af-cancelar-solicitud]").forEach(b=>b.onclick=async()=>{if(!confirm("¿Cancelar esta solicitud de vinculación?"))return;b.disabled=true;const {error}=await sb.rpc("cancelar_solicitud_vinculacion_flota",{p_id:+b.dataset.afCancelarSolicitud});if(error){toast(error.message);b.disabled=false;return}await cargarAfiliados();render();toast("Solicitud cancelada")});
+  document.querySelectorAll("[data-af-invitar]").forEach(b=>b.onclick=()=>{INV_PRESELECCION=`proveedor:${b.dataset.afInvitar}`;INVR_FLOTAS=[];document.querySelector('.role-nav button[data-t="w"]').click()});
+  document.querySelectorAll("[data-cpa]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpa,true));document.querySelectorAll("[data-cpr]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpr,false));document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-rev]").forEach(b=>b.onclick=()=>revisarCan(+b.dataset.rev));
   document.querySelectorAll("[data-tfv]").forEach(b=>b.onclick=()=>{TFV=b.dataset.tfv;render()});
   document.querySelectorAll("[data-re]").forEach(b=>b.onclick=()=>formRegla(+b.dataset.re));
   const rgn=$("rg-n");if(rgn)rgn.onclick=()=>formRegla(null);const rfc=$("rg-fc");if(rfc){rfc.onchange=()=>{RGF.cuenta=rfc.value;render()};$("rg-ft").onchange=e=>{RGF.tipo=e.target.value;render()}}
@@ -1377,12 +1496,33 @@ async function resolverPnROps(id,accion){
   await load();
   toast(accion==="aceptar"?"Evidencia aceptada; reclamo cerrado":accion==="solicitar_soporte"?"Solicitud de soporte enviada; nuevo plazo de 24 horas":"Reclamo cerrado y descuento programado para las próximas liquidaciones");
 }
-async function guardarDriver(id){const rol=document.querySelector(`[data-rol="${id}"]`).value,pv=document.querySelector(`[data-prov="${id}"]`).value;
-  const {error}=await sb.from("drivers").update({rol,proveedor_id:pv?+pv:null}).eq("id",id);
-  if(error){toast(error.message);return}await cargaExtra();render();toast("Driver actualizado")}
-async function crearProveedor(){const n=$("np-n").value.trim();if(!n){toast("Escribe el nombre del proveedor");return}
-  const {error}=await sb.from("proveedores").insert({nombre:n,tipo:$("np-t").value,tipo_registro:$("np-r").value||null,titular_id:$("np-u").value||null});
-  if(error){toast(error.message);return}await cargaExtra();render();toast("Proveedor creado")}
+async function abrirSolicitudVinculacion(proveedorId){
+  const titular=AFILIADOS.find(d=>d.rol==="flotillero"&&String(d.proveedor_id)===String(proveedorId)&&d.titular_id===d.id);
+  if(!titular){toast("No se encontró el flotillero; actualiza la lista.");return}
+  const modal=$("modal");modal.classList.remove("hide");
+  modal.innerHTML=`<div class="box"><h2>Añadir driver a ${esc(titular.nombre)}</h2><p>Selecciona un driver independiente activo. Se registrará una solicitud; la aprobación y el traslado seguro aún no están disponibles. El driver no cambia de flotilla al solicitarlo.</p><div id="af-sol-contenido">Cargando drivers…</div><div id="af-sol-error"></div><button class="btn ghost" id="af-sol-cerrar">Cerrar</button></div>`;
+  $("af-sol-cerrar").onclick=()=>modal.classList.add("hide");
+  try{
+    const drivers=await fetchPaged(()=>sb.rpc("listar_independientes_vinculacion"));
+    if(modal.classList.contains("hide"))return;
+    $("af-sol-contenido").innerHTML=drivers.length?`<label for="af-sol-driver">Driver independiente activo</label><select id="af-sol-driver"><option value="">Selecciona un driver…</option>${drivers.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)} · ${esc(d.codigo||"Sin código")}</option>`).join("")}</select><button class="btn" id="af-sol-guardar" style="margin:12px 8px">Solicitar vinculación</button>`:"<p>No hay drivers independientes activos disponibles.</p>";
+    const guardar=$("af-sol-guardar");if(guardar)guardar.onclick=async()=>{
+      const id=$("af-sol-driver").value;if(!drivers.some(d=>d.id===id)){ $("af-sol-error").innerHTML='<div class="errbox">Selecciona un driver de la lista.</div>';return}
+      guardar.disabled=true;
+      const {data,error}=await sb.rpc("solicitar_vinculacion_flota",{p_driver_id:id,p_proveedor_id:+proveedorId});
+      if(error){$("af-sol-error").innerHTML=`<div class="errbox">${esc(error.message)}</div>`;guardar.disabled=false;return}
+      modal.classList.add("hide");await cargarAfiliados();if(tab==="p")render();toast(data);
+    };
+  }catch(error){$("af-sol-contenido").innerHTML="";$("af-sol-error").innerHTML=`<div class="errbox">No se pudieron cargar los drivers: ${esc(error.message||error)}</div>`}
+}
+async function guardarContactoFlota(button){
+  const d=AFILIADOS.find(x=>x.id===button.dataset.afGuardar);
+  if(!d){toast("No se encontró el driver; actualiza la lista.");return}
+  button.disabled=true;
+  const {error}=await sb.rpc("editar_contacto_driver_flota",{p_driver_id:d.id,p_proveedor_id:d.proveedor_id,p_nombre:$("af-nombre").value,p_telefono:$("af-telefono").value,p_correo_contacto:$("af-correo").value});
+  if(error){toast(error.message);button.disabled=false;return}
+  AFILIADO_EDITAR=null;await cargarAfiliados();render();toast(AFILIADOS_ERR?"Contacto guardado, pero no se pudo actualizar la lista.":"Contacto actualizado");
+}
 async function anular(rutaId){
   const pg=await sb.from("pagos").select("estatus").eq("ruta_id",rutaId).eq("concepto","servicio");
   if(pg.error){toast(pg.error.message);return}
