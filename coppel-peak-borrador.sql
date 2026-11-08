@@ -176,13 +176,12 @@ create or replace function private.calcular_coppel_peak_asistencia(
 language plpgsql stable set search_path = ''
 as $$
 declare
-  v_completa boolean;
   v_ruta record;
   v_ids bigint[] := '{}';
   v_tarifa numeric;
   v_total numeric := 0;
 begin
-  v_completa := private.coppel_peak_asistencia_completa(p_lunes,p_dias,p_hubo_no_show);
+  perform private.coppel_peak_asistencia_completa(p_lunes,p_dias,p_hubo_no_show);
   if p_rutas is null or jsonb_typeof(p_rutas) <> 'array' then
     raise exception 'Se requiere una lista de rutas validadas';
   end if;
@@ -204,7 +203,7 @@ begin
     if not found then raise exception 'Ruta sin configuración Peak para el CEDIS %',v_ruta.cedis_id; end if;
     v_total := v_total + v_tarifa*v_ruta.entregados;
   end loop;
-  return case when v_completa then round(v_total,2) else 0 end;
+  return round(v_total,2);
 end;
 $$;
 revoke all on function private.calcular_coppel_peak_asistencia(date,date[],boolean,jsonb)
@@ -220,6 +219,8 @@ declare
   v_hubo_no_show boolean;
   v_rutas jsonb;
   v_asistencia numeric;
+  v_asistencia_completa boolean;
+  v_dias_faltantes date[];
   v_rutas_domingo integer;
   v_proveedores bigint[];
   v_faltan_proveedores boolean;
@@ -256,6 +257,9 @@ begin
       and ns.fecha_servicio between p_lunes and p_lunes+6
       and ns.estado <> 'apelacion_aceptada'
   ) into v_hubo_no_show;
+  v_asistencia_completa := private.coppel_peak_asistencia_completa(p_lunes,v_dias,v_hubo_no_show);
+  select coalesce(array_agg(p_lunes + dia order by dia),'{}'::date[]) into v_dias_faltantes
+  from generate_series(0,5) as dia where not (p_lunes + dia = any(v_dias));
 
   select coalesce(jsonb_agg(jsonb_build_object(
     'ruta_id',r.id,'cedis_id',r.cedis_id,
@@ -296,7 +300,8 @@ begin
     and (r.checkin_at at time zone 'America/Mexico_City')::date=p_lunes+6;
   return jsonb_build_object(
     'lunes',p_lunes,'dias_asistencia',to_jsonb(v_dias),'hubo_no_show',v_hubo_no_show,
-    'rutas_validadas',v_rutas,'bono_asistencia_base',v_asistencia,
+    'rutas_validadas',v_rutas,'bono_asistencia_potencial',v_asistencia,
+    'asistencia_completa',v_asistencia_completa,'dias_faltantes',to_jsonb(v_dias_faltantes),
     'proveedores',to_jsonb(v_proveedores),
     'asistencia_requiere_revision',v_faltan_proveedores or cardinality(v_proveedores)>1 or v_registros_fiscales>1,
     'rutas_domingo',v_rutas_domingo,

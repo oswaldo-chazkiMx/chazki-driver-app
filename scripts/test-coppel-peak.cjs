@@ -119,7 +119,7 @@ test("configured route calculation rejects special zones, vehicles and out-of-pe
   }finally{await db.close()}
 });
 
-test("attendance requires all six weekdays and any NO SHOW disqualifies the week",async()=>{
+test("attendance completeness reports missing weekdays and active NO SHOW",async()=>{
   const db=await database();
   try{
     await db.exec(migration);
@@ -138,7 +138,7 @@ test("attendance requires all six weekdays and any NO SHOW disqualifies the week
   }finally{await db.close()}
 });
 
-test("weekly bonus uses each validated route's plaza and includes Sunday without duplicates",async()=>{
+test("potential attendance bonus uses validated routes even when NO SHOW requires review",async()=>{
   const db=await database();
   try{
     await db.exec(migration);
@@ -152,7 +152,7 @@ test("weekly bonus uses each validated route's plaza and includes Sunday without
       "select private.calcular_coppel_peak_asistencia($1::date,$2::date[],$3,$4::jsonb)::text as result",
       ["2026-11-09",days,noShow,JSON.stringify(entries)])).rows[0].result;
     assert.equal(await calc(false,routes),"350.00");
-    assert.equal(await calc(true,routes),"0");
+    assert.equal(await calc(true,routes),"350.00");
     assert.equal(await calc(false,routes.slice(0,1)),"200.00");
     await assert.rejects(calc(false,[...routes,routes[0]]),/duplicada o inválida/);
     await assert.rejects(calc(false,[{...routes[0],cedis_id:999}]),/sin configuración Peak/);
@@ -182,7 +182,9 @@ test("weekly preview derives attendance and validated routes from database recor
     `);
     const preview=async()=>(await db.query("select private.coppel_peak_previsualizar_semana($1,'2026-11-09') as result",[driver])).rows[0].result;
     let result=await preview();
-    assert.equal(result.bono_asistencia_base,0);
+    assert.equal(result.bono_asistencia_potencial,200);
+    assert.equal(result.asistencia_completa,false);
+    assert.deepEqual(result.dias_faltantes,["2026-11-10"]);
     assert.equal(result.rutas_domingo,1);
     assert.equal(result.bono_domingo_base,300);
     assert.equal(result.domingo_requiere_revision,true);
@@ -191,10 +193,12 @@ test("weekly preview derives attendance and validated routes from database recor
     assert.equal(result.asistencia_requiere_revision,false);
     await db.exec("update public.cancelaciones set estatus='aprobada' where id=1");
     result=await preview();
-    assert.equal(result.bono_asistencia_base,200);
+    assert.equal(result.bono_asistencia_potencial,200);
+    assert.equal(result.asistencia_completa,true);
+    assert.deepEqual(result.dias_faltantes,[]);
     assert.deepEqual(result.dias_asistencia,["2026-11-09","2026-11-10","2026-11-11","2026-11-12","2026-11-13","2026-11-14","2026-11-15"]);
     await db.exec("insert into public.liquidaciones values (3,6,1,'COPPEL','SEDAN','PAQUETE',50,11,'SIN FACTURA')");
-    assert.equal((await preview()).bono_asistencia_base,350);
+    assert.equal((await preview()).bono_asistencia_potencial,350);
     assert.equal((await preview()).asistencia_requiere_revision,true);
     assert.equal((await preview()).domingo_requiere_revision,false);
     await db.exec("update public.liquidaciones set proveedor_id=null where id=3");
@@ -209,18 +213,21 @@ test("weekly preview derives attendance and validated routes from database recor
     await db.exec(`insert into public.no_show_casos values (1,'${driver}','COPPEL','2026-11-11','apelacion_aceptada')`);
     result=await preview();
     assert.equal(result.hubo_no_show,false);
-    assert.equal(result.bono_asistencia_base,350);
+    assert.equal(result.bono_asistencia_potencial,350);
+    assert.equal(result.asistencia_completa,true);
     for(const estado of ["reportado","apelado","apelacion_rechazada"]){
       await db.query("update public.no_show_casos set estado=$1 where id=1",[estado]);
       result=await preview();
       assert.equal(result.hubo_no_show,true,estado);
-      assert.equal(result.bono_asistencia_base,0,estado);
+      assert.equal(result.bono_asistencia_potencial,350,estado);
+      assert.equal(result.asistencia_completa,false,estado);
     }
     await db.exec("update public.no_show_casos set estado='apelacion_aceptada' where id=1");
     await db.exec(`insert into public.no_show_casos values (2,'${driver}','COPPEL','2026-11-12','reportado')`);
     result=await preview();
     assert.equal(result.hubo_no_show,true);
-    assert.equal(result.bono_asistencia_base,0);
+    assert.equal(result.bono_asistencia_potencial,350);
+    assert.equal(result.asistencia_completa,false);
     assert.equal(result.bono_domingo_base,300);
     await db.exec("insert into public.liquidaciones values (4,1,1,'COPPEL','SEDAN','PAQUETE',100,10,'FACTURA')");
     await assert.rejects(preview(),/duplicada o inválida/);
