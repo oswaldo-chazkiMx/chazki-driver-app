@@ -89,6 +89,39 @@ $$;
 revoke all on function public.walmart_cambiar_modelo(bigint,bigint,smallint) from public, anon;
 grant execute on function public.walmart_cambiar_modelo(bigint,bigint,smallint) to authenticated;
 
+create or replace function public.walmart_consultar_modelo(
+  p_proveedor_id bigint, p_cedis_id bigint
+) returns smallint
+language plpgsql stable security definer set search_path = ''
+as $$
+declare
+  v_cliente_id bigint;
+  v_rol text;
+  v_opcion smallint;
+begin
+  if auth.uid() is null or public.mi_acceso_administrativo() is not true then
+    raise exception 'Acceso administrativo requerido';
+  end if;
+  select ce.cliente_id into v_cliente_id
+  from public.cedis ce join public.clientes cl on cl.id=ce.cliente_id
+  where ce.id=p_cedis_id and ce.activo and cl.activo
+    and public.operativo_normalizar(cl.nombre)='walmart';
+  if v_cliente_id is null or not exists (
+    select 1 from public.proveedores p where p.id=p_proveedor_id and p.activo
+  ) then raise exception 'Proveedor o CEDIS Walmart no válido o inactivo'; end if;
+  v_rol := public.operativo_rol_actual();
+  if (
+    v_rol in ('master','ops') or
+    (v_rol='ih' and public.operativo_asignado_a(v_cliente_id,p_cedis_id,'ih'))
+  ) is not true then raise exception 'No tienes permiso para consultar el modelo en este CEDIS'; end if;
+  select opcion into v_opcion from private.walmart_acuerdos
+    where proveedor_id=p_proveedor_id and cedis_id=p_cedis_id;
+  return coalesce(v_opcion,1)::smallint;
+end;
+$$;
+revoke all on function public.walmart_consultar_modelo(bigint,bigint) from public, anon;
+grant execute on function public.walmart_consultar_modelo(bigint,bigint) to authenticated;
+
 create or replace function private.calcular_walmart_importes(
   p_base numeric, p_porcentaje_semanal numeric,
   p_visitas_asignadas integer, p_visitas_realizadas integer,
