@@ -249,7 +249,7 @@ test("Walmart rates retain both options, weekly percentages and confirmed center
       ["FC Guadalajara","Large","3969.00","3200.00","3000.00","0.7500","0.8500"],
       ["FC Mérida","Large","4500.00","3600.00","3400.00","0.8500","0.9000"]
     ]);
-    assert.ok(rows.every(x=>x.desde==="2026-11-01"&&x.hasta==="2026-12-31"));
+    assert.ok(rows.every(x=>x.desde==="2026-11-09"&&x.hasta==="2026-12-31"));
     await db.exec("set role authenticated");
     await assert.rejects(db.query("select * from public.walmart_tarifas"),/permission denied/);
   }finally{await db.close()}
@@ -359,6 +359,7 @@ test("Walmart cancellation pays 40 percent with fiscal treatment and agreement r
     assert.equal(factura.saldo_retenido,292.32);
     assert.equal(factura.descuento_visitas,0);
     assert.equal(factura.descuento_fallida,0);
+    await assert.rejects(calc(1,"2026-11-08","3.5T",1,"FACTURA"),/sola tarifa Walmart vigente/);
     await assert.rejects(calc(1,"2027-01-01","3.5T",1,"FACTURA"),/sola tarifa Walmart vigente/);
     await assert.rejects(calc(1,"2026-11-09","Sedan",1,"FACTURA"),/Unidad sin tarifa/);
     await db.exec("set role authenticated");
@@ -404,7 +405,11 @@ test("configured Walmart calculation uses the confirmed model and exact route ta
     const calc=async(cedis,fecha,unidad,opcion)=>(await db.query(
       "select private.calcular_walmart_tarifa_configurada($1,$2::date,$3,$4::smallint,100,95,true,false,'SIN FACTURA',0.05,0.16,0.02) as value",
       [cedis,fecha,unidad,opcion])).rows[0].value;
-    const first=await calc(1,"2026-11-01","3.5T",1);
+    for(const [cedis,unidad] of [[1,"3.5T"],[2,"3.5T"],[3,"Large"],[4,"Large"]]){
+      await assert.rejects(calc(cedis,"2026-11-08",unidad,1),/una sola tarifa/);
+      assert.equal((await calc(cedis,"2026-11-09",unidad,1)).vigencia_desde,"2026-11-09");
+    }
+    const first=await calc(1,"2026-11-09","3.5T",1);
     assert.equal(first.pago_base,4500);
     assert.equal(first.tarifa_cliente,5565.5);
     assert.equal(first.porcentaje_semanal,0.75);
@@ -418,7 +423,7 @@ test("configured Walmart calculation uses the confirmed model and exact route ta
     assert.equal(merida.tipo_unidad,"Large");
     assert.equal(merida.pago_base,3400);
     assert.equal(merida.porcentaje_semanal,0.9);
-    await assert.rejects(calc(1,"2026-10-31","3.5T",1),/una sola tarifa/);
+    await assert.rejects(calc(1,"2026-11-08","3.5T",1),/una sola tarifa/);
     await assert.rejects(calc(1,"2027-01-01","3.5T",1),/una sola tarifa/);
     await assert.rejects(calc(1,"2026-11-15","Large",1),/una sola tarifa/);
     await assert.rejects(calc(1,"2026-11-15","5T",1),/Unidad sin tarifa/);
@@ -454,5 +459,17 @@ test("Walmart load does not overwrite existing conflicting rates",async()=>{
     await assert.rejects(db.exec(migration),/difiere del archivo/);
     await db.exec("rollback");
     assert.equal((await db.query("select pago_opcion_1::text as pago from public.walmart_tarifas where cedis_id=1")).rows[0].pago,"1.00");
+  }finally{await db.close()}
+});
+
+test("Walmart load rejects an overlapping older draft without changing it",async()=>{
+  const db=await database();
+  try{
+    await db.exec(migration);
+    await db.exec(`update public.walmart_tarifas set vigencia_desde='2026-11-01' where cedis_id=1`);
+    await assert.rejects(db.exec(migration),/se superpone con la vigencia Walmart/);
+    await db.exec("rollback");
+    const rows=(await db.query("select vigencia_desde::text as desde from public.walmart_tarifas where cedis_id=1")).rows;
+    assert.deepEqual(rows,[{desde:"2026-11-01"}]);
   }finally{await db.close()}
 });

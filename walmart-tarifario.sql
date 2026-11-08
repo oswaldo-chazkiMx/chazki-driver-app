@@ -395,18 +395,29 @@ begin
       raise exception 'Se requiere exactamente un CEDIS Walmart activo para %; encontrados %',t.centro,v_count;
     end if;
 
+    if exists (
+      select 1 from public.walmart_tarifas w
+      where w.cedis_id=v_cedis_id and w.tipo_unidad=t.unidad and w.esquema='RUTA'
+        and w.zona='LOCAL' and w.variable='REGULAR'
+        and w.vigencia_desde <> date '2026-11-09'
+        and w.vigencia_desde <= date '2026-12-31'
+        and w.vigencia_hasta >= date '2026-11-09'
+    ) then
+      raise exception 'La tarifa existente de % se superpone con la vigencia Walmart; revisa antes de continuar',t.centro;
+    end if;
+
     insert into public.walmart_tarifas
       (cedis_id,tipo_unidad,esquema,zona,variable,vigencia_desde,vigencia_hasta,
        tarifa_cliente,pago_opcion_1,pago_opcion_2,semanal_opcion_1,semanal_opcion_2)
     values
-      (v_cedis_id,t.unidad,'RUTA','LOCAL','REGULAR','2026-11-01','2026-12-31',
+      (v_cedis_id,t.unidad,'RUTA','LOCAL','REGULAR','2026-11-09','2026-12-31',
        t.cobro,t.opcion_1,t.opcion_2,t.semanal_1,t.semanal_2)
     on conflict (cedis_id,tipo_unidad,esquema,zona,variable,vigencia_desde) do nothing;
 
     if not exists (
       select 1 from public.walmart_tarifas w
       where w.cedis_id=v_cedis_id and w.tipo_unidad=t.unidad and w.esquema='RUTA'
-        and w.zona='LOCAL' and w.variable='REGULAR' and w.vigencia_desde='2026-11-01'
+        and w.zona='LOCAL' and w.variable='REGULAR' and w.vigencia_desde='2026-11-09'
         and w.vigencia_hasta='2026-12-31' and w.tarifa_cliente=t.cobro
         and w.pago_opcion_1=t.opcion_1 and w.pago_opcion_2=t.opcion_2
         and w.semanal_opcion_1=t.semanal_1 and w.semanal_opcion_2=t.semanal_2
