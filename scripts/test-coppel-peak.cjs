@@ -112,6 +112,41 @@ test("weekly bonus uses each validated route's plaza and includes Sunday without
   }finally{await db.close()}
 });
 
+test("Sunday bonus pays once per Sunday with routes and never for cancellation alone",async()=>{
+  const db=await database();
+  try{
+    await db.exec(migration);
+    const calc=async(fecha,rutas)=>(await db.query(
+      "select private.coppel_peak_bono_domingo($1::date,$2)::text as result",
+      [fecha,rutas])).rows[0].result;
+    assert.equal(await calc("2026-11-15",0),"0");
+    assert.equal(await calc("2026-11-15",1),"300");
+    assert.equal(await calc("2026-11-15",3),"300");
+    assert.equal(await calc("2026-11-14",1),"0");
+    assert.equal(await calc("2027-01-10",1),"300");
+    await assert.rejects(calc("2026-11-08",1),/Fecha o número de rutas inválidos/);
+    await assert.rejects(calc("2027-01-11",1),/Fecha o número de rutas inválidos/);
+    await assert.rejects(calc("2026-11-15",-1),/Fecha o número de rutas inválidos/);
+  }finally{await db.close()}
+});
+
+test("reconciliation proposes only the difference and flags overpayments for review",async()=>{
+  const db=await database();
+  try{
+    await db.exec(migration);
+    const calc=async(total,registered)=>(await db.query(
+      "select private.coppel_peak_conciliar_bono($1::numeric,$2::numeric) as result",
+      [total,registered])).rows[0].result;
+    assert.deepEqual(await calc(350,0),{calculado:350,registrado:0,estado:"pendiente",diferencia:350});
+    assert.deepEqual(await calc(350,350),{calculado:350,registrado:350,estado:"conciliado",diferencia:0});
+    assert.deepEqual(await calc(500,350),{calculado:500,registrado:350,estado:"pendiente",diferencia:150});
+    assert.deepEqual(await calc(0,350),{calculado:0,registrado:350,estado:"revision",diferencia:-350});
+    await assert.rejects(calc(-1,0),/Importes inválidos/);
+    await assert.rejects(calc(1.001,0),/Importes inválidos/);
+    await assert.rejects(calc("NaN",0),/Importes inválidos/);
+  }finally{await db.close()}
+});
+
 test("missing centers or conflicts roll back the draft without changing existing data",async()=>{
   for(const sql of ["update public.cedis set nombre='otro' where id=18","update public.cedis set activo=false where id=22"]){
     const db=await database();

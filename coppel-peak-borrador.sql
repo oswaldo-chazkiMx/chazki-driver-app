@@ -160,4 +160,47 @@ $$;
 revoke all on function private.calcular_coppel_peak_asistencia(date,date[],boolean,jsonb)
   from public, anon, authenticated;
 
+create or replace function private.coppel_peak_bono_domingo(
+  p_fecha date, p_rutas_validas integer
+) returns numeric
+language plpgsql immutable set search_path = ''
+as $$
+begin
+  if p_fecha is null or p_fecha < date '2026-11-09' or p_fecha > date '2027-01-10'
+    or p_rutas_validas is null or p_rutas_validas < 0 then
+    raise exception 'Fecha o número de rutas inválidos para el bono dominical COPPEL';
+  end if;
+  return case when extract(isodow from p_fecha)=7 and p_rutas_validas>0 then 300 else 0 end;
+end;
+$$;
+revoke all on function private.coppel_peak_bono_domingo(date,integer)
+  from public, anon, authenticated;
+
+-- Solo calcula la diferencia; la integración debe serializar y registrar cada
+-- pago y su fuente antes de volver a ejecutar la conciliación.
+create or replace function private.coppel_peak_conciliar_bono(
+  p_calculado numeric, p_registrado numeric
+) returns jsonb
+language plpgsql immutable set search_path = ''
+as $$
+declare v_diferencia numeric;
+begin
+  if p_calculado is null or p_calculado::text in ('NaN','Infinity','-Infinity')
+    or p_calculado < 0 or p_calculado <> round(p_calculado,2)
+    or p_registrado is null or p_registrado::text in ('NaN','Infinity','-Infinity')
+    or p_registrado < 0 or p_registrado <> round(p_registrado,2) then
+    raise exception 'Importes inválidos para conciliar el bono COPPEL';
+  end if;
+  v_diferencia := p_calculado-p_registrado;
+  return jsonb_build_object(
+    'calculado',p_calculado,'registrado',p_registrado,
+    'estado',case when v_diferencia < 0 then 'revision'
+                  when v_diferencia > 0 then 'pendiente' else 'conciliado' end,
+    'diferencia',v_diferencia
+  );
+end;
+$$;
+revoke all on function private.coppel_peak_conciliar_bono(numeric,numeric)
+  from public, anon, authenticated;
+
 commit;
