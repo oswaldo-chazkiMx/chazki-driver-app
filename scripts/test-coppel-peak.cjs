@@ -90,6 +90,28 @@ test("attendance requires all six weekdays and any NO SHOW disqualifies the week
   }finally{await db.close()}
 });
 
+test("weekly bonus uses each validated route's plaza and includes Sunday without duplicates",async()=>{
+  const db=await database();
+  try{
+    await db.exec(migration);
+    const days=["2026-11-09","2026-11-10","2026-11-11","2026-11-12","2026-11-13","2026-11-14"];
+    const routes=[
+      {ruta_id:1,cedis_id:22,fecha:"2026-11-09",entregados:100},
+      {ruta_id:2,cedis_id:14,fecha:"2026-11-15",entregados:50},
+      {ruta_id:3,cedis_id:17,fecha:"2026-11-14",entregados:20}
+    ];
+    const calc=async(noShow,entries)=>(await db.query(
+      "select private.calcular_coppel_peak_asistencia($1::date,$2::date[],$3,$4::jsonb)::text as result",
+      ["2026-11-09",days,noShow,JSON.stringify(entries)])).rows[0].result;
+    assert.equal(await calc(false,routes),"350.00");
+    assert.equal(await calc(true,routes),"0");
+    assert.equal(await calc(false,routes.slice(0,1)),"200.00");
+    await assert.rejects(calc(false,[...routes,routes[0]]),/duplicada o inválida/);
+    await assert.rejects(calc(false,[{...routes[0],cedis_id:999}]),/sin configuración Peak/);
+    await assert.rejects(calc(false,[{...routes[0],fecha:"2026-11-16"}]),/duplicada o inválida/);
+  }finally{await db.close()}
+});
+
 test("missing centers or conflicts roll back the draft without changing existing data",async()=>{
   for(const sql of ["update public.cedis set nombre='otro' where id=18","update public.cedis set activo=false where id=22"]){
     const db=await database();

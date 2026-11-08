@@ -118,4 +118,46 @@ $$;
 revoke all on function private.coppel_peak_asistencia_completa(date,date[],boolean)
   from public, anon, authenticated;
 
+-- La integración pendiente debe proporcionar solo rutas validadas de SEDAN local;
+-- 3.5T y Huixquilucan se gestionan manualmente.
+create or replace function private.calcular_coppel_peak_asistencia(
+  p_lunes date, p_dias date[], p_hubo_no_show boolean, p_rutas jsonb
+) returns numeric
+language plpgsql stable set search_path = ''
+as $$
+declare
+  v_completa boolean;
+  v_ruta record;
+  v_ids bigint[] := '{}';
+  v_tarifa numeric;
+  v_total numeric := 0;
+begin
+  v_completa := private.coppel_peak_asistencia_completa(p_lunes,p_dias,p_hubo_no_show);
+  if p_rutas is null or jsonb_typeof(p_rutas) <> 'array' then
+    raise exception 'Se requiere una lista de rutas validadas';
+  end if;
+  for v_ruta in
+    select * from jsonb_to_recordset(p_rutas)
+      as x(ruta_id bigint,cedis_id bigint,fecha date,entregados integer)
+  loop
+    if v_ruta.ruta_id is null or v_ruta.ruta_id <= 0
+      or v_ruta.cedis_id is null or v_ruta.fecha is null
+      or v_ruta.fecha < p_lunes or v_ruta.fecha > p_lunes + 6
+      or v_ruta.entregados is null or v_ruta.entregados < 0
+      or v_ruta.ruta_id = any(v_ids) then
+      raise exception 'Ruta validada duplicada o inválida para el bono de asistencia';
+    end if;
+    v_ids := array_append(v_ids,v_ruta.ruta_id);
+    select p.bono_asistencia_paquete into v_tarifa
+    from private.coppel_peak_plazas p
+    where p.cedis_id=v_ruta.cedis_id and v_ruta.fecha between p.inicio and p.fin;
+    if not found then raise exception 'Ruta sin configuración Peak para el CEDIS %',v_ruta.cedis_id; end if;
+    v_total := v_total + v_tarifa*v_ruta.entregados;
+  end loop;
+  return case when v_completa then round(v_total,2) else 0 end;
+end;
+$$;
+revoke all on function private.calcular_coppel_peak_asistencia(date,date[],boolean,jsonb)
+  from public, anon, authenticated;
+
 commit;
