@@ -231,6 +231,7 @@ begin
     select 1 from public.no_show_casos ns
     where ns.driver_id=p_driver_id and ns.cuenta='COPPEL'
       and ns.fecha_servicio between p_lunes and p_lunes+6
+      and ns.estado <> 'apelacion_aceptada'
   ) into v_hubo_no_show;
 
   select coalesce(jsonb_agg(jsonb_build_object(

@@ -5,6 +5,7 @@ const path=require("node:path");
 const {PGlite}=require("@electric-sql/pglite");
 
 const migration=fs.readFileSync(path.join(__dirname,"..","coppel-peak-borrador.sql"),"utf8");
+const rehearsal=fs.readFileSync(path.join(__dirname,"..","ensayo-supabase","1-ensayo-coppel.sql"),"utf8");
 async function database(){
   const db=new PGlite();
   await db.exec(`
@@ -33,6 +34,20 @@ async function database(){
   `);
   return db;
 }
+
+test("full COPPEL rehearsal rolls back all created objects on its intentional error",async()=>{
+  const db=await database();
+  try{
+    const body=migration.replace(/\r\n/g,"\n").split("begin;\n")[1].split("\ncommit;")[0].trim();
+    assert.ok(rehearsal.replace(/\r\n/g,"\n").includes(body),"rehearsal must contain the current draft");
+    await assert.rejects(db.exec(rehearsal),/ENSAYO OK COPPEL/);
+    const result=(await db.query(`select
+      to_regclass('private.coppel_peak_plazas') as tabla,
+      to_regprocedure('private.calcular_coppel_peak_ruta(numeric,numeric,integer,integer)') as calculo,
+      to_regprocedure('private.coppel_peak_previsualizar_semana(uuid,date)') as prevision`)).rows[0];
+    assert.deepEqual(result,{tabla:null,calculo:null,prevision:null});
+  }finally{await db.close()}
+});
 
 test("peak configuration retains plaza amounts and exact dates",async()=>{
   const db=await database();
@@ -189,6 +204,17 @@ test("weekly preview derives attendance and validated routes from database recor
     await db.exec("update public.liquidaciones set registro_fiscal='FACTURA' where id=3");
     assert.equal((await preview()).asistencia_requiere_revision,false);
     await db.exec(`insert into public.no_show_casos values (1,'${driver}','COPPEL','2026-11-11','apelacion_aceptada')`);
+    result=await preview();
+    assert.equal(result.hubo_no_show,false);
+    assert.equal(result.bono_asistencia_base,350);
+    for(const estado of ["reportado","apelado","apelacion_rechazada"]){
+      await db.query("update public.no_show_casos set estado=$1 where id=1",[estado]);
+      result=await preview();
+      assert.equal(result.hubo_no_show,true,estado);
+      assert.equal(result.bono_asistencia_base,0,estado);
+    }
+    await db.exec("update public.no_show_casos set estado='apelacion_aceptada' where id=1");
+    await db.exec(`insert into public.no_show_casos values (2,'${driver}','COPPEL','2026-11-12','reportado')`);
     result=await preview();
     assert.equal(result.hubo_no_show,true);
     assert.equal(result.bono_asistencia_base,0);

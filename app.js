@@ -2,6 +2,7 @@ const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&
 const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);
 const $=id=>document.getElementById(id);
 const LOCAL_DB="chazki-driver-offline";
+const WALMART_TARIFARIO_ENABLED=false; // Activar solo con migración y pagos Walmart validados.
 const CANCEL_DAILY_LIMIT_EXEMPT_DRIVER_ID="f640638a-d9a6-4136-a7dd-481e86715c7e";
 let OFFLINE_MODE=!navigator.onLine, syncBusy=false, syncCancelBusy=false, ROUTE_SYNC_ERROR=null;
 function openLocalDb(){
@@ -176,7 +177,7 @@ const cedObjById=id=>CLI.flatMap(c=>c.cedis.map(e=>({...e,cliente_id:c.id,client
 const cedNameById=id=>cedObjById(id)?.nombre||"";
 const cedName=(cid,eid)=>{const c=CLI.find(x=>String(x.id)===String(cid));const e=c&&c.cedis.find(y=>String(y.id)===String(eid));return e?e.nombre:""};
 $("cli").onchange=()=>{fillCedis($("cedis"),$("cli").value);checkIn()};
-function resetFoto(){if(canBlob){canBlob=null;$("cv").classList.add("hide");$("cmeta").innerHTML='<span style="color:var(--bad)">Cambiaste el CEDIS: vuelve a tomar la foto para validar tu ubicación.</span>'}}
+function resetFoto(){const hadEvidence=canBlob||canBitacoraBlob;canBlob=null;canMeta=null;canBitacoraBlob=null;canEvidenceGeneration++;canLocationGeneration++;$("cv").classList.add("hide");$("wm-can-status").textContent="";if(hadEvidence)$("cmeta").innerHTML='<span style="color:var(--bad)">Cambiaste el CEDIS: vuelve a tomar las fotos para validar tu ubicación.</span>'}
 $("ccli").onchange=()=>{fillCedis($("ccedis"),$("ccli").value);resetFoto();checkCan()};
 $("ccedis").onchange=()=>{resetFoto();checkCan()};
 
@@ -386,7 +387,7 @@ function renderRouteSyncError(){
     <br><small>Tus datos siguen guardados en este dispositivo. Usa 🔄 para reintentar.</small></div>`;
 }
 function showRouteDone(pending=false){routeDoneMarkup(pending)}
-function prefillCan(){const r=S.route;$("ccli").value=r.cliId;fillCedis($("ccedis"),r.cliId);$("ccedis").value=r.cedisId}
+function prefillCan(){const r=S.route;resetFoto();$("ccli").value=r.cliId;fillCedis($("ccedis"),r.cliId);$("ccedis").value=r.cedisId;checkCan()}
 
 $("zinp").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();addZona()}});
 $("zinp").addEventListener("blur",addZona);
@@ -525,13 +526,26 @@ $("bin").onclick=async()=>{
   const saved=await localGet("routes",routeLocalKey());
   S.route={...routeInfo,dbId:saved?.serverRouteId||null,localKey:record.key,checkin:checkinAt};
   clearAuxCapture("in");
-  prefillCan();setStage(1);$("ent").value="";$("fal").value="";updFin();
+  prefillCan();setStage(1);$("ent").value="";$("fal").value="";$("wm-asignadas").value="";$("wm-realizadas").value="";$("wm-folios").value="";updFin();
   $("hstate").className=`pill ${synced?"ok":"w"}`;$("hstate").textContent=synced?"En ruta":"Check-in pendiente de enviar";
   if(synced){toast("Check-in registrado · ¡Buena ruta!")}
   else{setNetStatus("Sin conexión o sincronización pendiente · check-in y evidencia guardados en este dispositivo.",true);toast("Check-in guardado en este dispositivo")}
 };
 
-["ent","fal"].forEach(id=>$(id).addEventListener("input",updFin));
+["ent","fal","wm-asignadas","wm-realizadas","wm-folios"].forEach(id=>$(id).addEventListener("input",updFin));
+const esRutaWalmart=()=>WALMART_TARIFARIO_ENABLED&&String(S.route?.cli||"").trim().toUpperCase()==="WALMART";
+function datosVisitasWalmart(){
+  const asignadas=$("wm-asignadas").value.trim(),realizadas=$("wm-realizadas").value.trim();
+  const folios=$("wm-folios").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+  if(!/^\d+$/.test(asignadas)||!/^\d+$/.test(realizadas)||
+     !Number.isSafeInteger(Number(asignadas))||!Number.isSafeInteger(Number(realizadas))||
+     Number(asignadas)<1||Number(asignadas)>2147483647||Number(realizadas)>Number(asignadas))
+    return {error:"Indica visitas asignadas y realizadas válidas; las realizadas no pueden superar las asignadas."};
+  if(folios.length>100||folios.some(x=>x.length>120))
+    return {error:"Puedes registrar hasta 100 folios de máximo 120 caracteres cada uno."};
+  if(+$("fal").value>0&&!folios.length)return {error:"Captura al menos un folio Avaya cuando haya entregas fallidas."};
+  return {datos:{walmart_visitas_asignadas:Number(asignadas),walmart_visitas_realizadas:Number(realizadas),walmart_folios_avaya:folios}};
+}
 function sumC(){return Object.values(S.fallos).reduce((a,b)=>a+b,0)}
 function updFin(){
   const pk=S.route?S.route.pk:0,e=+$("ent").value||0,f=+$("fal").value||0,filled=$("ent").value!==""&&$("fal").value!=="";
@@ -539,6 +553,8 @@ function updFin(){
   $("s2note").innerHTML=filled?(e+f===pk?`<span style="color:var(--ok)">✔ Cuadra con los ${pk} paquetes asignados</span>`:`<span style="color:var(--bad)">Entregados + fallidos = ${e+f}; debes cuadrar con ${pk}</span>`):`Asignados: <b>${pk}</b>`;
   $("causes").classList.toggle("hide",!(f>0));$("ftot").textContent=f;
   if(f>0){drawCauses();const s=sumC();ok=ok&&s===f;$("csum").innerHTML=s===f?`<span style="color:var(--ok)">✔ Causas completas (${s}/${f})</span>`:`<span style="color:var(--bad)">Asignadas ${s} de ${f}</span>`}else S.fallos={};
+  const walmart=esRutaWalmart();$("walmart-visitas").classList.toggle("hide",!walmart);
+  if(walmart){const result=datosVisitasWalmart();$("wm-error").textContent=result.error||"";ok=ok&&!result.error}
   $("b2").disabled=!ok;
 }
 function drawCauses(){$("clist").innerHTML=CAUSAS.map(c=>`<div class="cause"><span>${esc(c.nombre)}</span><div class="qty"><button data-c="${esc(c.id)}" data-d="-1">−</button><span>${S.fallos[c.id]||0}</span><button data-c="${esc(c.id)}" data-d="1">+</button></div></div>`).join("")}
@@ -613,9 +629,11 @@ $("bout").onclick=async()=>{
   const checkoutAt=new Date().toISOString();
   const fl=Object.entries(S.fallos).filter(([,q])=>q>0).map(([c,q])=>({causa_id:+c,cantidad:q}));
   const ic=S.inc?[...S.incSel].map(i=>({incidencia_id:+i,comentario:$("inctxt").value.trim()||null})):[];
+  const walmart=esRutaWalmart()?datosVisitasWalmart():null;
+  if(walmart?.error){err("outerr",new Error(walmart.error));$("bout").disabled=false;return}
   record.status="checkout_pending";
   record.checkout={checkoutAt,ent:res.ent,fal:res.fal,hubo_incidencias:!!S.inc,fallos:fl,incidencias:ic,auxiliaryBlob,auxiliaryEvidencePath:null,
-    extras:llevaExtras()?{maniobras:$("x-man").value.trim()||null,estadia:$("x-est").value.trim()||null,otros:$("x-otr").value.trim()||null}:{}};
+    extras:{...(llevaExtras()?{maniobras:$("x-man").value.trim()||null,estadia:$("x-est").value.trim()||null,otros:$("x-otr").value.trim()||null}:{}),...(walmart?.datos||{})}};
   try{await localPut("routes",record)}catch(e){err("outerr",e);$("bout").disabled=false;return}
   S.routeLocalCheckout=record.checkout;
   let synced=false;
@@ -625,9 +643,23 @@ $("bout").onclick=async()=>{
 };
 
 // ---------- Cancelación ----------
-let canBlob=null,canMeta=null;
+let canBlob=null,canMeta=null,canBitacoraBlob=null,canEvidenceGeneration=0,canLocationGeneration=0;
 $("bcam").onclick=()=>$("cfile").click();
-$("cfile").onchange=e=>{const f=e.target.files[0];if(!f)return;const img=new Image();img.onload=()=>stamp(img);img.src=URL.createObjectURL(f);e.target.value=""};
+$("cfile").onchange=e=>{const f=e.target.files[0];e.target.value="";if(!f)return;canBlob=null;canMeta=null;const generation=++canLocationGeneration;checkCan();const img=new Image(),url=URL.createObjectURL(f);img.onload=async()=>{try{await stamp(img,generation)}catch(error){err("canerr",error)}finally{URL.revokeObjectURL(url)}};img.onerror=()=>{URL.revokeObjectURL(url);err("canerr",new Error("No se pudo leer la foto de evidencia."))};img.src=url};
+const esCancelacionWalmart=()=>WALMART_TARIFARIO_ENABLED&&cliName($("ccli").value).trim().toUpperCase()==="WALMART";
+$("wm-can-camera").onclick=()=>$("wm-can-file").click();
+$("wm-can-file").onchange=async e=>{
+  const file=e.target.files[0];e.target.value="";if(!file)return;
+  const generation=++canEvidenceGeneration;
+  canBitacoraBlob=null;$("wm-can-status").textContent="Procesando foto…";checkCan();
+  try{
+    const blob=await comprimir(file);
+    if(generation!==canEvidenceGeneration)return;
+    if(!blob)throw new Error("No se pudo procesar la foto de la bitácora.");
+    canBitacoraBlob=blob;$("wm-can-status").textContent="Foto de bitácora capturada.";
+  }catch(error){if(generation===canEvidenceGeneration){$("wm-can-status").textContent="";err("canerr",error)}}
+  checkCan();
+};
 function getLoc(){
   if(!navigator.geolocation)return Promise.resolve(null);
   const locate=options=>new Promise(resolve=>{
@@ -644,9 +676,10 @@ function getLoc(){
     return accurate||await locate({enableHighAccuracy:false,timeout:12000,maximumAge:120000});
   })();
 }
-async function stamp(img){
+async function stamp(img,generation){
   $("cmeta").textContent="Obteniendo ubicación…";err("canerr",null);
   const loc=await getLoc();
+  if(generation!==canLocationGeneration)return;
   const d=new Date(),iw=img.naturalWidth||img.width,ih=img.naturalHeight||img.height,w=Math.min(1000,iw),h=Math.round(ih*w/iw);
   const cv=$("cv");cv.width=w;cv.height=h;const x=cv.getContext("2d");x.drawImage(img,0,0,w,h);
   const cli=cliName($("ccli").value)||"—",ced=cedName($("ccli").value,$("ccedis").value)||"—";
@@ -659,22 +692,27 @@ async function stamp(img){
   lines.forEach((l,i)=>{x.font=(i===0?"bold ":"")+fs+"px sans-serif";x.fillStyle=i===0?"#ffb4b6":"#fff";x.fillText(l,pad,h-bh+pad+fs*1.1+i*fs*1.35)});
   x.save();x.translate(w/2,h/2);x.rotate(-.4);x.font="bold "+Math.round(w/9)+"px sans-serif";x.fillStyle="rgba(255,255,255,.18)";x.textAlign="center";x.fillText("CHAZKI",0,0);x.restore();
   cv.classList.remove("hide");
-  canBlob=await new Promise(r=>cv.toBlob(r,"image/jpeg",.78));canMeta={loc,d,val};
+  const blob=await new Promise(r=>cv.toBlob(r,"image/jpeg",.78));
+  if(generation!==canLocationGeneration)return;
+  if(!blob)throw new Error("No se pudo procesar la foto de evidencia.");
+  canBlob=blob;canMeta={loc,d,val};
   const vm=val.estado==="dentro"?`<span style="color:var(--ok)">✔ Estás a ${fmtDist(val.dist)} del CEDIS: ubicación validada</span>`:
     val.estado==="fuera"?`<span style="color:var(--bad)">⚠ Estás a ${fmtDist(val.dist)} del CEDIS (máximo ${fmtDist(val.radio)}). Si el CEDIS es otro, cámbialo y toma la foto de nuevo. Si lo registras así, Operaciones lo revisará.</span>`:
     val.estado==="sin_ubicacion"?`<span style="color:var(--bad)">⚠ No se pudo detectar tu ubicación. Puedes registrar la cancelación igual: la foto lleva la marca de agua con fecha y hora, y Operaciones la revisará. Si puedes, activa el GPS y toma la foto otra vez.</span>`:
     `<span style="color:var(--mut)">Este CEDIS aún no tiene ubicación registrada; se registra sin validar.</span>`;
   $("cmeta").innerHTML=`📍 ${loc?loc.lat.toFixed(5)+", "+loc.lng.toFixed(5):"ubicación no disponible"} · ${dia} ${fecha} ${hora}<br>${vm}`;checkCan();
 }
-function checkCan(){const dailyLimitLocked=ME?.id!==CANCEL_DAILY_LIMIT_EXEMPT_DRIVER_ID&&(canUsedToday||canLimitUnknown);$("bcan").disabled=dailyLimitLocked||!(canBlob&&$("ccli").value&&$("ccedis").value)}
+function checkCan(){const dailyLimitLocked=ME?.id!==CANCEL_DAILY_LIMIT_EXEMPT_DRIVER_ID&&(canUsedToday||canLimitUnknown),walmart=esCancelacionWalmart();$("wm-can-evidencia").classList.toggle("hide",!walmart);$("bcan").disabled=dailyLimitLocked||!(canBlob&&$("ccli").value&&$("ccedis").value&&(!walmart||canBitacoraBlob))}
 $("bcan").onclick=async()=>{
   $("bcan").disabled=true;err("canerr",null);
   try{
+    if(!canBlob||!canMeta||(esCancelacionWalmart()&&!canBitacoraBlob))throw new Error("Completa la evidencia requerida antes de registrar la cancelación.");
     const record={key:crypto.randomUUID(),driver_id:ME.id,ruta_id:S.route?S.route.dbId:null,cedis_id:+$("ccedis").value,id_ruta:S.route?.rid||null,
-      lat:canMeta.loc?canMeta.loc.lat:null,lng:canMeta.loc?canMeta.loc.lng:null,capturado_at:canMeta.d.toISOString(),blob:canBlob};
+      lat:canMeta.loc?canMeta.loc.lat:null,lng:canMeta.loc?canMeta.loc.lng:null,capturado_at:canMeta.d.toISOString(),blob:canBlob,
+      ...(esCancelacionWalmart()?{bitacoraBlob:canBitacoraBlob}:{})};
     await localPut("cancellations",record);
     canUsedToday=true;updateCancelAvailability();
-    canBlob=null;$("cv").classList.add("hide");$("cmeta").textContent="";checkCan();
+    canBlob=null;canBitacoraBlob=null;canEvidenceGeneration++;$("wm-can-status").textContent="";$("cv").classList.add("hide");$("cmeta").textContent="";checkCan();
     if(navigator.onLine&&await syncPendingCancellations())toast("Cancelación registrada y enviada a Operaciones");
     else{OFFLINE_MODE=true;setNetStatus("Sin conexión o red intermitente · cancelación y foto guardadas en este dispositivo, pendientes de envío.",true);toast("Cancelación guardada en este dispositivo")}
     await loadCan();
@@ -696,7 +734,7 @@ function updateCancelAvailability(){
   else box.textContent=canUsedToday
     ?"Ya registraste una cancelación hoy. Solo se permite una cancelación por día."
     :"No se pudo verificar si ya registraste una cancelación hoy. Conéctate a internet y actualiza antes de continuar.";
-  ["ccli","ccedis","det2","bcam","cfile"].forEach(id=>$(id).disabled=locked);
+  ["ccli","ccedis","det2","bcam","cfile","wm-can-camera","wm-can-file"].forEach(id=>$(id).disabled=locked);
   checkCan();
 }
 async function loadCan(){
@@ -732,12 +770,18 @@ async function syncPendingCancellations(){
       const path=`${ME.id}/offline-${record.key}.jpg`;
       const {error:uploadError}=await sb.storage.from("cancelaciones").upload(path,record.blob,{contentType:"image/jpeg",upsert:true});
       if(uploadError)throw uploadError;
+      let bitacoraPath=null;
+      if(record.bitacoraBlob){
+        bitacoraPath=`${ME.id}/offline-${record.key}-bitacora.jpg`;
+        const {error}=await sb.storage.from("cancelaciones").upload(bitacoraPath,record.bitacoraBlob,{contentType:"image/jpeg",upsert:true});
+        if(error)throw error;
+      }
       const {data:existing,error:lookupError}=await sb.from("cancelaciones").select("id")
         .eq("driver_id",record.driver_id).eq("capturado_at",record.capturado_at).eq("foto_path",path).maybeSingle();
       if(lookupError)throw lookupError;
       if(!existing){
         const {driver_id,ruta_id,cedis_id,id_ruta,lat,lng,capturado_at}=record;
-        const {error}=await sb.from("cancelaciones").insert({driver_id,ruta_id,cedis_id,id_ruta,lat,lng,capturado_at,foto_path:path});
+        const {error}=await sb.from("cancelaciones").insert({driver_id,ruta_id,cedis_id,id_ruta,lat,lng,capturado_at,foto_path:path,...(bitacoraPath?{foto_bitacora_path:bitacoraPath}:{})});
         if(error)throw error;
       }
       await localDelete("cancellations",record.key);

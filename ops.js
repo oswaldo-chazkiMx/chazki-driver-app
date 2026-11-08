@@ -163,8 +163,8 @@ async function load(){
   }
   const f=$("fcli").value;const keep=x=>!f||String(x.cedis.cliente_id)===f;
   R=routeRows.filter(keep);C=cancelRows.filter(keep);
-  const paths=C.map(x=>x.foto_path);photos={};
-  if(paths.length){const s=await sb.storage.from("cancelaciones").createSignedUrls(paths,3600);(s.data||[]).forEach(x=>{photos[x.path]=x.signedUrl})}
+  const paths=C.flatMap(x=>[x.foto_path,x.foto_bitacora_path]).filter(Boolean);photos={};
+  if(paths.length){const s=await sb.storage.from("cancelaciones").createSignedUrls(paths,3600);if(s.error)toast("No se pudieron cargar las fotos de cancelación: "+s.error.message);(s.data||[]).forEach(x=>{photos[x.path]=x.signedUrl})}
   await cargaEventos();await cargaExtra();
   if(tab==="l")await cargarAnulaciones();
   if(veFin()&&["x","y","z"].includes(tab))await cargarAuditorias();
@@ -352,6 +352,7 @@ const fm=n=>{if(n==null)return "—";const v=Number(n);const t=Math.abs(v).toLoc
 const pc=n=>n==null?"—":(Number(n)*100).toFixed(1)+"%";
 const nz=s=>(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9 ]/g," ").trim();
 const cuentaDe=c=>c==="MERCADO LIBRE"?"MELI":(c==="COPPEL"||c==="COPPEL BT")?"COPPEL":c==="LIVERPOOL"?"LIVERPOOL":(c==="CUBBO"||c==="NESPRESSO"||c==="ESTAFETA"||c==="AMPM")?c:null;
+const COPPEL_PEAK_ENABLED=false; // Activar solo con la migración Peak validada.
 const CUENTAS_TARIFARIO=["MELI","COPPEL","LIVERPOOL","CUBBO","NESPRESSO","ESTAFETA","AMPM"];
 const sumLiq=k=>Object.values(LIQ).reduce((s,x)=>s+Number(x[k]||0),0);
 const porValidar=()=>R.filter(x=>x.estado==="cerrada"&&!LIQ[x.id]&&!PEND.some(q=>q.ruta_id===x.id)&&cuentaDe(x.cedis.clientes.nombre));
@@ -681,11 +682,13 @@ const EVL={rechazo:"Chazki rechazó",aclaracion:"Chazki pidió aclaración",apro
 function revisarCan(id){const x=C.find(y=>y.id===id);if(!x)return;const m=$("modal");m.classList.remove("hide");
   const aprobacionDoble=x.ubicacion_validada==="dentro";
   const puedeAprobar=!aprobacionDoble||["ih","coordinador"].includes(ROL);
+  const walmart=String(x.cedis.clientes.nombre||"").trim().toUpperCase()==="WALMART";
   const estadoAprobacion=aprobacionDoble?`<div class="note">Aprobación dentro del CEDIS: Supervisor ${x.aprob_supervisor?"✓ autorizó":"pendiente"} · Coordinador ${x.aprob_coord?"✓ autorizó":"pendiente"}. Se requieren ambos.</div>`:"";
   const hist=(CEV[id]||[]).map(e=>`<div style="padding:6px 0;border-bottom:1px solid var(--line)"><b>${esc(EVL[e.tipo]||e.tipo)}</b> <small>${dd(e.creado_en)} ${hh(e.creado_en)}</small><br>${esc(e.texto||"")}${e.foto_path&&EVP[e.foto_path]?`<br><a href="${EVP[e.foto_path]}" target="_blank" rel="noopener"><img src="${EVP[e.foto_path]}" style="max-width:160px;border-radius:8px;margin-top:4px"></a>`:""}</div>`).join("")||'<small>Sin movimientos.</small>';
   m.innerHTML=`<div class="box" style="max-height:90vh;overflow:auto"><h2 style="margin:0 0 4px">Cancelación · ${esc(x.drivers.nombre)}</h2><div style="color:var(--mut);font-size:13px">${esc(x.cedis.clientes.nombre)} · ${esc(x.cedis.nombre)} · ${dd(x.capturado_at)} ${hh(x.capturado_at)}${esc(x.id_ruta?" · Ruta "+x.id_ruta:"")}</div>
    <div style="margin-top:8px">${estPill(x)}</div>${estadoAprobacion}
    ${photos[x.foto_path]?`<img src="${photos[x.foto_path]}" style="max-width:100%;max-height:220px;border-radius:10px;margin-top:8px">`:""}
+   ${walmart?(x.foto_bitacora_path?(photos[x.foto_bitacora_path]?`<h3>Bitácora de cancelación</h3><img src="${esc(photos[x.foto_bitacora_path])}" alt="Bitácora de cancelación Walmart" style="max-width:100%;max-height:220px;border-radius:10px;margin-top:8px">`:'<div class="errbox">No se pudo cargar la foto de la bitácora.</div>'):'<div class="errbox">Falta la foto de la bitácora; requiere revisión antes de generar el pago Walmart.</div>'):""}
    <h3 style="margin:12px 0 4px">Historial</h3>${hist}
    <label>Mensaje para el driver (obligatorio al rechazar o pedir aclaración)</label><textarea id="rv-t" rows="3"></textarea>
    <div class="note">Al rechazar o pedir aclaración, el driver recibe un aviso y tiene 12 horas para apelar o responder. Pasado ese plazo la decisión queda firme.</div><div id="rv-e"></div>
@@ -1564,6 +1567,12 @@ function sugeridas(ru,todas){
   }
   return {l,nota};
 }
+function sugeridasConPeak(ru,todas,peakTarifaId){
+  if(peakTarifaId==null||todas)return sugeridas(ru,todas);
+  const tarifa=TAR.find(t=>String(t.id)===String(peakTarifaId)&&t.cuenta==="COPPEL"&&t.activo===true);
+  return tarifa?{l:[tarifa],nota:"Tarifa Peak asignada al CEDIS. La base y el bono se calculan al validar."}:
+    {l:[],nota:"No se encontró la tarifa Peak activa del CEDIS. Actualiza el panel y contacta a Operaciones."};
+}
 const filaRes=(a,b,cls="")=>`<tr class="${cls}"><td>${esc(a)}</td><td>${esc(b)}</td></tr>`;
 function tablaRes(j){
   return `<table class="res">`+filaRes("Efectividad",pc(j.efectividad)+" ("+j.entregados+" de "+j.asignados+")")+
@@ -1576,11 +1585,18 @@ function tablaRes(j){
 async function abrirValidar(id){
   const ru=R.find(x=>x.id===id);
   try{await cargarTarifas()}catch(error){toast("No se pudieron cargar las tarifas: "+error.message);return}
-  const p=provDe(ru.driver_id),cuenta=cuentaDe(ru.cedis.clientes.nombre),m=$("modal");m.classList.remove("hide");
-  const pintar=()=>{let {l,nota}=sugeridas(ru,$("m-todas").checked);
+  const p=provDe(ru.driver_id),cuenta=cuentaDe(ru.cedis.clientes.nombre),m=$("modal");
+  let peakTarifaId=null;
+  if(COPPEL_PEAK_ENABLED&&cuenta==="COPPEL"){
+    const result=await sb.rpc("coppel_peak_tarifa_para_ruta",{p_ruta_id:id});
+    if(result.error){toast("No se pudo identificar la tarifa COPPEL: "+result.error.message);return}
+    peakTarifaId=result.data;
+  }
+  m.classList.remove("hide");
+  const pintar=()=>{let {l,nota}=sugeridasConPeak(ru,$("m-todas").checked,peakTarifaId);
     const z=$("m-zona").value;if(z)l=l.filter(t=>{const u=(t.zona||"").toUpperCase();return z==="LOCAL"?u.startsWith("LOCAL"):new RegExp("FORANE[AO] "+z+"( |$)").test(u)});
     if(z&&!l.length)nota=(nota?nota+" · ":"")+"No hay tarifa cargada para ese tipo de ruta";
-    $("m-tar").innerHTML=(tiposSinEquivalencia.includes(ru.tipo_unidad)?'<option value="">Selecciona una tarifa</option>':"")+l.map(t=>`<option value="${esc(t.id)}">${esc([t.ubicacion,t.tipo_unidad,t.esquema,t.zona,t.variable].filter(Boolean).join(" · "))} — pago ${fm(t.pago_base)} / cobro ${fm(t.tarifa_cliente)}</option>`).join("");
+    $("m-tar").innerHTML=(tiposSinEquivalencia.includes(ru.tipo_unidad)?'<option value="">Selecciona una tarifa</option>':"")+l.map(t=>`<option value="${esc(t.id)}">${esc([t.ubicacion,t.tipo_unidad,t.esquema,t.zona,t.variable].filter(Boolean).join(" · "))} — ${peakTarifaId!=null&&String(t.id)===String(peakTarifaId)?"pago Peak calculado":`pago ${fm(t.pago_base)}`} / cobro ${fm(t.tarifa_cliente)}</option>`).join("");
     $("m-nota-t").textContent=nota;reset()};
   const reset=()=>{$("m-prev").innerHTML="";$("m-ok").disabled=true};
   m.innerHTML=`<div class="box"><h2 style="margin:0 0 4px">Validar ruta ${esc(ru.id_ruta)}</h2>
