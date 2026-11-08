@@ -10,6 +10,7 @@
 -- Installation order: network-invitations.sql, invitation-status-audit.sql, then
 -- registro-por-invitacion.sql. Re-running this file replaces functions customized by
 -- registro-por-invitacion.sql, so reapply that migration before using invitations.
+-- For pending fleet-owner invitations, apply invitaciones-flotillero-pendiente.sql last.
 begin;
 
 create table if not exists public.invitaciones_red (

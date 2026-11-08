@@ -1,3 +1,5 @@
+-- Después de reinstalar este archivo, reaplica expedientes-afiliados.sql.
+-- Después reaplica documentos-carga-y-finanzas.sql.
 begin;
 
 alter table public.drivers

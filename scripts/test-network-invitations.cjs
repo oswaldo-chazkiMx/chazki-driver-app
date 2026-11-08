@@ -12,6 +12,7 @@ const escapeFunction = ops.slice(0, ops.indexOf("\n"));
 
 function opsContext() {
   const context = vm.createContext({ location: { origin: "https://example.test" }, encodeURIComponent });
+  context.INV_PRESELECCION = null;
   vm.runInContext(escapeFunction + "\n" + ops.slice(ops.indexOf("let PADRON="), ops.indexOf("function enlazarInvitaciones()")), context);
   return context;
 }
@@ -40,8 +41,24 @@ test("invitations render manual resend and approval actions according to status"
   const html = vm.runInContext("vistaInvitaciones()", context);
   assert.match(html, /Preparar \/ reenviar correo/);
   assert.match(html, /data-inv-ok="2"/);
-  assert.match(html, /mailto:z%40example.test/);
+  assert.match(html, /data-inv-editar="1"/);
+  assert.doesNotMatch(html, /data-inv-editar="[23]"/);
+  assert.match(html, /https:\/\/mail\.google\.com\/mail\/\?view=cm&amp;fs=1&amp;to=z%40example\.test/);
   assert.match(html, /se envía manualmente/);
+});
+
+test("Gmail compose includes the exact recipient, subject and message", () => {
+  const context = opsContext();
+  const href = vm.runInContext(`gmailInvitacion({email:"a+b@example.test",nombre:"Ana & Luis",tipo:"flotillero",estatus:"enviada"})`, context);
+  const url = new URL(href);
+  assert.equal(url.origin, "https://mail.google.com");
+  assert.equal(url.pathname, "/mail/");
+  assert.equal(url.searchParams.get("view"), "cm");
+  assert.equal(url.searchParams.get("fs"), "1");
+  assert.equal(url.searchParams.get("to"), "a+b@example.test");
+  assert.equal(url.searchParams.get("su"), "Invitación a Chazki");
+  assert.match(url.searchParams.get("body"), /Hola Ana & Luis, Chazki te invita como Flotillero/);
+  assert.match(url.searchParams.get("body"), /https:\/\/example\.test\//);
 });
 
 test("padrón paginates without hiding RPC errors", async () => {
@@ -58,15 +75,19 @@ test("padrón paginates without hiding RPC errors", async () => {
 test("fleet owner can resend only pending requests and email approved invitations", () => {
   const context = vm.createContext({ location: { protocol: "capacitor:", origin: "capacitor://localhost" }, encodeURIComponent });
   vm.runInContext(escapeFunction + "\n" + driver.slice(driver.indexOf("function invitarHtml()"), driver.indexOf("function drawDrivers()")), context);
-  vm.runInContext(`CLI=[]; INVS_ERR=""; INVS=[
+  vm.runInContext(`CLI=[]; DRVS=[{id:"activo",estatus:"activo"},{id:"inactivo",estatus:"inactivo"}]; INVS_ERR=""; INVS=[
     {id:1,email:"one@example.test",estatus:"pendiente_aprobacion",creado_en:"2026-01-01"},
     {id:2,email:"two@example.test",estatus:"enviada",creado_en:"2026-01-01"},
-    {id:3,email:"three@example.test",estatus:"rechazada",creado_en:"2026-01-01"}
+    {id:3,email:"three@example.test",estatus:"rechazada",creado_en:"2026-01-01"},
+    {id:4,email:"active@example.test",estatus:"aceptada",aceptada_por:"activo",creado_en:"2026-01-01"},
+    {id:5,email:"inactive@example.test",estatus:"aceptada",aceptada_por:"inactivo",creado_en:"2026-01-01"}
   ]`, context);
   const html = vm.runInContext("invitarHtml()", context);
   assert.match(html, /data-iv-reenviar="1"/);
   assert.doesNotMatch(html, /data-iv-reenviar="[23]"/);
   assert.match(html, /Preparar correo/);
+  assert.doesNotMatch(html, /mailto:active%40example\.test/);
+  assert.match(html, /mailto:inactive%40example\.test/);
   assert.match(html, /https%3A%2F%2Fchazki-driver-app.vercel.app/);
 });
 
@@ -121,14 +142,15 @@ test("invitation history displays recorded status and escapes the actor", () => 
   assert.match(html, /&lt;actor&gt;/);
 });
 
-test("sharing an invitation checks status and records preparation before opening email", async () => {
+test("sharing an invitation checks status and records preparation before opening Gmail", async () => {
   const context = opsContext();
   vm.runInContext(ops.slice(ops.indexOf("function enlazarInvitaciones()"), ops.indexOf("function enlazar(){")), context);
-  const link = { dataset: { invCompartir: "1", canal: "correo" }, href: "mailto:x@example.test" };
+  const link = { dataset: { invCompartir: "1", canal: "correo" }, href: "https://mail.google.com/mail/?view=cm&to=x%40example.test" };
   const calls = [];
   context.$ = () => null;
   context.document = { querySelectorAll: selector => selector === "[data-inv-compartir]" ? [link] : [] };
-  context.window = { location: { href: "" } };
+  const popup = { location: { href: "" }, close() { this.closed = true; }, opener: {} };
+  context.window = { open: () => popup };
   context.confirm = () => true;
   context.render = () => {};
   context.toast = message => { throw new Error(message); };
@@ -142,7 +164,52 @@ test("sharing an invitation checks status and records preparation before opening
   await link.onclick({ preventDefault() {} });
   assert.deepEqual(calls.map(x => x.name), ["consultar_estado_invitacion", "registrar_preparacion_invitacion_red"]);
   assert.equal(calls[1].args.p_canal, "correo");
-  assert.equal(context.window.location.href, "mailto:x@example.test");
+  assert.equal(popup.location.href, link.href);
+  assert.equal(popup.opener, null);
+});
+
+test("Gmail popup is closed on cancellation or failed audit, without sending", async () => {
+  const context = opsContext();
+  vm.runInContext(ops.slice(ops.indexOf("function enlazarInvitaciones()"), ops.indexOf("function enlazar(){")), context);
+  const link = { dataset: { invCompartir: "1", canal: "correo" }, href: "https://mail.google.com/mail/?view=cm" };
+  const popups = [], calls = [], errors = [];
+  context.$ = () => null;
+  context.document = { querySelectorAll: selector => selector === "[data-inv-compartir]" ? [link] : [] };
+  context.window = { open: () => { const p = { location: { href: "" }, close() { this.closed = true; } }; popups.push(p); return p; } };
+  context.confirm = () => false;
+  context.toast = message => errors.push(message);
+  context.sb = { rpc: async name => {
+    calls.push(name);
+    return name === "consultar_estado_invitacion"
+      ? { data: { en_padron:true,padron_activo:true,cuenta_inactiva:false,cuenta_bloqueada:false }, error: null }
+      : { error: { message:"falló el registro" } };
+  } };
+  vm.runInContext(`INVR=[{id:1,email:"x@example.test"}]; enlazarInvitaciones()`, context);
+  await link.onclick({ preventDefault() {} });
+  assert.equal(popups[0].closed, true);
+  assert.equal(popups[0].location.href, "");
+  assert.deepEqual(calls, ["consultar_estado_invitacion"]);
+  context.confirm = () => true;
+  await link.onclick({ preventDefault() {} });
+  assert.equal(popups[1].closed, true);
+  assert.equal(popups[1].location.href, "");
+  assert.match(errors[0], /falló el registro/);
+});
+
+test("blocked Gmail popup reports the problem without recording preparation", async () => {
+  const context = opsContext();
+  vm.runInContext(ops.slice(ops.indexOf("function enlazarInvitaciones()"), ops.indexOf("function enlazar(){")), context);
+  const link = { dataset: { invCompartir: "1", canal: "correo" } };
+  const errors = [];
+  context.$ = () => null;
+  context.document = { querySelectorAll: selector => selector === "[data-inv-compartir]" ? [link] : [] };
+  context.window = { open: () => null };
+  context.toast = message => errors.push(message);
+  context.sb = { rpc: () => { throw new Error("RPC should not run"); } };
+  vm.runInContext(`INVR=[{id:1,email:"x@example.test"}]; enlazarInvitaciones()`, context);
+  await link.onclick({ preventDefault() {} });
+  assert.match(errors[0], /ventanas emergentes.*Gmail/);
+  assert.equal(link.dataset.ocupado, "");
 });
 
 test("driver invitation selects a fleet and disables CEDIS and tax scheme", async () => {
@@ -150,7 +217,7 @@ test("driver invitation selects a fleet and disables CEDIS and tax scheme", asyn
   vm.runInContext(ops.slice(ops.indexOf("function enlazarInvitaciones()"), ops.indexOf("function enlazar(){")), context);
   const element = value => ({ value, disabled:false, classList:{ toggle() {} } });
   const fields = {
-    "iv-t":element("driver"),"iv-r":element("FACTURA"),"iv-c":element("9"),"iv-p":element("12"),
+    "iv-t":element("driver"),"iv-r":element("FACTURA"),"iv-c":element("9"),"iv-p":element("proveedor:12"),
     "iv-n":element("Test"),"iv-m":element("test@example.test"),"iv-ok":element("")
   };
   const calls = [];
@@ -163,14 +230,114 @@ test("driver invitation selects a fleet and disables CEDIS and tax scheme", asyn
   }};
   context.toast = () => {};
   context.render = () => {};
-  vm.runInContext(`cargarInvitaciones=async()=>{}; enlazarInvitaciones()`, context);
+  vm.runInContext(`INVR_FLOTAS=[{tipo:"proveedor",id:12,nombre:"Activa"},{tipo:"invitacion",id:42,nombre:"Pendiente"}]; cargarInvitaciones=async()=>{}; enlazarInvitaciones()`, context);
   assert.equal(fields["iv-r"].disabled,true);
   assert.equal(fields["iv-c"].disabled,true);
   assert.equal(fields["iv-p"].disabled,false);
   fields["iv-ok"].onclick();
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(calls.map(x=>x.name),["consultar_estado_invitacion","invitar_driver_flotillero"]);
+  assert.deepEqual(calls.map(x=>x.name),["consultar_estado_invitacion","invitar_driver_flotilla_sin_traslado"]);
   assert.equal(calls[1].args.p_proveedor_id,12);
   assert.equal("p_cedis_id" in calls[1].args,false);
   assert.equal("p_esquema" in calls[1].args,false);
+  fields["iv-p"].value="invitacion:42";
+  fields["iv-ok"].onclick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls[3].name,"invitar_driver_flotillero_pendiente");
+  assert.equal(calls[3].args.p_invitacion_flotillero_id,42);
+  fields["iv-p"].value="invitacion:999";
+  fields["iv-ok"].onclick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length,4);
+});
+
+test("invitations distinguish active and invited fleets and warn drivers to wait", () => {
+  const context = opsContext();
+  vm.runInContext(`PRV=[];CLIENTES_NOMBRE={};
+    INVR_FLOTAS=[{tipo:"proveedor",id:1,nombre:"Activa"},{tipo:"invitacion",id:1,nombre:"<Pendiente>"}];
+    INVR=[{id:2,email:"driver@example.test",tipo:"driver",estatus:"enviada",invitacion_flotillero_id:1,proveedor_id:null}]`, context);
+  const html = vm.runInContext("vistaInvitaciones()", context);
+  assert.match(html, /value="driver">Driver de flotillero/);
+  assert.match(html, /value="proveedor:1">Activa · activo/);
+  assert.match(html, /value="invitacion:1">&lt;Pendiente&gt; · invitado, pendiente de registro/);
+  assert.match(html, /Espera el registro del flotillero/);
+  assert.match(vm.runInContext("mensajeInvitacion(INVR[0])", context), /Primero debe registrarse tu flotillero/);
+  vm.runInContext("INVR[0].proveedor_id=3", context);
+  assert.doesNotMatch(vm.runInContext("mensajeInvitacion(INVR[0])", context), /Primero debe registrarse/);
+});
+
+test("the invitation form stays disabled until invited fleet data has loaded", async () => {
+  const context = opsContext();
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  context.fetchPaged = async () => pending;
+  const builder = {
+    select() { return this; }, order() { return this; },
+    limit() { return Promise.resolve({data:[],error:null}); },
+    then(resolve) { return Promise.resolve({data:[],error:null}).then(resolve); }
+  };
+  context.sb = {from:()=>builder,rpc:()=>({})};
+  vm.runInContext("PRV=[];CLIENTES_NOMBRE={};INVR_LOADING=true",context);
+  const loading=vm.runInContext("cargarInvitaciones()",context);
+  const before=vm.runInContext("vistaInvitaciones()",context);
+  assert.match(before,/<fieldset disabled/);
+  assert.match(before,/Cargando flotilleros/);
+  release([{tipo:"invitacion",id:42,nombre:"Flota invitada"}]);
+  await loading;
+  const after=vm.runInContext("vistaInvitaciones()",context);
+  assert.doesNotMatch(after,/<fieldset disabled/);
+  assert.match(after,/value="invitacion:42">Flota invitada · invitado, pendiente de registro/);
+});
+
+test("a failed fleet lookup is visible rather than an empty success", async () => {
+  const context=opsContext();
+  context.fetchPaged=async()=>{throw new Error("permission denied")};
+  const builder={select(){return this},order(){return this},limit(){return Promise.resolve({data:[],error:null})},then(resolve){return Promise.resolve({data:[],error:null}).then(resolve)}};
+  context.sb={from:()=>builder,rpc:()=>({})};
+  vm.runInContext("PRV=[];CLIENTES_NOMBRE={};INVR_LOADING=true",context);
+  await vm.runInContext("cargarInvitaciones()",context);
+  assert.match(vm.runInContext("vistaInvitaciones()",context),/No se pudieron cargar los flotilleros.*permission denied/);
+});
+
+test("fleet invitation preselects the chosen active fleet", () => {
+  const context = opsContext();
+  vm.runInContext(ops.slice(ops.indexOf("function enlazarInvitaciones()"), ops.indexOf("function enlazar(){")), context);
+  const element = value => ({ value, disabled:false, classList:{ toggle() {} } });
+  const fields = {"iv-t":element("driver"),"iv-r":element(""),"iv-c":element(""),"iv-p":element("")};
+  context.$ = id => fields[id] || null;
+  context.document = { querySelectorAll: () => [] };
+  vm.runInContext(`INVR_FLOTAS=[{tipo:"proveedor",id:12,nombre:"Activa"}]; INV_PRESELECCION="proveedor:12"; enlazarInvitaciones()`, context);
+  assert.equal(fields["iv-p"].value,"proveedor:12");
+  assert.equal(fields["iv-p"].disabled,false);
+  assert.equal(vm.runInContext("INV_PRESELECCION", context),null);
+});
+
+test("editing an invitation submits its snapshot and selected configuration", async () => {
+  const context = opsContext();
+  vm.runInContext(ops.slice(ops.indexOf("function enlazarInvitaciones()"), ops.indexOf("function enlazar(){")), context);
+  const element = value => ({ value, disabled:false, innerHTML:"", classList:{toggle(){},add(){},remove(){}} });
+  const fields = {
+    modal:element(""),"ie-tipo":element("driver"),"ie-driver":element(""),"ie-independiente":element(""),
+    "ie-cancelar":element(""),"ie-guardar":element(""),"ie-email":element("nuevo@example.test"),
+    "ie-nombre":element("Ana"),"ie-flotilla":element("invitacion:7"),"ie-error":element("")
+  };
+  const calls = [];
+  context.$ = id => fields[id];
+  context.sb = {rpc:async (name,args) => {
+    calls.push({name,args});
+    return name==="consultar_estado_invitacion"
+      ? {data:{en_padron:false,padron_activo:false,cuenta_inactiva:false,cuenta_bloqueada:false},error:null}
+      : {data:"Actualizada",error:null};
+  }};
+  context.toast = () => {};
+  vm.runInContext(`CLIENTES_NOMBRE={}; INVR_FLOTAS=[{tipo:"invitacion",id:7,nombre:"Flota"}];
+    INVR=[{id:1,email:"anterior@example.test",nombre:"Ana",tipo:"independiente",esquema:"FACTURA",cedis_id:5,estatus:"enviada"}];
+    tab="w";cargarInvitaciones=async()=>{};render=()=>{};editarInvitacion(1)`, context);
+  await fields["ie-guardar"].onclick();
+  assert.deepEqual(calls.map(x=>x.name),["consultar_estado_invitacion","editar_invitacion_red"]);
+  assert.equal(calls[1].args.p_original.email,"anterior@example.test");
+  assert.equal(calls[1].args.p_email,"nuevo@example.test");
+  assert.equal(calls[1].args.p_invitacion_flotillero_id,7);
+  assert.equal(calls[1].args.p_esquema,null);
+  assert.equal(calls[1].args.p_cedis_id,null);
 });
