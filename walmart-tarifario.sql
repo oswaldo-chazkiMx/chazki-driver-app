@@ -105,17 +105,17 @@ declare
   v_semanal numeric;
   v_comision numeric;
 begin
-  if p_base is null or p_base::text = 'NaN' or p_base < 0
-     or p_porcentaje_semanal is null or p_porcentaje_semanal::text = 'NaN'
+  if p_base is null or p_base::text in ('NaN','Infinity','-Infinity') or p_base < 0
+     or p_porcentaje_semanal is null or p_porcentaje_semanal::text in ('NaN','Infinity','-Infinity')
      or p_porcentaje_semanal not between 0 and 1
      or p_visitas_asignadas is null or p_visitas_asignadas <= 0
      or p_visitas_realizadas is null or p_visitas_realizadas < 0
      or p_visitas_realizadas > p_visitas_asignadas
      or p_aplicar_visitas is null or p_aplicar_fallida is null
      or p_registro_fiscal is null or p_registro_fiscal not in ('FACTURA','SIN FACTURA')
-     or p_retencion_fiscal is null or p_retencion_fiscal::text = 'NaN' or p_retencion_fiscal not between 0 and 1
-     or p_iva is null or p_iva::text = 'NaN' or p_iva not between 0 and 1
-     or p_comision is null or p_comision::text = 'NaN' or p_comision not between 0 and 1 then
+     or p_retencion_fiscal is null or p_retencion_fiscal::text in ('NaN','Infinity','-Infinity') or p_retencion_fiscal not between 0 and 1
+     or p_iva is null or p_iva::text in ('NaN','Infinity','-Infinity') or p_iva not between 0 and 1
+     or p_comision is null or p_comision::text in ('NaN','Infinity','-Infinity') or p_comision not between 0 and 1 then
     raise exception 'Datos inválidos para calcular el pago Walmart';
   end if;
   v_descuento_visitas := case when p_aplicar_visitas
@@ -144,8 +144,10 @@ revoke all on function private.calcular_walmart_importes(numeric,numeric,integer
 alter table public.rutas
   add column if not exists walmart_visitas_asignadas integer,
   add column if not exists walmart_visitas_realizadas integer,
-  add column if not exists walmart_folios_avaya text[];
+  add column if not exists walmart_folios_avaya text[],
+  add column if not exists walmart_requiere_revision boolean;
 
+-- La liquidación pendiente debe bloquear las rutas marcadas para revisión.
 create or replace function private.validar_visitas_walmart()
 returns trigger language plpgsql set search_path = ''
 as $$
@@ -158,10 +160,16 @@ begin
   if old.estado='cerrada' and
     (new.walmart_visitas_asignadas is distinct from old.walmart_visitas_asignadas
      or new.walmart_visitas_realizadas is distinct from old.walmart_visitas_realizadas
-     or new.walmart_folios_avaya is distinct from old.walmart_folios_avaya) then
+     or new.walmart_folios_avaya is distinct from old.walmart_folios_avaya
+     or new.walmart_requiere_revision is distinct from old.walmart_requiere_revision) then
     raise exception 'Los datos de visitas de una ruta cerrada no pueden modificarse';
   end if;
   if old.estado <> 'cerrada' and new.estado='cerrada' then
+    if new.walmart_visitas_asignadas is null and new.walmart_visitas_realizadas is null
+      and new.walmart_folios_avaya is null then
+      new.walmart_requiere_revision := true;
+      return new;
+    end if;
     if new.walmart_visitas_asignadas is null or new.walmart_visitas_asignadas < 1
       or new.walmart_visitas_realizadas is null or new.walmart_visitas_realizadas < 0
       or new.walmart_visitas_realizadas > new.walmart_visitas_asignadas then
@@ -174,6 +182,7 @@ begin
     if coalesce(new.fallidos,0)>0 and coalesce(cardinality(new.walmart_folios_avaya),0)=0 then
       raise exception 'Captura al menos un folio Avaya cuando haya entregas fallidas';
     end if;
+    new.walmart_requiere_revision := false;
   end if;
   return new;
 end;

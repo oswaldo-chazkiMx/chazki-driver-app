@@ -149,16 +149,24 @@ test("agreement changes are scoped to assigned CEDIS and audited once",async()=>
   }finally{await db.close()}
 });
 
-test("Walmart route closure requires valid visits and Avaya folios for failed deliveries",async()=>{
+test("Walmart closure validates visits and flags legacy app closures for review",async()=>{
   const db=await database();
   try{
     await db.exec(migration);
     await db.exec("insert into public.rutas(id,cedis_id,estado,fallidos) values (1,1,'en_ruta',1)");
-    await assert.rejects(db.exec("update public.rutas set estado='cerrada' where id=1"),/visitas asignadas/);
+    await assert.rejects(db.exec("update public.rutas set estado='cerrada',walmart_visitas_asignadas=100 where id=1"),/visitas asignadas/);
     await assert.rejects(db.exec("update public.rutas set estado='cerrada',walmart_visitas_asignadas=100,walmart_visitas_realizadas=101 where id=1"),/visitas asignadas/);
     await assert.rejects(db.exec("update public.rutas set estado='cerrada',walmart_visitas_asignadas=100,walmart_visitas_realizadas=95 where id=1"),/folio Avaya/);
-    await db.exec("update public.rutas set estado='cerrada',walmart_visitas_asignadas=100,walmart_visitas_realizadas=95,walmart_folios_avaya=array['A123'] where id=1");
+    await db.exec("update public.rutas set estado='cerrada',walmart_visitas_asignadas=100,walmart_visitas_realizadas=95,walmart_folios_avaya=array['A123'],walmart_requiere_revision=true where id=1");
+    assert.equal((await db.query("select walmart_requiere_revision as revision from public.rutas where id=1")).rows[0].revision,false);
     await assert.rejects(db.exec("update public.rutas set walmart_visitas_realizadas=100 where id=1"),/ruta cerrada/);
+    await db.exec("insert into public.rutas(id,cedis_id,estado,fallidos) values (2,1,'en_ruta',1)");
+    await db.exec("update public.rutas set estado='cerrada',walmart_requiere_revision=false where id=2");
+    assert.equal((await db.query("select walmart_requiere_revision as revision from public.rutas where id=2")).rows[0].revision,true);
+    await assert.rejects(db.exec("update public.rutas set walmart_requiere_revision=false where id=2"),/ruta cerrada/);
+    await db.exec("insert into public.clientes values (2,'COPPEL',true); insert into public.cedis values (5,2,'Otro CEDIS',true); insert into public.rutas(id,cedis_id,estado,fallidos) values (3,5,'en_ruta',1)");
+    await db.exec("update public.rutas set estado='cerrada' where id=3");
+    assert.equal((await db.query("select walmart_requiere_revision as revision from public.rutas where id=3")).rows[0].revision,null);
   }finally{await db.close()}
 });
 
@@ -188,6 +196,8 @@ test("Walmart applies validated penalties, fiscal treatment and weekly split",as
     await assert.rejects(calc([4500,0.75,100,101,true,false,"FACTURA",0.05,0.16,0.02]),/Datos inválidos/);
     await assert.rejects(calc([4500,0.75,100,0,true,true,"FACTURA",0.05,0.16,0.02]),/exceden el pago base/);
     await assert.rejects(calc([4500,0.75,100,95,false,false,"SIN FACTURA",0.05,0.16,1.1]),/Datos inválidos/);
+    await assert.rejects(calc(["Infinity",0.75,100,95,false,false,"FACTURA",0.05,0.16,0.02]),/Datos inválidos/);
+    await assert.rejects(calc([4500,"NaN",100,95,false,false,"FACTURA",0.05,0.16,0.02]),/Datos inválidos/);
   }finally{await db.close()}
 });
 
