@@ -525,13 +525,26 @@ $("bin").onclick=async()=>{
   const saved=await localGet("routes",routeLocalKey());
   S.route={...routeInfo,dbId:saved?.serverRouteId||null,localKey:record.key,checkin:checkinAt};
   clearAuxCapture("in");
-  prefillCan();setStage(1);$("ent").value="";$("fal").value="";updFin();
+  prefillCan();setStage(1);$("ent").value="";$("fal").value="";$("wm-asignadas").value="";$("wm-realizadas").value="";$("wm-folios").value="";updFin();
   $("hstate").className=`pill ${synced?"ok":"w"}`;$("hstate").textContent=synced?"En ruta":"Check-in pendiente de enviar";
   if(synced){toast("Check-in registrado · ¡Buena ruta!")}
   else{setNetStatus("Sin conexión o sincronización pendiente · check-in y evidencia guardados en este dispositivo.",true);toast("Check-in guardado en este dispositivo")}
 };
 
-["ent","fal"].forEach(id=>$(id).addEventListener("input",updFin));
+["ent","fal","wm-asignadas","wm-realizadas","wm-folios"].forEach(id=>$(id).addEventListener("input",updFin));
+const esRutaWalmart=()=>String(S.route?.cli||"").trim().toUpperCase()==="WALMART";
+function datosVisitasWalmart(){
+  const asignadas=$("wm-asignadas").value.trim(),realizadas=$("wm-realizadas").value.trim();
+  const folios=$("wm-folios").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+  if(!/^\d+$/.test(asignadas)||!/^\d+$/.test(realizadas)||
+     !Number.isSafeInteger(Number(asignadas))||!Number.isSafeInteger(Number(realizadas))||
+     Number(asignadas)<1||Number(asignadas)>2147483647||Number(realizadas)>Number(asignadas))
+    return {error:"Indica visitas asignadas y realizadas válidas; las realizadas no pueden superar las asignadas."};
+  if(folios.length>100||folios.some(x=>x.length>120))
+    return {error:"Puedes registrar hasta 100 folios de máximo 120 caracteres cada uno."};
+  if(+$("fal").value>0&&!folios.length)return {error:"Captura al menos un folio Avaya cuando haya entregas fallidas."};
+  return {datos:{walmart_visitas_asignadas:Number(asignadas),walmart_visitas_realizadas:Number(realizadas),walmart_folios_avaya:folios}};
+}
 function sumC(){return Object.values(S.fallos).reduce((a,b)=>a+b,0)}
 function updFin(){
   const pk=S.route?S.route.pk:0,e=+$("ent").value||0,f=+$("fal").value||0,filled=$("ent").value!==""&&$("fal").value!=="";
@@ -539,6 +552,8 @@ function updFin(){
   $("s2note").innerHTML=filled?(e+f===pk?`<span style="color:var(--ok)">✔ Cuadra con los ${pk} paquetes asignados</span>`:`<span style="color:var(--bad)">Entregados + fallidos = ${e+f}; debes cuadrar con ${pk}</span>`):`Asignados: <b>${pk}</b>`;
   $("causes").classList.toggle("hide",!(f>0));$("ftot").textContent=f;
   if(f>0){drawCauses();const s=sumC();ok=ok&&s===f;$("csum").innerHTML=s===f?`<span style="color:var(--ok)">✔ Causas completas (${s}/${f})</span>`:`<span style="color:var(--bad)">Asignadas ${s} de ${f}</span>`}else S.fallos={};
+  const walmart=esRutaWalmart();$("walmart-visitas").classList.toggle("hide",!walmart);
+  if(walmart){const result=datosVisitasWalmart();$("wm-error").textContent=result.error||"";ok=ok&&!result.error}
   $("b2").disabled=!ok;
 }
 function drawCauses(){$("clist").innerHTML=CAUSAS.map(c=>`<div class="cause"><span>${esc(c.nombre)}</span><div class="qty"><button data-c="${esc(c.id)}" data-d="-1">−</button><span>${S.fallos[c.id]||0}</span><button data-c="${esc(c.id)}" data-d="1">+</button></div></div>`).join("")}
@@ -613,9 +628,11 @@ $("bout").onclick=async()=>{
   const checkoutAt=new Date().toISOString();
   const fl=Object.entries(S.fallos).filter(([,q])=>q>0).map(([c,q])=>({causa_id:+c,cantidad:q}));
   const ic=S.inc?[...S.incSel].map(i=>({incidencia_id:+i,comentario:$("inctxt").value.trim()||null})):[];
+  const walmart=esRutaWalmart()?datosVisitasWalmart():null;
+  if(walmart?.error){err("outerr",new Error(walmart.error));$("bout").disabled=false;return}
   record.status="checkout_pending";
   record.checkout={checkoutAt,ent:res.ent,fal:res.fal,hubo_incidencias:!!S.inc,fallos:fl,incidencias:ic,auxiliaryBlob,auxiliaryEvidencePath:null,
-    extras:llevaExtras()?{maniobras:$("x-man").value.trim()||null,estadia:$("x-est").value.trim()||null,otros:$("x-otr").value.trim()||null}:{}};
+    extras:{...(llevaExtras()?{maniobras:$("x-man").value.trim()||null,estadia:$("x-est").value.trim()||null,otros:$("x-otr").value.trim()||null}:{}),...(walmart?.datos||{})}};
   try{await localPut("routes",record)}catch(e){err("outerr",e);$("bout").disabled=false;return}
   S.routeLocalCheckout=record.checkout;
   let synced=false;
