@@ -187,6 +187,80 @@ $$;
 revoke all on function private.calcular_coppel_peak_asistencia(date,date[],boolean,jsonb)
   from public, anon, authenticated;
 
+create or replace function private.coppel_peak_previsualizar_semana(
+  p_driver_id uuid, p_lunes date
+) returns jsonb
+language plpgsql stable set search_path = ''
+as $$
+declare
+  v_dias date[];
+  v_hubo_no_show boolean;
+  v_rutas jsonb;
+  v_asistencia numeric;
+  v_rutas_domingo integer;
+begin
+  if p_driver_id is null or p_lunes is null or extract(isodow from p_lunes) <> 1
+    or p_lunes < date '2026-11-09' or p_lunes + 6 > date '2027-01-10' then
+    raise exception 'Driver o semana COPPEL inválidos';
+  end if;
+
+  select coalesce(array_agg(distinct x.dia order by x.dia),'{}'::date[]) into v_dias
+  from (
+    select (r.checkin_at at time zone 'America/Mexico_City')::date as dia
+    from public.rutas r
+    join public.cedis ce on ce.id=r.cedis_id
+    join public.clientes cl on cl.id=ce.cliente_id
+    where r.driver_id=p_driver_id and public.operativo_normalizar(cl.nombre) in ('coppel','coppelbt')
+      and (r.checkin_at at time zone 'America/Mexico_City')::date between p_lunes and p_lunes+6
+    union
+    select (c.capturado_at at time zone 'America/Mexico_City')::date
+    from public.cancelaciones c
+    join public.cedis ce on ce.id=c.cedis_id
+    join public.clientes cl on cl.id=ce.cliente_id
+    where c.driver_id=p_driver_id and c.estatus='aprobada'
+      and public.operativo_normalizar(cl.nombre) in ('coppel','coppelbt')
+      and (c.capturado_at at time zone 'America/Mexico_City')::date between p_lunes and p_lunes+6
+  ) x;
+  select exists (
+    select 1 from public.no_show_casos ns
+    where ns.driver_id=p_driver_id and ns.cuenta='COPPEL'
+      and ns.fecha_servicio between p_lunes and p_lunes+6
+  ) into v_hubo_no_show;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'ruta_id',r.id,'cedis_id',r.cedis_id,
+    'fecha',(r.checkin_at at time zone 'America/Mexico_City')::date,
+    'entregados',l.entregados
+  ) order by r.id),'[]'::jsonb) into v_rutas
+  from public.liquidaciones l
+  join public.rutas r on r.id=l.ruta_id
+  join public.tarifas t on t.id=l.tarifa_id
+  join private.coppel_peak_plazas p on p.cedis_id=r.cedis_id
+  where r.driver_id=p_driver_id and l.cuenta='COPPEL'
+    and upper(btrim(l.tipo_unidad))='SEDAN'
+    and upper(btrim(l.esquema))='PAQUETE'
+    and upper(btrim(t.zona))='LOCAL'
+    and (r.checkin_at at time zone 'America/Mexico_City')::date between p_lunes and p_lunes+6
+    and (r.checkin_at at time zone 'America/Mexico_City')::date between p.inicio and p.fin;
+  v_asistencia := private.calcular_coppel_peak_asistencia(p_lunes,v_dias,v_hubo_no_show,v_rutas);
+
+  select count(*) into v_rutas_domingo
+  from public.rutas r
+  join public.cedis ce on ce.id=r.cedis_id
+  join public.clientes cl on cl.id=ce.cliente_id
+  where r.driver_id=p_driver_id and public.operativo_normalizar(cl.nombre) in ('coppel','coppelbt')
+    and (r.checkin_at at time zone 'America/Mexico_City')::date=p_lunes+6;
+  return jsonb_build_object(
+    'lunes',p_lunes,'dias_asistencia',to_jsonb(v_dias),'hubo_no_show',v_hubo_no_show,
+    'rutas_validadas',v_rutas,'bono_asistencia_base',v_asistencia,
+    'rutas_domingo',v_rutas_domingo,
+    'bono_domingo_base',case when v_rutas_domingo>0 then 300 else 0 end
+  );
+end;
+$$;
+revoke all on function private.coppel_peak_previsualizar_semana(uuid,date)
+  from public, anon, authenticated;
+
 create or replace function private.coppel_peak_bono_domingo(
   p_fecha date, p_rutas_registradas integer
 ) returns numeric
@@ -201,6 +275,39 @@ begin
 end;
 $$;
 revoke all on function private.coppel_peak_bono_domingo(date,integer)
+  from public, anon, authenticated;
+
+create or replace function private.coppel_peak_fiscal_bono(
+  p_bono numeric, p_registro text, p_retencion numeric, p_comision numeric, p_iva numeric
+) returns jsonb
+language plpgsql immutable set search_path = ''
+as $$
+declare
+  v_retencion numeric := 0;
+  v_neto numeric;
+  v_comision numeric := 0;
+  v_iva numeric := 0;
+begin
+  if p_bono is null or p_bono::text in ('NaN','Infinity','-Infinity')
+    or p_bono < 0 or p_bono <> round(p_bono,2)
+    or p_registro is null or p_registro not in ('FACTURA','SIN FACTURA')
+    or p_retencion is null or p_retencion::text in ('NaN','Infinity','-Infinity') or p_retencion not between 0 and 1
+    or p_comision is null or p_comision::text in ('NaN','Infinity','-Infinity') or p_comision not between 0 and 1
+    or p_iva is null or p_iva::text in ('NaN','Infinity','-Infinity') or p_iva not between 0 and 1 then
+    raise exception 'Datos fiscales inválidos para el bono COPPEL';
+  end if;
+  if p_registro='SIN FACTURA' then v_retencion := round(p_bono*p_retencion,2); end if;
+  v_neto := p_bono-v_retencion;
+  if p_registro='SIN FACTURA' then v_comision := round(v_neto*p_comision,2); end if;
+  if p_registro='FACTURA' then v_iva := round(v_neto*p_iva,2); end if;
+  return jsonb_build_object(
+    'bono_base',p_bono,'retencion',v_retencion,'neto',v_neto,
+    'comision',v_comision,'iva',v_iva,'pago_proveedor',v_neto+v_iva,
+    'costo_total_imp',v_neto+v_comision+v_iva
+  );
+end;
+$$;
+revoke all on function private.coppel_peak_fiscal_bono(numeric,text,numeric,numeric,numeric)
   from public, anon, authenticated;
 
 -- Solo calcula la diferencia; la integración debe serializar y registrar cada

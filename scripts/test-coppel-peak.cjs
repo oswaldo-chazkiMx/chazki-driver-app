@@ -11,6 +11,11 @@ async function database(){
     create role anon; create role authenticated; create schema private;
     create table public.clientes(id bigint primary key,nombre text,activo boolean);
     create table public.cedis(id bigint primary key,cliente_id bigint references public.clientes(id),nombre text,activo boolean);
+    create table public.rutas(id bigint primary key,driver_id uuid,cedis_id bigint,checkin_at timestamptz);
+    create table public.cancelaciones(id bigint primary key,driver_id uuid,cedis_id bigint,capturado_at timestamptz,estatus text);
+    create table public.no_show_casos(id bigint primary key,driver_id uuid,cuenta text,fecha_servicio date,estado text);
+    create table public.tarifas(id bigint primary key,zona text);
+    create table public.liquidaciones(id bigint primary key,ruta_id bigint,tarifa_id bigint,cuenta text,tipo_unidad text,esquema text,entregados integer);
     create function public.operativo_normalizar(p_texto text) returns text language sql immutable as $$
       select regexp_replace(translate(lower(btrim(coalesce(p_texto,''))),'áéíóúüñ','aeiouun'),'[^a-z0-9]+','','g')
     $$;
@@ -137,6 +142,48 @@ test("weekly bonus uses each validated route's plaza and includes Sunday without
   }finally{await db.close()}
 });
 
+test("weekly preview derives attendance and validated routes from database records",async()=>{
+  const db=await database();
+  const driver="00000000-0000-0000-0000-000000000001";
+  try{
+    await db.exec(migration);
+    await db.exec(`
+      insert into public.rutas values
+        (1,'${driver}',22,'2026-11-09 16:00+00'),
+        (2,'${driver}',22,'2026-11-11 16:00+00'),
+        (3,'${driver}',22,'2026-11-12 16:00+00'),
+        (4,'${driver}',22,'2026-11-13 16:00+00'),
+        (5,'${driver}',14,'2026-11-14 16:00+00'),
+        (6,'${driver}',14,'2026-11-15 16:00+00');
+      insert into public.cancelaciones values
+        (1,'${driver}',22,'2026-11-10 16:00+00','pendiente');
+      insert into public.tarifas values (1,'LOCAL'),(2,'LOCAL (huixquilucan)');
+      insert into public.liquidaciones values
+        (1,1,1,'COPPEL','SEDAN','PAQUETE',100),
+        (2,2,2,'COPPEL','SEDAN','PAQUETE',100);
+    `);
+    const preview=async()=>(await db.query("select private.coppel_peak_previsualizar_semana($1,'2026-11-09') as result",[driver])).rows[0].result;
+    let result=await preview();
+    assert.equal(result.bono_asistencia_base,0);
+    assert.equal(result.rutas_domingo,1);
+    assert.equal(result.bono_domingo_base,300);
+    assert.equal(result.rutas_validadas.length,1);
+    await db.exec("update public.cancelaciones set estatus='aprobada' where id=1");
+    result=await preview();
+    assert.equal(result.bono_asistencia_base,200);
+    assert.deepEqual(result.dias_asistencia,["2026-11-09","2026-11-10","2026-11-11","2026-11-12","2026-11-13","2026-11-14","2026-11-15"]);
+    await db.exec("insert into public.liquidaciones values (3,6,1,'COPPEL','SEDAN','PAQUETE',50)");
+    assert.equal((await preview()).bono_asistencia_base,350);
+    await db.exec(`insert into public.no_show_casos values (1,'${driver}','COPPEL','2026-11-11','apelacion_aceptada')`);
+    result=await preview();
+    assert.equal(result.hubo_no_show,true);
+    assert.equal(result.bono_asistencia_base,0);
+    assert.equal(result.bono_domingo_base,300);
+    await db.exec("insert into public.liquidaciones values (4,1,1,'COPPEL','SEDAN','PAQUETE',100)");
+    await assert.rejects(preview(),/duplicada o inválida/);
+  }finally{await db.close()}
+});
+
 test("Sunday bonus pays once per Sunday with registered routes, not cancellation alone",async()=>{
   const db=await database();
   try{
@@ -152,6 +199,29 @@ test("Sunday bonus pays once per Sunday with registered routes, not cancellation
     await assert.rejects(calc("2026-11-08",1),/Fecha o número de rutas inválidos/);
     await assert.rejects(calc("2027-01-11",1),/Fecha o número de rutas inválidos/);
     await assert.rejects(calc("2026-11-15",-1),/Fecha o número de rutas inválidos/);
+  }finally{await db.close()}
+});
+
+test("bonus fiscal calculation matches invoice and non-invoice route treatment",async()=>{
+  const db=await database();
+  try{
+    await db.exec(migration);
+    const calc=async(bono,registro,ret=0.05,com=0.02,iva=0.16)=>(await db.query(
+      "select private.coppel_peak_fiscal_bono($1,$2,$3,$4,$5) as result",
+      [bono,registro,ret,com,iva])).rows[0].result;
+    assert.deepEqual(await calc(300,"SIN FACTURA"),{
+      bono_base:300,retencion:15,neto:285,comision:5.7,iva:0,pago_proveedor:285,costo_total_imp:290.7
+    });
+    assert.deepEqual(await calc(300,"FACTURA"),{
+      bono_base:300,retencion:0,neto:300,comision:0,iva:48,pago_proveedor:348,costo_total_imp:348
+    });
+    assert.deepEqual(await calc(0,"FACTURA"),{
+      bono_base:0,retencion:0,neto:0,comision:0,iva:0,pago_proveedor:0,costo_total_imp:0
+    });
+    await assert.rejects(calc(300,"OTRO"),/Datos fiscales inválidos/);
+    await assert.rejects(calc(-1,"FACTURA"),/Datos fiscales inválidos/);
+    await assert.rejects(calc(300,"FACTURA",0.05,0.02,1.1),/Datos fiscales inválidos/);
+    await assert.rejects(calc("Infinity","FACTURA"),/Datos fiscales inválidos/);
   }finally{await db.close()}
 });
 
