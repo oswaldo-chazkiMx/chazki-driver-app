@@ -4,7 +4,12 @@
 --     CEDIS (or a coordinator / ops / master) to approve it before it becomes an invitation.
 --   * When the invited email has (or creates) an account, the invitation is applied automatically.
 -- Depends on: drivers, proveedores, cedis, asignaciones_operativas, mi_acceso_administrativo(),
---             operativo_rol_actual().
+--             operativo_rol_actual(), padron_fleet, notificaciones.
+-- Run in the Supabase SQL editor as the database owner. The grants below fix table-level
+-- access; RLS still limits invitations to the sender and assigned operational staff.
+-- Installation order: network-invitations.sql, invitation-status-audit.sql, then
+-- registro-por-invitacion.sql. Re-running this file replaces functions customized by
+-- registro-por-invitacion.sql, so reapply that migration before using invitations.
 begin;
 
 create table if not exists public.invitaciones_red (
@@ -30,6 +35,7 @@ create unique index if not exists invitaciones_red_email_activa
   where estatus in ('pendiente_aprobacion', 'enviada');
 
 alter table public.invitaciones_red enable row level security;
+alter table public.invitaciones_red add column if not exists ultimo_aviso_en timestamptz;
 revoke all on public.invitaciones_red from anon, authenticated;
 grant select on public.invitaciones_red to authenticated;
 
@@ -46,11 +52,12 @@ as $$
       public.mi_acceso_administrativo()
       and (
         public.operativo_rol_actual() in ('master', 'ops')
-        or exists (
+        or (public.operativo_rol_actual() in ('ih', 'coordinador') and exists (
           select 1 from public.asignaciones_operativas a
           where a.cedis_id = p_inv.cedis_id
-            and auth.uid() in (a.supervisor_id, a.coordinador_id)
-        )
+            and ((public.operativo_rol_actual() = 'ih' and a.supervisor_id = auth.uid())
+              or (public.operativo_rol_actual() = 'coordinador' and a.coordinador_id = auth.uid()))
+        ))
       )
     )
   );
@@ -158,6 +165,14 @@ begin
     if v_tipo not in ('flotillero', 'independiente') then
       raise exception 'Categoria invalida: usa flotillero o independiente';
     end if;
+    if v_rol in ('ih', 'coordinador') and not exists (
+      select 1 from public.asignaciones_operativas a
+       where a.cedis_id = p_cedis_id
+         and ((v_rol = 'ih' and a.supervisor_id = auth.uid())
+           or (v_rol = 'coordinador' and a.coordinador_id = auth.uid()))
+    ) then
+      raise exception 'Selecciona un CEDIS asignado a tu cuenta';
+    end if;
     v_estatus := 'enviada';
   elsif v_rol = 'flotillero' then
     select proveedor_id into v_prov from public.drivers where id = auth.uid();
@@ -184,7 +199,7 @@ begin
 
   if v_estatus = 'enviada' then
     perform public.aplicar_invitacion_red_por_correo(v_email);
-    return 'Invitacion enviada';
+    return 'Invitacion registrada. Comparte el aviso por correo o WhatsApp';
   end if;
   return 'Solicitud enviada: el supervisor debe aprobarla';
 exception when unique_violation then
@@ -252,6 +267,117 @@ end;
 $$;
 revoke all on function public.cancelar_invitacion_red(bigint) from public, anon;
 grant execute on function public.cancelar_invitacion_red(bigint) to authenticated;
+
+-- A pending fleet request notifies the assigned supervisor and coordinator.
+create or replace function public.notificar_solicitud_invitacion_red(p_id bigint)
+returns void
+language plpgsql
+security definer
+set search_path = pg_catalog, public, auth
+as $$
+declare v_inv public.invitaciones_red%rowtype;
+begin
+  select * into v_inv from public.invitaciones_red where id = p_id for update;
+  if not found or v_inv.estatus <> 'pendiente_aprobacion' or v_inv.invitado_por_rol <> 'flotillero' then
+    raise exception 'La solicitud ya no esta pendiente';
+  end if;
+  if v_inv.ultimo_aviso_en > now() - interval '1 minute' then
+    raise exception 'Espera un minuto antes de reenviar la solicitud';
+  end if;
+  insert into public.notificaciones (usuario, titulo, cuerpo, tipo, ref_tipo, ref_id)
+  select destinatario, 'Solicitud de acceso de driver',
+         'Un flotillero solicita la aprobacion de un driver en tu CEDIS.',
+         'invitacion_red', 'invitacion_red', v_inv.id
+    from (
+      select a.supervisor_id as destinatario from public.asignaciones_operativas a where a.cedis_id = v_inv.cedis_id
+      union
+      select a.coordinador_id from public.asignaciones_operativas a where a.cedis_id = v_inv.cedis_id
+    ) responsables;
+  if not found then
+    insert into public.notificaciones (usuario, titulo, cuerpo, tipo, ref_tipo, ref_id)
+    select d.id, 'Solicitud de acceso sin responsables',
+           'Una solicitud de driver no tiene responsables asignados al CEDIS.',
+           'configuracion_operativa', 'invitacion_red', v_inv.id
+      from public.drivers d where d.rol::text = 'master';
+    if not found then raise exception 'No hay responsables disponibles para esta solicitud'; end if;
+  end if;
+  update public.invitaciones_red set ultimo_aviso_en = now() where id = p_id;
+end;
+$$;
+revoke all on function public.notificar_solicitud_invitacion_red(bigint) from public, anon, authenticated;
+
+create or replace function public.invitacion_red_notificar_nueva()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+begin
+  if new.estatus = 'pendiente_aprobacion' and new.invitado_por_rol = 'flotillero' then
+    perform public.notificar_solicitud_invitacion_red(new.id);
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.invitacion_red_notificar_nueva() from public, anon, authenticated;
+drop trigger if exists invitacion_red_notificar_nueva_trg on public.invitaciones_red;
+create trigger invitacion_red_notificar_nueva_trg after insert on public.invitaciones_red
+for each row execute function public.invitacion_red_notificar_nueva();
+
+create or replace function public.reenviar_solicitud_invitacion_red(p_id bigint)
+returns text
+language plpgsql
+security definer
+set search_path = pg_catalog, public, auth
+as $$
+declare v_inv public.invitaciones_red%rowtype;
+begin
+  select * into v_inv from public.invitaciones_red where id = p_id for update;
+  if not found or auth.uid() is null or v_inv.invitado_por <> auth.uid()
+     or v_inv.invitado_por_rol <> 'flotillero' or v_inv.estatus <> 'pendiente_aprobacion' then
+    raise exception 'Solo el flotillero que envio una solicitud pendiente puede reenviarla';
+  end if;
+  perform public.notificar_solicitud_invitacion_red(p_id);
+  return 'Solicitud reenviada a los responsables';
+end;
+$$;
+revoke all on function public.reenviar_solicitud_invitacion_red(bigint) from public, anon;
+grant execute on function public.reenviar_solicitud_invitacion_red(bigint) to authenticated;
+
+-- This roster has no reliable CEDIS mapping. Authorized operational staff can see the
+-- entire roster, including account status; no direct access to auth.users is granted.
+create or replace function public.listar_padron_acceso(p_busqueda text default '', p_offset integer default 0)
+returns table (email text, nombre text, proveedor text, cliente text, estatus_padron text,
+               driver_id uuid, estatus_cuenta text, correo_confirmado boolean)
+language plpgsql
+stable
+security definer
+set search_path = pg_catalog, public, auth
+as $$
+begin
+  if auth.uid() is null or not coalesce(public.mi_acceso_administrativo(), false)
+     or coalesce(public.operativo_rol_actual(), '') not in ('master', 'ops', 'coordinador', 'ih') then
+    raise exception 'No tienes permiso para consultar el padron';
+  end if;
+  if p_offset is null or p_offset < 0 then raise exception 'Pagina invalida'; end if;
+  return query
+    with cuentas as (
+      select lower(u.email::text) as correo, d.id, d.nombre, d.estatus, u.email_confirmed_at
+        from auth.users u join public.drivers d on d.id = u.id
+       where d.rol::text in ('driver', 'flotillero') and u.email is not null
+    )
+    select coalesce(p.email::text, c.correo), coalesce(p.nombre::text, c.nombre::text),
+           p.proveedor_nombre::text, p.cliente::text, p.estatus::text,
+           c.id, c.estatus::text, c.email_confirmed_at is not null
+      from public.padron_fleet p full join cuentas c on lower(p.email::text) = c.correo
+     where coalesce(p_busqueda, '') = ''
+        or position(lower(btrim(p_busqueda)) in lower(concat_ws(' ', p.email, p.nombre, p.proveedor_nombre, c.correo, c.nombre))) > 0
+     order by coalesce(p.nombre::text, c.nombre::text, p.email::text, c.correo), coalesce(p.email::text, c.correo)
+     limit 51 offset p_offset;
+end;
+$$;
+revoke all on function public.listar_padron_acceso(text, integer) from public, anon;
+grant execute on function public.listar_padron_acceso(text, integer) to authenticated;
 
 -- Applies pending invitations the moment the account's driver profile is created.
 create or replace function public.drivers_aplicar_invitacion_red()

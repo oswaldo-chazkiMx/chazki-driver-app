@@ -26,7 +26,7 @@ $("abtn").onclick=async()=>{
   if(!dominioOk(email)){$("amsg").innerHTML='<div class="errbox">Solo personal de Chazki: usa tu correo @chazki.com.</div>';return}
   const r=await sb.auth.signInWithPassword({email,password});
   if(r.error){$("amsg").innerHTML='<div class="errbox">Correo o contraseña incorrectos.</div>';return}boot()};
-const TABS={master:"rvalbkcifpedtnxyzgqnhw",ops:"rvalbkcifpdtnxyzgqnw",coordinador:"rvalbkcifpdtxyzqnw",finanzas:"rlcpdxyzq",ih:"rvabkcifdxnw"};
+const TABS={master:"rvalbkcifpedtnxyzgqnhwj",ops:"rvalbkcifpdtnxyzgqnwj",coordinador:"rvalbkcifpdtxyzqnwj",finanzas:"rlcpdxyzq",ih:"rvabkcifdxnwj"};
 const puede=t=>(TABS[ROL]||"").includes(t);
 const veFin=()=>["master","ops","coordinador","finanzas"].includes(ROL);
 const cargaFin=()=>veFin()||ROL==="ih";
@@ -53,6 +53,7 @@ const NAV_INFO={
   h:["Cambios tarifarios","✓","Aprueba o rechaza los cambios de tarifas y penalizaciones propuestos."],
   d:["Reportes","⇩","Genera reportes y exportaciones."],
   p:["Proveedores y drivers","♙","Administra proveedores y sus conductores."],
+  j:["Padrón de flota","♙","Consulta el padrón de Flota y las cuentas de la app por separado."],
   w:["Invitaciones","✉","Invita flotilleros y drivers independientes, y aprueba los drivers que piden los flotilleros."],
   e:["Equipo","♧","Gestiona el acceso del equipo administrativo."]
 };
@@ -70,6 +71,7 @@ function seleccionarTab(b){
   $("page-description").textContent=description;
   if(tab==="h"){cargarCambiosTarifario();return}
   if(tab==="w"){render();cargarInvitaciones().then(()=>{if(tab==="w")render()});return}
+  if(tab==="j"){PADRON_LOADING=true;render();cargarPadron().then(()=>{if(tab==="j")render()});return}
   if(tab==="e"){render();cargarAsignacionesEquipo().then(()=>{if(tab==="e")render()});return}
   if(["l","x","y","z","g","q","n"].includes(tab)){load();return}
   render();
@@ -336,7 +338,7 @@ function render(){
     (rows.map(({x,i})=>`<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${esc(x.cedis.clientes.nombre)} · ${esc(x.cedis.nombre)}</td><td><span class="pill bad">${esc(i.tipos_incidencia.nombre)}</span></td><td>${esc(i.comentario||"—")}</td></tr>`).join("")||`<tr><td colspan="5">Sin incidencias en este periodo.</td></tr>`)+`</table>`}
   if(tab==="f"){const m={};R.forEach(x=>x.ruta_fallos.forEach(f=>{m[f.causas_fallo.nombre]=(m[f.causas_fallo.nombre]||0)+f.cantidad}));const e=Object.entries(m).sort((a,b)=>b[1]-a[1]);
   h=`<table><tr><th>Causa</th><th>Paquetes</th></tr>`+(e.map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")||`<tr><td colspan="2">Sin fallidos en este periodo.</td></tr>`)+`</table>`}
-  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();if(tab==="t")h=vistaTarifario();if(tab==="h")h=vistaCambiosTarifario();if(tab==="x")h=vistaIndicadores();if(tab==="y")h=vistaFinanzas();if(tab==="z")h=vistaDesempeno();if(tab==="g")h=vistaDocumentosOps();if(tab==="q")h=vistaPnrsOps();if(tab==="n")h=vistaNoShowsOps();if(tab==="w")h=vistaInvitaciones();
+  if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();if(tab==="t")h=vistaTarifario();if(tab==="h")h=vistaCambiosTarifario();if(tab==="x")h=vistaIndicadores();if(tab==="y")h=vistaFinanzas();if(tab==="z")h=vistaDesempeno();if(tab==="g")h=vistaDocumentosOps();if(tab==="q")h=vistaPnrsOps();if(tab==="n")h=vistaNoShowsOps();if(tab==="w")h=vistaInvitaciones();if(tab==="j")h=vistaPadron();
   $("view").innerHTML=h;enlazar();
   document.querySelectorAll("img.th").forEach(i=>i.onclick=()=>{$("lbimg").src=i.dataset.u;$("lb").classList.remove("hide")});
 }
@@ -1082,7 +1084,8 @@ async function asignarRol(){const m=$("eq-m").value.trim().toLowerCase();
   if(error){toast(error.message);return}toast(data);await cargaExtra();render()}
 function vistaProveedores(){
   const opts=sel=>`<option value="">Sin proveedor</option>`+PRV.map(p=>`<option value="${esc(p.id)}" ${sel==p.id?"selected":""}>${esc(p.nombre)}</option>`).join("");
-  const dr=DRV.map(d=>`<tr><td>${esc(d.nombre)}<br><small>${esc(d.codigo||"")}</small></td><td><select data-rol="${esc(d.id)}">${["driver","flotillero","ops","coordinador","ih","finanzas","master"].map(r=>`<option ${d.rol===r?"selected":""}>${r}</option>`).join("")}</select></td><td><select data-prov="${esc(d.id)}">${opts(d.proveedor_id)}</select></td><td><button class="btn sm" data-gd="${esc(d.id)}">Guardar</button></td></tr>`).join("");
+  const conductores=DRV.filter(d=>["driver","flotillero"].includes(d.rol));
+  const dr=conductores.map(d=>`<tr><td>${esc(d.nombre)}<br><small>${esc(d.codigo||"")}</small></td><td><select data-rol="${esc(d.id)}">${["driver","flotillero","ops","coordinador","ih","finanzas","master"].map(r=>`<option ${d.rol===r?"selected":""}>${r}</option>`).join("")}</select></td><td><select data-prov="${esc(d.id)}">${opts(d.proveedor_id)}</select></td><td><button class="btn sm" data-gd="${esc(d.id)}">Guardar</button></td></tr>`).join("");
   const pv=PRV.map(p=>{const t=DRV.find(d=>d.id===p.titular_id);return `<tr><td>${esc(p.nombre)}</td><td>${esc(p.tipo)}</td><td>${p.tipo_registro?esc(p.tipo_registro):'<span class="pill w">Sin definir</span>'}</td><td>${esc(t?t.nombre:"—")}</td></tr>`}).join("");
   const st='style="padding:9px;border:1px solid var(--line);border-radius:10px"';
   if(!esOps())return `<h3 style="margin:12px 8px 0">Proveedores</h3><table><tr><th>Proveedor</th><th>Tipo</th><th>Registro fiscal</th><th>Titular</th></tr>${pv}</table>`;
@@ -1090,55 +1093,162 @@ function vistaProveedores(){
     <input id="np-n" placeholder="Nombre del proveedor" ${st} style="flex:2;min-width:180px;padding:9px;border:1px solid var(--line);border-radius:10px">
     <select id="np-t" ${st}><option value="independiente">Independiente</option><option value="flotillero">Flotillero</option></select>
     <select id="np-r" ${st}><option value="">Registro fiscal…</option><option>FACTURA</option><option>SIN FACTURA</option></select>
-    <select id="np-u" ${st}><option value="">Quién ve sus pagos…</option>${DRV.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join("")}</select>
+    <select id="np-u" ${st}><option value="">Quién ve sus pagos…</option>${conductores.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join("")}</select>
     <button class="btn" id="np-ok">Crear</button></div>
     <h3 style="margin:12px 8px 0">Proveedores</h3><table><tr><th>Proveedor</th><th>Tipo</th><th>Registro fiscal</th><th>Titular (ve los pagos)</th></tr>${pv||'<tr><td colspan="4">Aún no hay proveedores.</td></tr>'}</table>
-    <h3 style="margin:16px 8px 0">Drivers</h3><table><tr><th>Driver</th><th>Rol</th><th>Proveedor</th><th></th></tr>${dr}</table>`}
-let INVR=[],INVR_CEDIS=[],INVR_ERR="";
+    <h3 style="margin:16px 8px 0">Drivers y flotilleros</h3><small style="padding:0 8px">El personal administrativo se consulta en Equipo.</small><table><tr><th>Driver</th><th>Rol</th><th>Proveedor</th><th></th></tr>${dr||'<tr><td colspan="4">No hay drivers ni flotilleros registrados.</td></tr>'}</table>`}
+let PADRON=[],PADRON_ERR="",PADRON_Q="",PADRON_OFFSET=0,PADRON_MAS=false,PADRON_LOADING=false;
+async function cargarPadron(){
+  PADRON_LOADING=true;PADRON_ERR="";
+  const {data,error}=await sb.rpc("listar_padron_acceso",{p_busqueda:PADRON_Q,p_offset:PADRON_OFFSET});
+  PADRON_LOADING=false;
+  if(error){PADRON=[];PADRON_MAS=false;PADRON_ERR="No se pudo cargar el padrón. Verifica que network-invitations.sql esté instalado en Supabase: "+error.message;return}
+  PADRON_MAS=data.length>50;PADRON=data.slice(0,50);
+}
+function correoAcceso(email,nombre){
+  const mensaje=`Hola${nombre?" "+nombre:""}, abre la app de Driver (${location.origin}/) y utiliza este correo: ${email}. Si aún no tienes cuenta, solicita a tu supervisor una invitación aprobada antes de registrarte.`;
+  return `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent("Acceso a Chazki Driver")}&body=${encodeURIComponent(mensaje)}`;
+}
+function vistaPadron(){
+  const filas=PADRON.map(x=>{
+    const padron=x.estatus_padron||"Fuera del padrón";
+    const cuenta=!x.driver_id?"Sin cuenta":`${x.estatus_cuenta||"Sin estatus"} · ${x.correo_confirmado?"correo confirmado":"correo sin confirmar"}`;
+    const puedeContactar=String(x.estatus_padron||"").toUpperCase()==="ACTIVO"||String(x.estatus_cuenta||"").toLowerCase()==="activo";
+    return `<tr><td>${esc(x.nombre||"—")}<br><small>${esc(x.email||"—")}</small></td><td>${esc(x.proveedor||"—")}</td><td>${esc(x.cliente||"—")}</td><td>${esc(padron)}</td><td>${esc(cuenta)}</td><td>${x.email&&puedeContactar?`<a class="btn ghost sm" href="${esc(correoAcceso(x.email,x.nombre))}">Preparar correo</a>`:"—"}</td></tr>`;
+  }).join("");
+  return `<h3 style="margin:12px 8px 0">Padrón de flota y cuentas de driver</h3>
+    <p style="padding:0 8px">El padrón de Flota se muestra por separado y no autoriza el registro; los drivers necesitan una invitación aprobada. El correo se abre en tu aplicación de correo y debes enviarlo.</p>
+    <div style="display:flex;gap:8px;padding:8px"><input id="padron-q" placeholder="Nombre, correo o proveedor" value="${esc(PADRON_Q)}"><button class="btn" id="padron-buscar">Buscar</button></div>
+    ${PADRON_ERR?`<div class="errbox">${esc(PADRON_ERR)}</div>`:""}
+    ${PADRON_LOADING?"<p>Cargando padrón…</p>":`<table><tr><th>Driver</th><th>Proveedor</th><th>Cliente</th><th>Padrón</th><th>Cuenta</th><th></th></tr>${filas||'<tr><td colspan="6">Sin resultados.</td></tr>'}</table>`}
+    <div style="display:flex;gap:8px;padding:8px"><button class="btn ghost sm" id="padron-prev" ${PADRON_OFFSET===0||PADRON_LOADING?"disabled":""}>Anterior</button><span>Registros ${PADRON.length?PADRON_OFFSET+1:0}–${PADRON_OFFSET+PADRON.length}</span><button class="btn ghost sm" id="padron-next" ${!PADRON_MAS||PADRON_LOADING?"disabled":""}>Siguiente</button></div>`;
+}
+function enlazarPadron(){
+  const cargar=async()=>{PADRON_LOADING=true;render();await cargarPadron();if(tab==="j")render()};
+  $("padron-buscar").onclick=()=>{PADRON_Q=$("padron-q").value.trim();PADRON_OFFSET=0;cargar()};
+  $("padron-q").onkeydown=e=>{if(e.key==="Enter")$("padron-buscar").click()};
+  $("padron-prev").onclick=()=>{PADRON_OFFSET=Math.max(0,PADRON_OFFSET-50);cargar()};
+  $("padron-next").onclick=()=>{PADRON_OFFSET+=50;cargar()};
+}
+let INVR=[],INVR_CEDIS=[],INVR_FLOTAS=[],INVR_AUD=[],INVR_ERR="";
 const INV_TIPO={flotillero:"Flotillero",independiente:"Driver independiente",driver:"Driver de flotillero"};
-const INV_EST={pendiente_aprobacion:["Por aprobar","w"],enviada:["Enviada · espera registro","w"],aceptada:["Aceptada","ok"],rechazada:["Rechazada","bad"],cancelada:["Cancelada","bad"]};
+const INV_EST={pendiente_aprobacion:["Por aprobar","w"],enviada:["Registrada · espera cuenta","w"],aceptada:["Aplicada a la cuenta","ok"],rechazada:["Rechazada","bad"],cancelada:["Cancelada","bad"]};
 async function cargarInvitaciones(){
   INVR_ERR="";
-  const [i,c]=await Promise.all([sb.from("invitaciones_red").select("*").order("creado_en",{ascending:false}).limit(300),sb.from("cedis").select("id,nombre,cliente_id").order("nombre")]);
-  if(i.error)INVR_ERR="No se pudieron cargar las invitaciones. Ejecuta network-invitations.sql en Supabase: "+i.error.message;
-  INVR=i.data||[];INVR_CEDIS=c.data||[];
+  const [i,c,p]=await Promise.all([sb.from("invitaciones_red").select("*").order("creado_en",{ascending:false}).limit(300),sb.from("cedis").select("id,nombre,cliente_id").order("nombre"),sb.from("proveedores").select("id,nombre").eq("tipo","flotillero").eq("activo",true).order("nombre")]);
+  if(i.error)INVR_ERR="No se pudieron cargar las invitaciones. Un administrador debe ejecutar network-invitations.sql en el editor SQL de Supabase y verificar los permisos: "+i.error.message;
+  if(c.error)INVR_ERR+=(INVR_ERR?" ":"")+"No se pudieron cargar los CEDIS: "+c.error.message;
+  if(p.error)INVR_ERR+=(INVR_ERR?" ":"")+"No se pudieron cargar los flotilleros: "+p.error.message;
+  INVR=i.data||[];INVR_CEDIS=c.data||[];INVR_FLOTAS=p.data||[];
+  INVR_AUD=[];
+  if(INVR.length){
+    const {data,error}=await sb.from("invitaciones_red_auditoria").select("invitacion_id,evento,actor_id,registrado_en,estado").in("invitacion_id",INVR.map(x=>x.id)).order("registrado_en",{ascending:false});
+    if(error)INVR_ERR+=(INVR_ERR?" ":"")+"No se pudo cargar el registro de avisos. Verifica invitation-status-audit.sql en Supabase: "+error.message;
+    else INVR_AUD=data||[];
+  }
+}
+function avisosEstadoInvitacion(estado,fecha=new Date()){
+  const avisos=[];
+  if(estado.en_padron)avisos.push(estado.padron_activo?"Este correo ya tiene alta en el padrón.":"Este correo existe en el padrón, pero su alta no está activa.");
+  if(estado.cuenta_bloqueada)avisos.push("Usuario bloqueado. Solicita a tu administrador la reactivación; esta invitación no desbloquea la cuenta.");
+  if(estado.cuenta_inactiva){
+    const inicio=estado.inactivo_desde?new Date(estado.inactivo_desde):null;
+    const dias=inicio&&Number.isFinite(inicio.getTime())&&inicio<=fecha?Math.floor((fecha-inicio)/86400000):null;
+    avisos.push(`Cuenta inactiva. ${dias===null?"No se conoce la fecha de inicio.":`Tiempo inactiva: ${dias} día${dias===1?"":"s"}.`} Solicita a tu administrador la reactivación; esta invitación no reactiva la cuenta.`);
+  }
+  return avisos;
+}
+async function confirmarEstadoInvitacion(email){
+  const {data,error}=await sb.rpc("consultar_estado_invitacion",{p_email:email});
+  if(error)throw new Error("No se pudo comprobar el estado de la cuenta: "+error.message);
+  if(!data||typeof data.en_padron!=="boolean"||typeof data.padron_activo!=="boolean"||typeof data.cuenta_bloqueada!=="boolean"||typeof data.cuenta_inactiva!=="boolean")
+    throw new Error("La consulta del estado devolvió una respuesta inválida.");
+  const avisos=avisosEstadoInvitacion(data);
+  return !avisos.length||confirm(avisos.join("\n\n")+"\n\n¿Deseas continuar con la invitación?");
 }
 function mensajeInvitacion(x){
   const url=location.origin+"/";
-  return `Hola${x.nombre?" "+x.nombre:""}, Chazki te invita como ${INV_TIPO[x.tipo]||"driver"}. Descarga o abre la app de Driver (${url}) y regístrate con este correo: ${x.email}`;
+  return `Hola${x.nombre?" "+x.nombre:""}, Chazki te invita como ${INV_TIPO[x.tipo]||"driver"}. Abre la app de Driver (${url}) y ${x.estatus==="aceptada"?"entra":"regístrate o entra"} con este correo: ${x.email}`;
 }
 function vistaInvitaciones(){
   const cedisTxt=id=>{const c=INVR_CEDIS.find(y=>y.id===id);return c?`${CLIENTES_NOMBRE[String(c.cliente_id)]||""} · ${c.nombre}`:"—"};
   const pend=INVR.filter(x=>x.estatus==="pendiente_aprobacion"&&x.invitado_por_rol==="flotillero");
   const fila=x=>{const e=INV_EST[x.estatus]||[x.estatus,"w"];
     const acc=x.estatus==="pendiente_aprobacion"&&x.invitado_por_rol==="flotillero"?`<button class="btn sm" data-inv-ok="${esc(x.id)}">Aprobar</button> <button class="btn ghost sm" data-inv-no="${esc(x.id)}">Rechazar</button>`
-      :x.estatus==="enviada"?`<a class="btn ghost sm" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(mensajeInvitacion(x))}">WhatsApp</a> <a class="btn ghost sm" href="mailto:${esc(x.email)}?subject=${encodeURIComponent("Invitación a Chazki")}&body=${encodeURIComponent(mensajeInvitacion(x))}">Correo</a> <button class="btn ghost sm" data-inv-x="${esc(x.id)}">Cancelar</button>`
+      :["enviada","aceptada"].includes(x.estatus)?`<a class="btn ghost sm" data-inv-compartir="${esc(x.id)}" data-canal="whatsapp" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(mensajeInvitacion(x))}">WhatsApp</a> <a class="btn ghost sm" data-inv-compartir="${esc(x.id)}" data-canal="correo" href="mailto:${encodeURIComponent(x.email)}?subject=${encodeURIComponent("Invitación a Chazki")}&body=${encodeURIComponent(mensajeInvitacion(x))}">Preparar / reenviar correo</a>${x.estatus==="enviada"?` <button class="btn ghost sm" data-inv-x="${esc(x.id)}">Cancelar</button>`:""}`
       :x.estatus==="pendiente_aprobacion"?`<button class="btn ghost sm" data-inv-x="${esc(x.id)}">Cancelar</button>`:"";
     const prov=x.proveedor_id?PRV.find(p=>p.id===x.proveedor_id):null;
-    return `<tr><td>${esc(x.nombre||"—")}<br><small>${esc(x.email)}</small></td><td>${esc(INV_TIPO[x.tipo]||x.tipo)}${x.esquema?`<br><small>${esc(x.esquema)}</small>`:""}${prov?`<br><small>Flotilla: ${esc(prov.nombre)}</small>`:""}</td><td>${x.cedis_id?esc(cedisTxt(x.cedis_id)):"—"}</td><td>${x.invitado_por_rol==="flotillero"?"Flotillero":"Chazki"}</td><td><span class="pill ${e[1]}">${esc(e[0])}</span>${x.motivo?`<br><small>${esc(x.motivo)}</small>`:""}</td><td>${acc}</td></tr>`};
+    const auditoria=INVR_AUD.filter(a=>a.invitacion_id===x.id).map(a=>{
+      const avisos=avisosEstadoInvitacion(a.estado,new Date(a.registrado_en));
+      const evento={solicitud:"Solicitud registrada",invitacion:"Invitación registrada",correo:"Correo preparado",whatsapp:"WhatsApp preparado"}[a.evento]||"Actividad registrada";
+      return avisos.length?`<br><small>${esc(evento)} ${esc(new Date(a.registrado_en).toLocaleString("es-MX"))} por ${esc(a.actor_id)}: ${esc(avisos.join(" "))}</small>`:"";
+    }).join("");
+    return `<tr><td>${esc(x.nombre||"—")}<br><small>${esc(x.email)}</small></td><td>${esc(INV_TIPO[x.tipo]||x.tipo)}${x.esquema?`<br><small>${esc(x.esquema)}</small>`:""}${prov?`<br><small>Flotilla: ${esc(prov.nombre)}</small>`:""}</td><td>${x.cedis_id?esc(cedisTxt(x.cedis_id)):"—"}</td><td>${x.invitado_por_rol==="flotillero"?"Flotillero":"Chazki"}</td><td><span class="pill ${e[1]}">${esc(e[0])}</span>${x.motivo?`<br><small>${esc(x.motivo)}</small>`:""}${auditoria}</td><td>${acc}</td></tr>`};
   const st='style="padding:9px;border:1px solid var(--line);border-radius:10px"';
   const cedOpts=`<option value="">CEDIS (opcional)…</option>`+INVR_CEDIS.map(c=>`<option value="${esc(c.id)}">${esc((CLIENTES_NOMBRE[String(c.cliente_id)]||"")+" · "+c.nombre)}</option>`).join("");
+  const flotOpts=`<option value="">Selecciona un flotillero…</option>`+INVR_FLOTAS.map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)}</option>`).join("");
   return `${INVR_ERR?`<div class="errbox">${esc(INVR_ERR)}</div>`:""}
-    <h3 style="margin:12px 8px 0">Invitar flotillero o driver independiente</h3>
+    <h3 style="margin:12px 8px 0">Invitar flotillero o driver</h3>
     <div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px">
       <input id="iv-n" placeholder="Nombre o razón social" ${st} style="flex:2;min-width:180px">
       <input id="iv-m" type="email" placeholder="Correo" ${st} style="flex:2;min-width:200px">
-      <select id="iv-t" ${st}><option value="flotillero">Flotillero</option><option value="independiente">Driver independiente</option></select>
+      <select id="iv-t" ${st}><option value="flotillero">Flotillero</option><option value="independiente">Driver independiente</option><option value="driver">Driver de flotillero</option></select>
       <select id="iv-r" ${st}><option value="">Esquema…</option><option value="FACTURA">Con factura</option><option value="SIN FACTURA">Libre (sin factura)</option></select>
       <select id="iv-c" ${st}>${cedOpts}</select>
+      <select id="iv-p" ${st} class="hide" disabled>${flotOpts}</select>
       <button class="btn" id="iv-ok">Invitar</button></div>
-    <small style="padding:0 8px">Al registrarse con ese correo, su cuenta queda con la categoría que elijas. Comparte el aviso por WhatsApp o correo desde la tabla.</small>
-    <h3 style="margin:14px 8px 0">Drivers que piden los flotilleros (${esc(pend.length)} por aprobar)</h3>
+    <small style="padding:0 8px">El registro requiere una invitación aprobada. El correo se prepara aquí y se envía manualmente. Para flotilleros e independientes, supervisores y coordinadores deben elegir un CEDIS asignado.</small>
+    <h3 style="margin:14px 8px 0">Invitaciones y solicitudes (${esc(pend.length)} por aprobar; hasta 300 recientes)</h3>
     <table><tr><th>Invitado</th><th>Categoría</th><th>CEDIS</th><th>Origen</th><th>Estatus</th><th></th></tr>${INVR.map(fila).join("")||'<tr><td colspan="6">Sin invitaciones.</td></tr>'}</table>`}
 function enlazarInvitaciones(){
   const run=async(b,fn)=>{b.disabled=true;const {data,error}=await fn();if(error){toast(error.message);b.disabled=false;return}toast(data||"Listo");await cargarInvitaciones();render()};
-  const ok=$("iv-ok");if(ok)ok.onclick=()=>run(ok,()=>sb.rpc("invitar_a_red",{p_email:$("iv-m").value,p_nombre:$("iv-n").value,p_tipo:$("iv-t").value,p_esquema:$("iv-r").value||null,p_cedis_id:$("iv-c").value?+$("iv-c").value:null}));
-  document.querySelectorAll("[data-inv-ok]").forEach(b=>b.onclick=()=>run(b,()=>sb.rpc("resolver_invitacion_red",{p_id:+b.dataset.invOk,p_aprobar:true})));
+  const confirmarYEnviar=async(b,email,fn)=>{
+    b.disabled=true;
+    try{if(!await confirmarEstadoInvitacion(email)){b.disabled=false;return}await run(b,fn)}
+    catch(error){toast(error.message);b.disabled=false}
+  };
+  const tipo=$("iv-t"),esquema=$("iv-r"),cedis=$("iv-c"),flotilla=$("iv-p");
+  if(tipo){
+    const actualizar=()=>{const esDriver=tipo.value==="driver";esquema.disabled=esDriver;cedis.disabled=esDriver;cedis.classList.toggle("hide",esDriver);flotilla.disabled=!esDriver;flotilla.classList.toggle("hide",!esDriver)};
+    tipo.onchange=actualizar;actualizar();
+  }
+  const ok=$("iv-ok");if(ok)ok.onclick=()=>{
+    const params={p_email:$("iv-m").value,p_nombre:$("iv-n").value,p_tipo:$("iv-t").value,p_esquema:$("iv-r").value||null,p_cedis_id:$("iv-c").value?+$("iv-c").value:null};
+    if(params.p_tipo==="driver"){
+      const proveedor=$("iv-p").value;
+      if(!proveedor){toast("Selecciona un flotillero activo.");return}
+      confirmarYEnviar(ok,params.p_email,()=>sb.rpc("invitar_driver_flotillero",{p_email:params.p_email,p_nombre:params.p_nombre,p_proveedor_id:+proveedor}));
+    }else confirmarYEnviar(ok,params.p_email,()=>sb.rpc("invitar_a_red",params));
+  };
+  document.querySelectorAll("[data-inv-ok]").forEach(b=>b.onclick=()=>{
+    const id=+b.dataset.invOk,inv=INVR.find(x=>x.id===id);
+    if(!inv){toast("No se encontró la solicitud; actualiza la lista.");return}
+    confirmarYEnviar(b,inv.email,()=>sb.rpc("resolver_invitacion_red",{p_id:id,p_aprobar:true}));
+  });
+  document.querySelectorAll("[data-inv-compartir]").forEach(a=>a.onclick=async e=>{
+    e.preventDefault();
+    const id=+a.dataset.invCompartir,inv=INVR.find(x=>x.id===id),canal=a.dataset.canal;
+    if(!inv){toast("No se encontró la invitación; actualiza la lista.");return}
+    if(a.dataset.ocupado==="1")return;
+    a.dataset.ocupado="1";
+    const ventana=canal==="whatsapp"?window.open("","_blank"):null;
+    if(canal==="whatsapp"&&!ventana){a.dataset.ocupado="";toast("Permite las ventanas emergentes para abrir WhatsApp.");return}
+    if(ventana)ventana.opener=null;
+    try{
+      if(!await confirmarEstadoInvitacion(inv.email)){if(ventana)ventana.close();return}
+      const {error}=await sb.rpc("registrar_preparacion_invitacion_red",{p_id:id,p_canal:canal});
+      if(error)throw new Error("No se pudo registrar la preparación: "+error.message);
+      if(ventana)ventana.location.href=a.href;else window.location.href=a.href;
+      await cargarInvitaciones();if(tab==="w")render();
+    }catch(error){if(ventana)ventana.close();toast(error.message)}
+    finally{a.dataset.ocupado=""}
+  });
   document.querySelectorAll("[data-inv-no]").forEach(b=>b.onclick=()=>{const m=prompt("Motivo del rechazo");if(m===null)return;run(b,()=>sb.rpc("resolver_invitacion_red",{p_id:+b.dataset.invNo,p_aprobar:false,p_motivo:m}))});
   document.querySelectorAll("[data-inv-x]").forEach(b=>b.onclick=()=>run(b,()=>sb.rpc("cancelar_invitacion_red",{p_id:+b.dataset.invX})));
 }
 function enlazar(){
   if(tab==="w")enlazarInvitaciones();
+  if(tab==="j")enlazarPadron();
   const ap=$("analytics-period");if(ap)ap.onchange=()=>{analyticsGrain=ap.value;render()};
   const fp=$("finance-period");if(fp)fp.onchange=()=>{financeGrain=fp.value;render()};
   const importDoc=$("doc-flota-save");if(importDoc)importDoc.onclick=importarDocumentoFlota;

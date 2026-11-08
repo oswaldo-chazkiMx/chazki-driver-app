@@ -62,10 +62,10 @@ $("abtn").onclick=async()=>{
   let r;
   if(signup){const nombre=$("anombre").value.trim();if(!nombre){$("abtn").disabled=false;$("amsg").innerHTML='<div class="errbox">Escribe tu nombre completo.</div>';return}
     r=await sb.auth.signUp({email,password,options:{data:{nombre}}});
-    if(!r.error&&!r.data.session){$("abtn").disabled=false;$("amsg").innerHTML='<div class="okbox">Cuenta creada. Revisa tu correo y confirma tu cuenta; después inicia sesión.</div>';authMode(false);return}
+    if(!r.error&&!r.data.session){$("abtn").disabled=false;authMode(false);$("amsg").innerHTML='<div class="okbox">Revisa tu correo y confirma tu cuenta si recibiste un mensaje; después inicia sesión.</div>';return}
   }else r=await sb.auth.signInWithPassword({email,password});
   $("abtn").disabled=false;
-  if(r.error){$("amsg").innerHTML=`<div class="errbox">${esc(r.error.message==="Invalid login credentials"?"Correo o contraseña incorrectos.":/Database error saving new user/i.test(r.error.message)?"Tu correo no está en la base de fleet de Chazki. Pide a tu supervisor que te dé de alta y vuelve a intentarlo.":r.error.message)}</div>`;return}
+  if(r.error){$("amsg").innerHTML=`<div class="errbox">${esc(r.error.message==="Invalid login credentials"?"Correo o contraseña incorrectos.":/Database error saving new user/i.test(r.error.message)?"No se pudo crear la cuenta. Verifica con tu supervisor que exista una invitación aprobada para este correo; si el problema continúa, contacta al administrador.":r.error.message)}</div>`;return}
   boot();
 };
 $("blogout").onclick=async()=>{await sb.auth.signOut();location.reload()};
@@ -810,16 +810,20 @@ function drawKpi(){const box=$("gkpi");if(!box)return;const s=statsK(kp,false),q
    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">${T("Efectividad",pct(ef),dl(s.ef,q.ef,true),col)}${T("Rutas",s.R.length,dl(s.R.length,q.R.length,false))}${T("Entregados",s.ent,`<small style="color:var(--mut)">de ${esc(s.asg)} asignados</small>`)}${T("Fallidos",s.fal)}${T("Cancelaciones",s.C.length)}${T("Aprobadas",s.apr,`<small style="color:var(--mut)">de ${esc(s.R.length)} rutas</small>`)}</div>
    <div class="item" style="margin-top:8px"><span>Días trabajados</span><b>${esc(s.dias)}</b></div><div class="item"><span>Tiempo promedio por ruta</span><b>${hm(s.prom)}</b></div><div class="item"><span>Rutas con incidencias</span><b>${esc(s.inc)}</b></div>${por}`;
   box.querySelectorAll("#kseg button").forEach(b=>b.onclick=()=>{kp=b.dataset.k;drawKpi()})}
-let DRVS=[],BAJAS=[],INVS=[],dp="sem",dopen={},dform=null;
+let DRVS=[],BAJAS=[],INVS=[],INVS_ERR="",dp="sem",dopen={},dform=null;
 async function loadDrivers(){
   const [d,r,c,b,iv]=await Promise.all([sb.from("drivers").select("id,nombre,codigo,estatus,telefono").neq("id",ME.id).order("nombre"),sb.rpc("mis_rutas_estatus"),sb.rpc("mis_cancelaciones_estatus"),sb.from("bajas_solicitudes").select("*").order("solicitado_en",{ascending:false}),sb.from("invitaciones_red").select("*").eq("invitado_por",ME.id).order("creado_en",{ascending:false}).limit(30)]);
-  DRVS=d.data||[];RUTAS_K=r.data||RUTAS_K;CANS_K=c.data||CANS_K;BAJAS=b.data||[];INVS=iv.data||[];drawDrivers()}
+  DRVS=d.data||[];RUTAS_K=r.data||RUTAS_K;CANS_K=c.data||CANS_K;BAJAS=b.data||[];INVS=iv.data||[];INVS_ERR=iv.error?"No se pudieron cargar las solicitudes: "+iv.error.message:"";drawDrivers()}
 function invitarHtml(){
   const f=x=>new Date(x).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
   const est={pendiente_aprobacion:["Pendiente de aprobación del supervisor","#946200"],enviada:["Aprobada · falta que se registre","#1d4ed8"],aceptada:["Registrado","#0f7a3d"],rechazada:["Rechazada","#b42318"],cancelada:["Cancelada","#555b7a"]};
   const ced=CLI.flatMap(c=>(c.cedis||[]).map(x=>`<option value="${esc(x.id)}">${esc(c.nombre+" · "+x.nombre)}</option>`)).join("");
-  const lista=INVS.map(x=>{const e=est[x.estatus]||[x.estatus,"#555b7a"];return `<div class="item"><div><b>${esc(x.nombre||x.email)}</b><small>${esc(x.email)} · ${f(x.creado_en)}${x.motivo?" · "+esc(x.motivo):""}</small></div><span style="color:${e[1]};font-size:12px;font-weight:700;text-align:right">${esc(e[0])}</span></div>`}).join("");
-  return `<div class="card"><h2 style="margin:0">✉️ Invitar a un driver</h2><label>Nombre</label><input id="iv-n" placeholder="Nombre del driver"><label>Correo</label><input id="iv-m" type="email" placeholder="correo@ejemplo.com"><label>CEDIS donde operará</label><select id="iv-c"><option value="">Selecciona…</option>${ced}</select><div id="iv-e" class="note" style="color:#b42318"></div><button class="btn" id="iv-ok" style="margin-top:8px">Enviar solicitud</button><div class="note" style="margin-top:6px">Tu supervisor debe aprobarla antes de que el driver quede en tu flotilla.</div>${lista}</div>`}
+  const lista=INVS.map(x=>{const e=est[x.estatus]||[x.estatus,"#555b7a"];
+    const appUrl=location.protocol==="https:"?location.origin:"https://chazki-driver-app.vercel.app";
+    const mensaje=`Hola${x.nombre?" "+x.nombre:""}, tu solicitud para Chazki Driver fue aprobada. Abre ${appUrl}/ y ${x.estatus==="aceptada"?"entra":"regístrate o entra"} con ${x.email}.`;
+    const accion=x.estatus==="pendiente_aprobacion"?`<button class="btn ghost" data-iv-reenviar="${esc(x.id)}">Reenviar solicitud</button>`:["enviada","aceptada"].includes(x.estatus)?`<a class="btn ghost" href="mailto:${encodeURIComponent(x.email)}?subject=${encodeURIComponent("Acceso a Chazki Driver")}&body=${encodeURIComponent(mensaje)}">Preparar correo</a>`:"";
+    return `<div class="item"><div><b>${esc(x.nombre||x.email)}</b><small>${esc(x.email)} · ${f(x.creado_en)}${x.motivo?" · "+esc(x.motivo):""}</small>${accion}</div><span style="color:${e[1]};font-size:12px;font-weight:700;text-align:right">${esc(e[0])}</span></div>`}).join("");
+  return `<div class="card"><h2 style="margin:0">✉️ Invitar a un driver</h2><label>Nombre</label><input id="iv-n" placeholder="Nombre del driver"><label>Correo</label><input id="iv-m" type="email" placeholder="correo@ejemplo.com"><label>CEDIS donde operará</label><select id="iv-c"><option value="">Selecciona…</option>${ced}</select><div id="iv-e" class="note" style="color:#b42318">${esc(INVS_ERR)}</div><button class="btn" id="iv-ok" style="margin-top:8px">Enviar solicitud</button><div class="note" style="margin-top:6px">Tu supervisor debe aprobarla. El registro sigue sujeto al padrón de Flota; el correo preparado se envía desde tu aplicación de correo.</div>${lista}</div>`}
 function drawDrivers(){
   const box=$("drbox");if(!box)return;const pct=v=>v==null?"—":Math.round(v*100)+"%";
   const [a,z]=rangoK(dp,false),ok=x=>{const t=new Date(x);return t>=a&&t<z};
@@ -839,6 +843,7 @@ function drawDrivers(){
   const ivOk=$("iv-ok");if(ivOk)ivOk.onclick=async()=>{const m=$("iv-m").value.trim(),c=$("iv-c").value;if(!m||!c){$("iv-e").textContent="Escribe el correo y elige el CEDIS";return}
     ivOk.disabled=true;const {data,error}=await sb.rpc("invitar_a_red",{p_email:m,p_nombre:$("iv-n").value.trim(),p_tipo:"driver",p_esquema:null,p_cedis_id:+c});if(error){$("iv-e").textContent=error.message;ivOk.disabled=false;return}
     toast(data);await loadDrivers()};
+  box.querySelectorAll("[data-iv-reenviar]").forEach(b=>b.onclick=async()=>{b.disabled=true;const {data,error}=await sb.rpc("reenviar_solicitud_invitacion_red",{p_id:+b.dataset.ivReenviar});if(error){$("iv-e").textContent=error.message;b.disabled=false;return}toast(data);await loadDrivers()});
   box.querySelectorAll("#dseg button").forEach(b=>b.onclick=()=>{dp=b.dataset.p;drawDrivers()});
   box.querySelectorAll("[data-dv]").forEach(b=>b.onclick=()=>{dopen[b.dataset.dv]=!dopen[b.dataset.dv];drawDrivers()});
   box.querySelectorAll("[data-bj]").forEach(b=>b.onclick=()=>{dform=b.dataset.bj;drawDrivers()});
