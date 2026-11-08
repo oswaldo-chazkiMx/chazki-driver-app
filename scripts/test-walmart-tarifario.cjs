@@ -166,23 +166,28 @@ test("Walmart applies validated penalties, fiscal treatment and weekly split",as
   const db=await database();
   try{
     await db.exec(migration);
-    const calc=async args=>(await db.query("select private.calcular_walmart_importes($1,$2,$3,$4,$5,$6,$7,$8,$9) as value",args)).rows[0].value;
-    const args=[4500,0.75,100,95,true,false,"SIN FACTURA",0.05,0.16];
+    const calc=async args=>(await db.query("select private.calcular_walmart_importes($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) as value",args)).rows[0].value;
+    const args=[4500,0.75,100,95,true,false,"SIN FACTURA",0.05,0.16,0.02];
     const actual=await calc(args);
     assert.equal(actual.subtotal,4275);
     assert.equal(actual.impuesto,-213.75);
     assert.equal(actual.total,4061.25);
+    assert.equal(actual.comision,81.23);
+    assert.equal(actual.costo_total_imp,4142.48);
     assert.equal(actual.pago_semanal,3045.94);
     assert.equal(actual.saldo_retenido,1015.31);
-    const extra=await calc([4500,0.75,100,95,true,true,"FACTURA",0.05,0.16]);
+    const extra=await calc([4500,0.75,100,95,true,true,"FACTURA",0.05,0.16,0.02]);
     assert.equal(extra.descuento_visitas,225);
     assert.equal(extra.descuento_fallida,225);
     assert.equal(extra.subtotal,4050);
     assert.equal(extra.total,4698);
+    assert.equal(extra.comision,0);
+    assert.equal(extra.costo_total_imp,4698);
     assert.equal(extra.pago_semanal+extra.saldo_retenido,extra.total);
-    assert.equal((await calc([4500,0.75,100,70,false,false,"FACTURA",0.05,0.16])).subtotal,4500);
-    await assert.rejects(calc([4500,0.75,100,101,true,false,"FACTURA",0.05,0.16]),/Datos inválidos/);
-    await assert.rejects(calc([4500,0.75,100,0,true,true,"FACTURA",0.05,0.16]),/exceden el pago base/);
+    assert.equal((await calc([4500,0.75,100,70,false,false,"FACTURA",0.05,0.16,0.02])).subtotal,4500);
+    await assert.rejects(calc([4500,0.75,100,101,true,false,"FACTURA",0.05,0.16,0.02]),/Datos inválidos/);
+    await assert.rejects(calc([4500,0.75,100,0,true,true,"FACTURA",0.05,0.16,0.02]),/exceden el pago base/);
+    await assert.rejects(calc([4500,0.75,100,95,false,false,"SIN FACTURA",0.05,0.16,1.1]),/Datos inválidos/);
   }finally{await db.close()}
 });
 

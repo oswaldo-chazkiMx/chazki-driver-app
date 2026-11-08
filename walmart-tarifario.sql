@@ -93,7 +93,7 @@ create or replace function private.calcular_walmart_importes(
   p_base numeric, p_porcentaje_semanal numeric,
   p_visitas_asignadas integer, p_visitas_realizadas integer,
   p_aplicar_visitas boolean, p_aplicar_fallida boolean,
-  p_registro_fiscal text, p_retencion_fiscal numeric, p_iva numeric
+  p_registro_fiscal text, p_retencion_fiscal numeric, p_iva numeric, p_comision numeric
 ) returns jsonb language plpgsql immutable set search_path = ''
 as $$
 declare
@@ -103,6 +103,7 @@ declare
   v_impuesto numeric;
   v_total numeric;
   v_semanal numeric;
+  v_comision numeric;
 begin
   if p_base is null or p_base::text = 'NaN' or p_base < 0
      or p_porcentaje_semanal is null or p_porcentaje_semanal::text = 'NaN'
@@ -113,7 +114,8 @@ begin
      or p_aplicar_visitas is null or p_aplicar_fallida is null
      or p_registro_fiscal is null or p_registro_fiscal not in ('FACTURA','SIN FACTURA')
      or p_retencion_fiscal is null or p_retencion_fiscal::text = 'NaN' or p_retencion_fiscal not between 0 and 1
-     or p_iva is null or p_iva::text = 'NaN' or p_iva not between 0 and 1 then
+     or p_iva is null or p_iva::text = 'NaN' or p_iva not between 0 and 1
+     or p_comision is null or p_comision::text = 'NaN' or p_comision not between 0 and 1 then
     raise exception 'Datos inválidos para calcular el pago Walmart';
   end if;
   v_descuento_visitas := case when p_aplicar_visitas
@@ -125,15 +127,18 @@ begin
     then round(v_subtotal*p_iva,2) else -round(v_subtotal*p_retencion_fiscal,2) end;
   v_total := v_subtotal+v_impuesto;
   v_semanal := round(v_total*p_porcentaje_semanal,2);
+  v_comision := case when p_registro_fiscal='SIN FACTURA'
+    then round(v_total*p_comision,2) else 0 end;
   return jsonb_build_object(
     'pago_base',p_base,'descuento_visitas',v_descuento_visitas,
     'descuento_fallida',v_descuento_fallida,'subtotal',v_subtotal,
-    'impuesto',v_impuesto,'total',v_total,
+    'impuesto',v_impuesto,'total',v_total,'comision',v_comision,
+    'costo_total_imp',v_total+v_comision,
     'pago_semanal',v_semanal,'saldo_retenido',v_total-v_semanal
   );
 end;
 $$;
-revoke all on function private.calcular_walmart_importes(numeric,numeric,integer,integer,boolean,boolean,text,numeric,numeric)
+revoke all on function private.calcular_walmart_importes(numeric,numeric,integer,integer,boolean,boolean,text,numeric,numeric,numeric)
   from public, anon, authenticated;
 
 alter table public.rutas
