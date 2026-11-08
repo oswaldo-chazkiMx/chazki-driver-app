@@ -51,6 +51,16 @@ let ME=null,DRIVER=null,VEHICULO=null,CLI=[],CAUSAS=[],INCID=[],vt=null,ACC={pue
 const S={stage:0,zonas:[],route:null,fallos:{},inc:null,incSel:new Set()};
 
 // ---------- Autenticación ----------
+function authErrorMessage(error){
+  if(error.code==="over_email_send_rate_limit"||/email rate limit exceeded/i.test(error.message))
+    return "Se alcanzó el límite de correos de confirmación. Espera antes de intentar de nuevo y avisa al administrador si continúa.";
+  if(error.code==="email_address_not_authorized")
+    return "El servicio de correo aún no permite enviar confirmaciones a esta dirección. Contacta al administrador.";
+  if(error.message==="Invalid login credentials")return "Correo o contraseña incorrectos.";
+  if(/Database error saving new user/i.test(error.message))
+    return "No se pudo crear la cuenta. Verifica con tu supervisor que exista una invitación aprobada para este correo; si el problema continúa, contacta al administrador.";
+  return error.message;
+}
 let signup=false;
 function authMode(s){signup=s;$("agroup-nombre").classList.toggle("hide",!s);$("abtn").textContent=s?"Crear cuenta":"Entrar";
   $("aswitch").textContent=s?"Ya tengo cuenta":"Crear cuenta nueva";$("amode-sub").textContent=s?"Crea tu cuenta de driver":"Inicia sesión con tu correo";
@@ -66,7 +76,7 @@ $("abtn").onclick=async()=>{
     if(!r.error&&!r.data.session){$("abtn").disabled=false;authMode(false);$("amsg").innerHTML='<div class="okbox">Revisa tu correo y confirma tu cuenta si recibiste un mensaje; después inicia sesión.</div>';return}
   }else r=await sb.auth.signInWithPassword({email,password});
   $("abtn").disabled=false;
-  if(r.error){$("amsg").innerHTML=`<div class="errbox">${esc(r.error.message==="Invalid login credentials"?"Correo o contraseña incorrectos.":/Database error saving new user/i.test(r.error.message)?"No se pudo crear la cuenta. Verifica con tu supervisor que exista una invitación aprobada para este correo; si el problema continúa, contacta al administrador.":r.error.message)}</div>`;return}
+  if(r.error){$("amsg").innerHTML=`<div class="errbox">${esc(authErrorMessage(r.error))}</div>`;return}
   boot();
 };
 $("blogout").onclick=async()=>{await sb.auth.signOut();location.reload()};
