@@ -395,6 +395,11 @@ $("zchips").onclick=e=>{const i=e.target.dataset.i;if(i!==undefined){S.zonas.spl
 $("bnow").onclick=()=>{$("hora").value=new Date().toTimeString().slice(0,5);checkIn()};
 ["pk","rid","hora","cedis"].forEach(id=>$(id).addEventListener("input",checkIn));
 const esCoppel=()=>/^COPPEL/i.test(cliName($("cli").value)||"");
+const TIPOS_SIN_EQUIVALENCIA=["4.5T","5T","RABÓN","TORTON SECO","TORTON REFRIGERADO","TRAILER 53 SECO","TRAILER 53 REFRIGERADO"];
+function tipoUnidadRuta(){
+  const tipo=VEHICULO?.tipo||DRIVER?.tipo_unidad||null;
+  return TIPOS_SIN_EQUIVALENCIA.includes(tipo)?tipo:esCoppel()?$("unidad").value:tipo;
+}
 function syncUnidad(){const on=esCoppel();$("unidad-w").classList.toggle("hide",!on);if(on&&!$("unidad").value&&/BT/i.test(cliName($("cli").value)))$("unidad").value="3.5T";if(!on)$("unidad").value=""}
 $("unidad").onchange=()=>checkIn();
 document.querySelector("#cedis").addEventListener("change",checkIn);
@@ -453,7 +458,7 @@ async function capturarFotoAuxiliar(stage){
   const ctx=canvas.getContext("2d");ctx.drawImage(video,0,0,canvas.width,canvas.height);
   const isCheckin=stage==="in",client=isCheckin?cliName($("cli").value):S.route?.cli,cedis=isCheckin?cedName($("cli").value,$("cedis").value):S.route?.cedis;
   const routeId=isCheckin?$("rid").value.trim():S.route?.rid;
-  const unit=isCheckin?$("unidad").value||VEHICULO?.tipo||DRIVER?.tipo_unidad:S.route?.unidad;
+  const unit=isCheckin?tipoUnidadRuta():S.route?.unidad;
   const time=capturedAt.toLocaleString("es-MX",{dateStyle:"medium",timeStyle:"medium"});
   const lines=[
     `CHAZKI · EVIDENCIA DE ${isCheckin?"CHECK-IN":"CHECK-OUT"}`,
@@ -500,7 +505,7 @@ async function procesarFotoAuxiliar(stage){
 function checkIn(){syncUnidad();syncAuxiliary();const required=requiereAuxiliarRuta(),auxMode=$("aux-mode").value;
   const auxiliaryOk=!required||auxMode==="solo"||(auxMode==="auxiliar"&&!!AUX_CAMERA.in.blob);
   const ok=$("cli").value&&$("cedis").value&&(!esCoppel()||$("unidad").value)&&+$("pk").value>0&&$("rid").value.trim()&&S.zonas.length&&$("hora").value&&auxiliaryOk;
-  $("bin").disabled=!ok;$("inhint").textContent=ok?"Todo listo. Presiona Check IN para iniciar tu ruta.":"Completa todos los campos para habilitar el check-in."}
+  $("bin").disabled=!ok;$("inhint").textContent=ok?(TIPOS_SIN_EQUIVALENCIA.includes(tipoUnidadRuta())?`Se registrará ${tipoUnidadRuta()}; requiere una tarifa propia vigente.`:"Todo listo. Presiona Check IN para iniciar tu ruta."):"Completa todos los campos para habilitar el check-in."}
 $("bin").onclick=async()=>{
   $("bin").disabled=true;err("inerr",null);
   const hoy=new Date().toLocaleDateString("en-CA");
@@ -508,7 +513,7 @@ $("bin").onclick=async()=>{
   let checkinBlob=null;
   try{if(withAux)checkinBlob=await procesarFotoAuxiliar("in")}
   catch(e){err("inerr",e);$("bin").disabled=false;return}
-  const tipoUnidad=esCoppel()?$("unidad").value:(VEHICULO?.tipo||DRIVER?.tipo_unidad||null);
+  const tipoUnidad=tipoUnidadRuta();
   const routeRequiresAuxiliary=requiereAuxiliarRuta();
   const routePayload={driver_id:ME.id,cedis_id:+$("cedis").value,id_ruta:$("rid").value.trim(),paquetes_asignados:+$("pk").value,zonas:[...S.zonas],hora_llegada_cedis:llegada,tipo_unidad:tipoUnidad,auxiliar_requerido:routeRequiresAuxiliary,viaja_con_auxiliar:withAux,evidencia_auxiliar_checkin_path:null,evidencia_auxiliar_checkout_path:null,checkin_at:checkinAt.toISOString()};
   const routeInfo={cli:cliName($("cli").value),cliId:$("cli").value,cedis:cedName($("cli").value,$("cedis").value),cedisId:$("cedis").value,pk:+$("pk").value,rid:$("rid").value.trim(),zonas:[...S.zonas],hora:$("hora").value,checkin:checkinAt.toISOString(),unidad:routePayload.tipo_unidad,auxiliarRequerido:routeRequiresAuxiliary,viajaConAuxiliar:withAux};
@@ -810,6 +815,7 @@ function drawKpi(){const box=$("gkpi");if(!box)return;const s=statsK(kp,false),q
    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">${T("Efectividad",pct(ef),dl(s.ef,q.ef,true),col)}${T("Rutas",s.R.length,dl(s.R.length,q.R.length,false))}${T("Entregados",s.ent,`<small style="color:var(--mut)">de ${esc(s.asg)} asignados</small>`)}${T("Fallidos",s.fal)}${T("Cancelaciones",s.C.length)}${T("Aprobadas",s.apr,`<small style="color:var(--mut)">de ${esc(s.R.length)} rutas</small>`)}</div>
    <div class="item" style="margin-top:8px"><span>Días trabajados</span><b>${esc(s.dias)}</b></div><div class="item"><span>Tiempo promedio por ruta</span><b>${hm(s.prom)}</b></div><div class="item"><span>Rutas con incidencias</span><b>${esc(s.inc)}</b></div>${por}`;
   box.querySelectorAll("#kseg button").forEach(b=>b.onclick=()=>{kp=b.dataset.k;drawKpi()})}
+const FLEET_PROFILE_ENABLED=true;
 let DRVS=[],BAJAS=[],INVS=[],INVS_ERR="",dp="sem",dopen={},dform=null;
 async function loadDrivers(){
   const [d,r,c,b,iv]=await Promise.all([sb.from("drivers").select("id,nombre,codigo,estatus,telefono").neq("id",ME.id).order("nombre"),sb.rpc("mis_rutas_estatus"),sb.rpc("mis_cancelaciones_estatus"),sb.from("bajas_solicitudes").select("*").order("solicitado_en",{ascending:false}),sb.from("invitaciones_red").select("*").eq("invitado_por",ME.id).order("creado_en",{ascending:false}).limit(30)]);
@@ -839,7 +845,7 @@ function drawDrivers(){
     const form=dform===d.id?`<div style="margin-top:10px"><label>Motivo de la desactivación</label><textarea id="bj-m" rows="2" placeholder="Indica por qué se desactivará al driver"></textarea><div id="bj-e" class="note" style="color:#b42318"></div><div style="display:flex;gap:8px;margin-top:8px"><button class="btn" data-bjok="${esc(d.id)}">Enviar solicitud</button><button class="btn ghost" data-bjx="1">Cancelar</button></div><div class="note" style="margin-top:6px">Requiere autorización del supervisor y del coordinador de Chazki. Se conserva el perfil y todo su historial.</div></div>`:"";
     return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h2 style="margin:0">${esc(d.nombre)}</h2><small style="color:var(--mut)">${esc(d.codigo||"")}${esc(d.telefono?" · "+d.telefono:"")}</small></div>${pillE(activo?"aprobada":"rechazada").replace(/Aprobada/,"Activo").replace(/Rechazada/,"Inactivo")}</div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px;text-align:center"><div><b style="font-size:18px">${esc(Rp.length)}</b><br><small>Rutas</small></div><div><b style="font-size:18px">${pct(asg?ent/asg:null)}</b><br><small>Efect.</small></div><div><b style="font-size:18px">${fal}</b><br><small>Fallidos</small></div><div><b style="font-size:18px">${esc(C.length)}</b><br><small>Cancel.</small></div></div>
-      <div style="display:flex;gap:8px;margin-top:10px"><button class="btn ghost" data-dv="${esc(d.id)}">${dopen[d.id]?"Ocultar rutas":"Ver rutas"}</button>${pend?"":activo?`<button class="btn ghost" data-bj="${esc(d.id)}" style="color:#b42318">Solicitar desactivación</button>`:`<button class="btn ghost" data-reactivar="${esc(d.id)}">Reactivar driver</button>`}</div>${estado}${lista}${form}</div>`}).join("");
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn ghost" data-dv="${esc(d.id)}">${dopen[d.id]?"Ocultar rutas":"Ver rutas"}</button>${FLEET_PROFILE_ENABLED?`<button class="btn ghost" data-driver-perfil="${esc(d.id)}">Ver perfil y documentos</button>`:""}${pend?"":activo?`<button class="btn ghost" data-bj="${esc(d.id)}" style="color:#b42318">Solicitar desactivación</button>`:`<button class="btn ghost" data-reactivar="${esc(d.id)}">Reactivar driver</button>`}</div>${estado}${lista}${form}</div>`}).join("");
   box.innerHTML=`${invitarHtml()}<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">🚚 Mis drivers (${esc(DRVS.length)})</h2><div class="seg" id="dseg" style="margin:0;width:150px"><button class="${dp==="sem"?"on":""}" data-p="sem">Semana</button><button class="${dp==="mes"?"on":""}" data-p="mes">Mes</button></div></div></div>${cards||'<div class="card"><div class="note">Aún no tienes drivers en tu flotilla.</div></div>'}`;
   const ivOk=$("iv-ok");if(ivOk)ivOk.onclick=async()=>{const m=$("iv-m").value.trim(),c=$("iv-c").value;if(!m||!c){$("iv-e").textContent="Escribe el correo y elige el CEDIS";return}
     ivOk.disabled=true;const {data,error}=await sb.rpc("invitar_a_red",{p_email:m,p_nombre:$("iv-n").value.trim(),p_tipo:"driver",p_esquema:null,p_cedis_id:+c});if(error){$("iv-e").textContent=error.message;ivOk.disabled=false;return}
@@ -847,12 +853,62 @@ function drawDrivers(){
   box.querySelectorAll("[data-iv-reenviar]").forEach(b=>b.onclick=async()=>{b.disabled=true;const {data,error}=await sb.rpc("reenviar_solicitud_invitacion_red",{p_id:+b.dataset.ivReenviar});if(error){$("iv-e").textContent=error.message;b.disabled=false;return}toast(data);await loadDrivers()});
   box.querySelectorAll("#dseg button").forEach(b=>b.onclick=()=>{dp=b.dataset.p;drawDrivers()});
   box.querySelectorAll("[data-dv]").forEach(b=>b.onclick=()=>{dopen[b.dataset.dv]=!dopen[b.dataset.dv];drawDrivers()});
+  box.querySelectorAll("[data-driver-perfil]").forEach(b=>b.onclick=()=>abrirPerfilDriver(b.dataset.driverPerfil));
   box.querySelectorAll("[data-bj]").forEach(b=>b.onclick=()=>{dform=b.dataset.bj;drawDrivers()});
   box.querySelectorAll("[data-bjx]").forEach(b=>b.onclick=()=>{dform=null;drawDrivers()});
   box.querySelectorAll("[data-reactivar]").forEach(b=>b.onclick=async()=>{b.disabled=true;const {error}=await sb.rpc("reactivar_driver",{p_driver_id:b.dataset.reactivar});if(error){toast(error.message);b.disabled=false;return}await loadDrivers()});
   box.querySelectorAll("[data-bjok]").forEach(b=>b.onclick=async()=>{const m=$("bj-m").value.trim();if(!m){$("bj-e").textContent="Escribe el motivo";return}
     b.disabled=true;const {error}=await sb.rpc("solicitar_baja_driver",{p_driver_id:b.dataset.bjok,p_motivo:m});if(error){$("bj-e").textContent=error.message;b.disabled=false;return}
     dform=null;await loadDrivers()})}
+async function abrirPerfilDriver(id){
+  abrirSheet('<h2>Perfil del driver</h2><p>Cargando perfil y documentos…</p><div id="fleet-profile-error"></div><button class="btn ghost" id="fleet-profile-close">Cerrar</button>');
+  $("fleet-profile-close").onclick=()=>$("sheet").classList.add("hide");
+  const [profile,documents]=await Promise.all([
+    sb.rpc("perfil_driver_de_flotilla",{p_driver_id:id}),
+    sb.from("driver_documents").select("id,tipo,estado,vigencia,storage_path,nota").eq("driver_id",id).order("creado_en",{ascending:false})
+  ]);
+  if(profile.error||documents.error){$("fleet-profile-error").innerHTML=`<div class="errbox">${esc((profile.error||documents.error).message)}</div>`;return}
+  const p=profile.data,docs=documents.data||[],paths=docs.map(d=>d.storage_path).filter(Boolean);
+  let urls=[];
+  if(paths.length){
+    const result=await sb.storage.from("driver-documents").createSignedUrls(paths,3600);
+    if(result.error){$("fleet-profile-error").innerHTML=`<div class="errbox">No se pudieron abrir los archivos: ${esc(result.error.message)}</div>`;return}
+    urls=result.data||[];
+    if(paths.some(path=>!urls.some(u=>u.path===path&&u.signedUrl))){$("fleet-profile-error").innerHTML='<div class="errbox">No se pudieron abrir todos los archivos del expediente.</div>';return}
+  }
+  const fields=[["Nombre",p.nombre],["Código",p.codigo],["Teléfono",p.telefono],["Correo de contacto",p.correo_contacto],["Contacto de emergencia",p.emergencia_nombre],["Teléfono de emergencia",p.emergencia_telefono],["Parentesco",p.emergencia_parentesco],["Placas",p.vehiculo?.placas],["Tipo de vehículo",p.vehiculo?.tipo],["Marca / modelo",p.vehiculo?.marca_modelo],["Número de licencia",p.licencia?.numero],["Tipo de licencia",p.licencia?.tipo],["Vigencia de licencia",p.licencia?.vigencia]];
+  const rows=fields.map(([name,value])=>`<div class="kv"><span>${esc(name)}</span><b>${esc(value||"—")}</b></div>`).join("");
+  const types=DOC_TIPOS.filter(t=>!t.soloFlotillero);
+  const docRows=types.map(t=>{
+    const approved=docs.find(d=>d.tipo===t.k&&d.estado==="aprobado"),pending=docs.find(d=>d.tipo===t.k&&d.estado==="pendiente");
+    const url=approved&&urls.find(u=>u.path===approved.storage_path)?.signedUrl;
+    return `<div class="item"><div><b>${esc(t.n)}</b><small>${pending?"Actualización en revisión":approved?"Vigente":"Sin registrar"}</small></div><div>${url?`<a href="${esc(url)}" target="_blank" rel="noopener">Ver</a> `:""}<button class="btn ghost" data-fleet-doc="${esc(t.k)}" ${pending?"disabled":""}>${approved?"Actualizar":"Subir"}</button></div></div>`;
+  }).join("");
+  abrirSheet(`<h2>Perfil de ${esc(p.nombre)}</h2><p>Los datos son de consulta; solo el driver puede solicitar cambios.</p>${rows}<h2>Documentos</h2><p>La primera carga queda vigente; los reemplazos requieren aprobación de Operaciones.</p>${docRows}<button class="btn ghost" id="fleet-profile-close">Cerrar</button>`);
+  $("fleet-profile-close").onclick=()=>$("sheet").classList.add("hide");
+  $("sheet").querySelectorAll("[data-fleet-doc]").forEach(b=>b.onclick=()=>abrirCargaDocumentoFlotilla(id,b.dataset.fleetDoc));
+}
+function abrirCargaDocumentoFlotilla(driverId,tipo){
+  const config=DOC_TIPOS.find(t=>t.k===tipo&&!t.soloFlotillero);
+  if(!config){toast("Documento no permitido.");return}
+  abrirSheet(`<h2>Subir ${esc(config.n)}</h2>${config.sinVigencia?"<p>Sin vencimiento.</p>":'<label>Fecha de vencimiento</label><input id="fleet-doc-date" type="date">'}<label>Archivo (PDF o imagen, máximo 10 MB)</label><input id="fleet-doc-file" type="file" accept="image/jpeg,image/png,image/webp,application/pdf"><div id="fleet-doc-error"></div><button class="btn" id="fleet-doc-save">Enviar documento</button><button class="btn ghost" id="fleet-doc-back">Volver</button>`);
+  $("fleet-doc-back").onclick=()=>abrirPerfilDriver(driverId);
+  $("fleet-doc-save").onclick=async()=>{
+    const file=$("fleet-doc-file").files[0],vigencia=config.sinVigencia?null:$("fleet-doc-date").value,button=$("fleet-doc-save"),error=$("fleet-doc-error");
+    if(!file||(!config.sinVigencia&&!vigencia)||file.size>10*1024*1024||!["application/pdf","image/jpeg","image/png","image/webp"].includes(file.type)){error.innerHTML='<div class="errbox">Selecciona un PDF o imagen válida de hasta 10 MB y la fecha cuando corresponda.</div>';return}
+    button.disabled=true;
+    const ext=(file.name.split(".").pop()||"bin").toLowerCase().replace(/[^a-z0-9]/g,"").slice(0,8)||"bin";
+    const path=`${driverId}/${tipo}/flotilla/${ME.id}/${crypto.randomUUID()}.${ext}`;
+    const upload=await sb.storage.from("driver-documents").upload(path,file,{contentType:file.type,upsert:false});
+    if(upload.error){button.disabled=false;error.innerHTML=`<div class="errbox">${esc(upload.error.message)}</div>`;return}
+    const result=await sb.rpc("enviar_documento_flotillero",{p_driver_id:driverId,p_tipo:tipo,p_storage_path:path,p_vigencia:vigencia});
+    if(result.error){button.disabled=false;error.innerHTML=`<div class="errbox">${esc(result.error.message)}. El archivo cargado no se vinculó al expediente; contacta a Operaciones.</div>`;return}
+    if(result.data==="aprobado")toast("Documento vigente");
+    else if(result.data==="pendiente")toast("Documento enviado a revisión");
+    else toast("Documento enviado, pero se recibió un estado inesperado. Revisa el expediente.");
+    await abrirPerfilDriver(driverId);
+  };
+}
 const EST={por_validar:["Por validar","#946200","#fff4d6"],en_revision:["En revisión","#1d4ed8","#e3ecff"],aprobada:["Aprobada","#0f7a3d","#dff5e6"],rechazada:["Rechazada","#b42318","#fde4e1"],en_curso:["En curso","#555b7a","#ececf4"],aclaracion:["Aclaración solicitada","#7a4b00","#ffe9b8"],respondida:["Respondida · en revisión","#1d4ed8","#e3ecff"],apelada:["Apelada · en revisión","#1d4ed8","#e3ecff"],vencida:["Plazo vencido","#b42318","#fde4e1"]};
 const pillE=k=>{const e=EST[k]||EST.por_validar;return `<span style="background:${e[2]};color:${e[1]};font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;white-space:nowrap">${e[0]}</span>`};
 async function loadEstatus(){
@@ -1039,14 +1095,22 @@ async function responderPnR(id,button){
 }
 
 // ---------- Perfil ----------
+let LICENCIA=null;
+const TIPOS_PERFIL=["Moto","Auto hatch","Auto sedan","Small van","Large van","3.5T","4.5T","5T","RABÓN","TORTON SECO","TORTON REFRIGERADO","TRAILER 53 SECO","TRAILER 53 REFRIGERADO"];
 async function loadPerfil(){
-  const [v,l,d]=await Promise.all([sb.from("vehiculos").select("*").eq("driver_id",ME.id).eq("activo",true).maybeSingle(),sb.from("licencias").select("*").eq("driver_id",ME.id).maybeSingle(),sb.from("drivers").select("*").eq("id",ME.id).single()]);
-  DRIVER=d.data||DRIVER;  VEHICULO=v.data;const V=VEHICULO,L=l.data;
+  const [v,l,d,c]=await Promise.all([sb.from("vehiculos").select("*").eq("driver_id",ME.id).eq("activo",true).maybeSingle(),sb.from("licencias").select("*").eq("driver_id",ME.id).maybeSingle(),sb.from("drivers").select("*").eq("id",ME.id).single(),sb.from("cambios_perfil").select("estatus,nota,solicitado_en").eq("driver_id",ME.id).order("solicitado_en",{ascending:false}).limit(1)]);
+  const fallo=v.error||l.error||d.error||c.error;
+  if(fallo){err("contact-err",new Error("No se pudo cargar el perfil: "+fallo.message));return}
+  err("contact-err",null);
+  DRIVER=d.data||DRIVER;  VEHICULO=v.data;LICENCIA=l.data;const V=VEHICULO,L=LICENCIA;
   $("pnom").textContent=DRIVER.nombre;$("pcod").textContent=DRIVER.codigo||"—";$("pmail").textContent=ME.email;
-  $("vpl").textContent=V?V.placas:"Sin registrar";$("vtp").textContent=V?V.tipo:"—";$("vmm").textContent=(V&&V.marca_modelo)||"—";
+  $("vpl").textContent=V?V.placas:"Sin registrar";$("vtp").textContent=V?(V.tipo_detalle||V.tipo):"—";$("vmm").textContent=(V&&V.marca_modelo)||"—";
   $("lnum").textContent=(L&&L.numero)||"Sin registrar";$("ltip").textContent=(L&&L.tipo)||"—";
   $("lvig").textContent=L&&L.vigencia?parseF(L.vigencia).toLocaleDateString("es-MX"):"—";
   $("utel").value=DRIVER.telefono||"";$("ucorreo").value=DRIVER.correo_contacto||"";
+  $("uemergencia-nombre").value=DRIVER.emergencia_nombre||"";$("uemergencia-telefono").value=DRIVER.emergencia_telefono||"";$("uemergencia-parentesco").value=DRIVER.emergencia_parentesco||"";
+  const cambio=c.data?.[0];
+  $("perfil-estado").textContent=cambio?(cambio.estatus==="pendiente"?"Tienes una solicitud de perfil pendiente de aprobación.":cambio.estatus==="rechazada"?`Última solicitud rechazada${cambio.nota?": "+cambio.nota:""}.`:"Última solicitud aprobada."):"";
   const cached=await localGet("cache",ME.id);
   if(cached)await localPut("cache",{...cached,vehicle:VEHICULO});
   await loadDocs();
@@ -1056,11 +1120,36 @@ $("save-contact").onclick=async()=>{
   const correo=$("ucorreo").value.trim().toLowerCase();
   if(correo&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(correo)){err("contact-err",new Error("Escribe un correo de contacto válido."));return}
   const button=$("save-contact");button.disabled=true;
-  const {error}=await sb.rpc("actualizar_contacto_driver",{p_telefono:$("utel").value.trim()||null,p_correo_contacto:correo||null});
+  const {data,error}=await sb.rpc("solicitar_contacto_perfil",{p_datos:{telefono:$("utel").value.trim()||null,correo_contacto:correo||null,emergencia_nombre:$("uemergencia-nombre").value.trim()||null,emergencia_telefono:$("uemergencia-telefono").value.trim()||null,emergencia_parentesco:$("uemergencia-parentesco").value.trim()||null}});
   button.disabled=false;
   if(error){err("contact-err",error);return}
-  toast("Datos de contacto guardados ✔");
+  if(data==="guardado")toast("Datos de contacto guardados ✔");
+  else if(data==="pendiente")toast("Datos nuevos guardados; cambios enviados a Operaciones");
+  else if(data==="sin_cambios")toast("No hay cambios");
+  else {err("contact-err",new Error("Respuesta inesperada al guardar el contacto."));return}
+  await loadPerfil();
 };
+$("edit-vehicle").onclick=()=>{
+  const v=VEHICULO||{},actual=v.tipo_detalle||({"Sedan":"Auto sedan","Small":"Small van","Large":"Large van"}[v.tipo])||v.tipo||"";
+  abrirSheet(`<h2>Vehículo</h2><p>La primera captura se guarda; los cambios requieren aprobación. Los tipos sin tarifa configurada no se calculan automáticamente.</p><label>Placas</label><input id="vp-placas" value="${esc(v.placas||"")}"><label>Tipo de vehículo</label><select id="vp-tipo"><option value="">Selecciona…</option>${!TIPOS_PERFIL.includes(actual)&&actual?`<option value="" selected>${esc(actual)} · selecciona un tipo vigente</option>`:""}${TIPOS_PERFIL.map(t=>`<option value="${esc(t)}" ${t===actual?"selected":""}>${esc(t)}</option>`).join("")}</select><label>Marca / modelo</label><input id="vp-marca" value="${esc(v.marca_modelo||"")}"><div id="vp-error"></div><button class="btn" id="vp-save">Guardar o solicitar</button><button class="btn ghost" id="vp-cancel">Cancelar</button>`);
+  $("vp-cancel").onclick=()=>$("sheet").classList.add("hide");
+  $("vp-save").onclick=()=>enviarPerfil("solicitar_vehiculo_perfil",{p_placas:$("vp-placas").value.trim(),p_tipo:$("vp-tipo").value,p_marca_modelo:$("vp-marca").value.trim()||null},"vp-save","vp-error");
+};
+$("edit-license").onclick=()=>{
+  const l=LICENCIA||{};
+  abrirSheet(`<h2>Licencia</h2><p>La primera captura se guarda; los cambios requieren aprobación.</p><label>Número</label><input id="lp-numero" value="${esc(l.numero||"")}"><label>Tipo</label><input id="lp-tipo" value="${esc(l.tipo||"")}"><label>Vigencia</label><input id="lp-vigencia" type="date" value="${esc(l.vigencia||"")}"><div id="lp-error"></div><button class="btn" id="lp-save">Guardar o solicitar</button><button class="btn ghost" id="lp-cancel">Cancelar</button>`);
+  $("lp-cancel").onclick=()=>$("sheet").classList.add("hide");
+  $("lp-save").onclick=()=>enviarPerfil("solicitar_licencia_perfil",{p_numero:$("lp-numero").value.trim(),p_tipo:$("lp-tipo").value.trim(),p_vigencia:$("lp-vigencia").value||null},"lp-save","lp-error");
+};
+async function enviarPerfil(rpc,args,buttonId,errorId){
+  const button=$(buttonId);button.disabled=true;err(errorId,null);
+  const {data,error}=await sb.rpc(rpc,args);
+  if(error){button.disabled=false;err(errorId,error);return}
+  if(!["guardado","pendiente","sin_cambios"].includes(data)){button.disabled=false;err(errorId,new Error("Respuesta inesperada al actualizar el perfil."));return}
+  $("sheet").classList.add("hide");
+  toast(data==="guardado"?"Datos guardados":data==="pendiente"?"Cambio enviado a Operaciones":"No hay cambios");
+  await loadPerfil();
+}
 const DOC_TIPOS=[
   {k:"seguro",n:"Seguro del vehículo",ic:"🛡️"},
   {k:"licencia",n:"Licencia de conducir",ic:"🪪"},

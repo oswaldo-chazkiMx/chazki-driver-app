@@ -249,19 +249,23 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
   </div>
   <div class="card"><h2>🚚 Vehículo</h2>
     <div class="kv"><span>Placas</span><b id="vpl">—</b></div><div class="kv"><span>Tipo</span><b id="vtp">—</b></div>
-    <div class="kv"><span>Marca / modelo</span><b id="vmm">—</b></div></div>
+    <div class="kv"><span>Marca / modelo</span><b id="vmm">—</b></div><button class="btn ghost" id="edit-vehicle">Registrar o editar vehículo</button></div>
   <div class="card"><h2>🪪 Licencia</h2>
     <div class="kv"><span>Número</span><b id="lnum">—</b></div><div class="kv"><span>Tipo</span><b id="ltip">—</b></div>
-    <div class="kv"><span>Vigencia</span><b id="lvig">—</b></div></div>
+    <div class="kv"><span>Vigencia</span><b id="lvig">—</b></div><button class="btn ghost" id="edit-license">Registrar o editar licencia</button></div>
   <div class="card" id="docs-card"><h2>📄 Mis documentos</h2>
     <div id="docs-banner"></div><div id="docs-list"></div>
     <div class="note" id="docs-note">Los documentos y datos de flota son de solo lectura. Para actualizar uno, adjunta el archivo y su vigencia; Operaciones debe autorizarlo.</div></div>
   <div class="card"><h2>✏️ Actualiza tu información</h2>
     <label>Teléfono</label><input id="utel" inputmode="tel" autocomplete="tel">
     <label>Correo de contacto</label><input id="ucorreo" type="email" inputmode="email" autocomplete="email">
-    <button class="btn ghost" id="save-contact" style="margin-top:8px">Guardar contacto</button>
+    <label>Nombre del contacto de emergencia</label><input id="uemergencia-nombre">
+    <label>Teléfono de emergencia</label><input id="uemergencia-telefono" inputmode="tel">
+    <label>Parentesco</label><input id="uemergencia-parentesco">
+    <button class="btn ghost" id="save-contact" style="margin-top:8px">Guardar o solicitar cambio</button>
     <div id="contact-err"></div>
-    <div class="note">Nombre, vehículo, licencia y documentos provienen de Flota. Solo Operaciones puede autorizar cambios en esos datos.</div>
+    <div id="perfil-estado" class="note"></div>
+    <div class="note">La primera captura se guarda; los cambios a datos existentes requieren aprobación de Operaciones.</div>
   </div>
   <button class="btn ghost" id="blogout">Cerrar sesión</button>
 </section>
@@ -281,6 +285,6 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
 
 <script src="vendor/supabase-js-2.118.0.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=invitacion-activa-1"></script>
+<script src="app.js?v=perfiles-flotilla-1"></script>
 </body>
 </html>

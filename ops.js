@@ -717,12 +717,12 @@ function suscribirAvisos(uid){NOTIF_UID=uid;loadNotifs();setInterval(loadNotifs,
     if("Notification" in window&&Notification.permission==="granted")try{new Notification(p.new.titulo,{body:p.new.cuerpo||""})}catch(e){}
     if((p.new.tipo||"").startsWith("cancelacion"))load()}).subscribe()}
 setInterval(()=>{if(tab==="c")render()},30000);
-const CAMPOS={nombre:"Nombre",placas:"Placas",tipo:"Tipo de vehículo",marca_modelo:"Marca / modelo",licencia_numero:"Número de licencia",licencia_tipo:"Tipo de licencia",licencia_vigencia:"Vigencia de licencia"};
+const CAMPOS={nombre:"Nombre",telefono:"Teléfono",correo_contacto:"Correo de contacto",emergencia_nombre:"Contacto de emergencia",emergencia_telefono:"Teléfono de emergencia",emergencia_parentesco:"Parentesco",placas:"Placas",tipo:"Categoría tarifaria",tipo_detalle:"Tipo de vehículo",marca_modelo:"Marca / modelo",licencia_numero:"Número de licencia",licencia_tipo:"Tipo de licencia",licencia_vigencia:"Vigencia de licencia"};
 function vistaCambios(){
   const f=CAMB.map(q=>{const d=DRV.find(y=>y.id===q.driver_id);
     const det=Object.entries(q.datos).map(([k,v])=>`${esc(CAMPOS[k]||k)}: <s style="color:#888">${esc((q.anterior&&q.anterior[k])||"—")}</s> → <b>${esc(v)}</b>`).join("<br>");
-    return `<tr><td>${esc(d?d.nombre:q.driver_id)}<br><small>${dd(q.solicitado_en)}</small></td><td>${det}</td><td>${q.estatus==="pendiente"?"<span class='pill w'>Pendiente</span>":q.estatus==="aprobada"?"<span class='pill ok'>Aprobada</span>":"<span class='pill bad'>Rechazada</span>"}</td><td>${q.estatus==="pendiente"?`<button class="btn sm" data-cpa="${esc(q.id)}">Aprobar</button> <button class="btn ghost sm" data-cpr="${esc(q.id)}">Rechazar</button>`:""}</td></tr>`}).join("");
-  return `<h3 style="margin:12px 8px 0">Cambios de datos solicitados por los drivers</h3><small style="padding:0 8px">Nombre, vehículo y licencia solo cambian cuando Chazki los autoriza.</small><table><tr><th>Driver</th><th>Cambio solicitado</th><th>Estatus</th><th></th></tr>${f||'<tr><td colspan="4">Sin solicitudes.</td></tr>'}</table>`}
+    return `<tr><td>${esc(d?d.nombre:q.driver_id)}<br><small>${dd(q.solicitado_en)}</small></td><td>${det}</td><td>${q.estatus==="pendiente"?"<span class='pill w'>Pendiente</span>":q.estatus==="aprobada"?"<span class='pill ok'>Aprobada</span>":"<span class='pill bad'>Rechazada</span>"}</td><td>${q.estatus==="pendiente"&&esOps()?`<button class="btn sm" data-cpa="${esc(q.id)}">Aprobar</button> <button class="btn ghost sm" data-cpr="${esc(q.id)}">Rechazar</button>`:""}</td></tr>`}).join("");
+  return `<h3 style="margin:12px 8px 0">Cambios de perfil solicitados</h3><small style="padding:0 8px">Los cambios a datos existentes requieren aprobación de Operaciones o master.</small><table><tr><th>Driver</th><th>Cambio solicitado</th><th>Estatus</th><th></th></tr>${f||'<tr><td colspan="4">Sin solicitudes.</td></tr>'}</table>`}
 async function resolverCambio(id,ok){const {error}=await sb.rpc("resolver_cambio_perfil",{p_id:id,p_aprobar:ok,p_nota:null});
   if(error){toast(error.message);return}await cargaExtra();render();toast(ok?"Cambio aprobado y aplicado":"Cambio rechazado")}
 async function verManif(id){const ru=R.find(x=>x.id===id);const paths=ru.ruta_manifiestos.map(x=>x.foto_path);
@@ -1545,7 +1545,9 @@ async function anular(rutaId){
     if(error){toast(error.message);boton.disabled=false;return}
     modal.classList.add("hide");await load();toast("Validación anulada y motivo guardado");
   }}
-async function cargarTarifas(){if(TAR)return;const {data}=await sb.from("tarifas").select("id,cuenta,conc,ubicacion,ciudad,tipo_unidad,esquema,zona,variable,pago_base,tarifa_cliente,vigencia_desde,vigencia_hasta").order("ubicacion").order("tipo_unidad").order("esquema").order("zona");TAR=data||[]}
+async function cargarTarifas(){if(TAR)return;const {data,error}=await sb.from("tarifas").select("id,cuenta,conc,ubicacion,ciudad,tipo_unidad,esquema,zona,variable,pago_base,tarifa_cliente,vigencia_desde,vigencia_hasta,activo").order("ubicacion").order("tipo_unidad").order("esquema").order("zona");if(error)throw error;TAR=data||[]}
+const tiposSinEquivalencia=["4.5T","5T","RABÓN","TORTON SECO","TORTON REFRIGERADO","TRAILER 53 SECO","TRAILER 53 REFRIGERADO"];
+const tipoTarifario=s=>String(s||"").trim().normalize("NFD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
 function sugeridas(ru,todas){
   const cuenta=cuentaDe(ru.cedis.clientes.nombre),fecha=new Date(ru.checkin_at).toLocaleDateString("en-CA");
   let l=TAR.filter(t=>t.cuenta===cuenta),nota="";
@@ -1556,6 +1558,10 @@ function sugeridas(ru,todas){
     else{const stop=new Set(["express","hibrida","coppel","paqueteria","paquete","circuitos","para","los","las"]);const tk=nz(ru.cedis.nombre).split(" ").filter(w=>w.length>=3&&!stop.has(w));
       f=l.filter(t=>{const u=nz((t.ubicacion||"")+" "+(t.ciudad||""));return tk.some(w=>u.includes(w))})}
     if(f.length)l=f;else nota+="No encontré tarifas para este CEDIS; se muestran todas las de la cuenta.";}
+  if(tiposSinEquivalencia.includes(ru.tipo_unidad)){
+    l=l.filter(t=>t.activo===true&&tipoTarifario(t.tipo_unidad)===tipoTarifario(ru.tipo_unidad)&&t.vigencia_desde<=fecha&&(!t.vigencia_hasta||t.vigencia_hasta>=fecha));
+    if(!l.length)nota+=(nota?" ":"")+`No hay tarifa vigente para ${ru.tipo_unidad}; no se asignará una tarifa equivalente.`;
+  }
   return {l,nota};
 }
 const filaRes=(a,b,cls="")=>`<tr class="${cls}"><td>${esc(a)}</td><td>${esc(b)}</td></tr>`;
@@ -1568,12 +1574,13 @@ function tablaRes(j){
    filaRes("Utilidad (venta menos costo total)",fm(j.utilidad)+" · "+pc(j.margen),"t")+`</table>`+((j.avisos||[]).length?`<div class="errbox">${esc(j.avisos.join(". "))}</div>`:"");
 }
 async function abrirValidar(id){
-  const ru=R.find(x=>x.id===id);await cargarTarifas();
+  const ru=R.find(x=>x.id===id);
+  try{await cargarTarifas()}catch(error){toast("No se pudieron cargar las tarifas: "+error.message);return}
   const p=provDe(ru.driver_id),cuenta=cuentaDe(ru.cedis.clientes.nombre),m=$("modal");m.classList.remove("hide");
   const pintar=()=>{let {l,nota}=sugeridas(ru,$("m-todas").checked);
     const z=$("m-zona").value;if(z)l=l.filter(t=>{const u=(t.zona||"").toUpperCase();return z==="LOCAL"?u.startsWith("LOCAL"):new RegExp("FORANE[AO] "+z+"( |$)").test(u)});
     if(z&&!l.length)nota=(nota?nota+" · ":"")+"No hay tarifa cargada para ese tipo de ruta";
-    $("m-tar").innerHTML=l.map(t=>`<option value="${esc(t.id)}">${esc([t.ubicacion,t.tipo_unidad,t.esquema,t.zona,t.variable].filter(Boolean).join(" · "))} — pago ${fm(t.pago_base)} / cobro ${fm(t.tarifa_cliente)}</option>`).join("");
+    $("m-tar").innerHTML=(tiposSinEquivalencia.includes(ru.tipo_unidad)?'<option value="">Selecciona una tarifa</option>':"")+l.map(t=>`<option value="${esc(t.id)}">${esc([t.ubicacion,t.tipo_unidad,t.esquema,t.zona,t.variable].filter(Boolean).join(" · "))} — pago ${fm(t.pago_base)} / cobro ${fm(t.tarifa_cliente)}</option>`).join("");
     $("m-nota-t").textContent=nota;reset()};
   const reset=()=>{$("m-prev").innerHTML="";$("m-ok").disabled=true};
   m.innerHTML=`<div class="box"><h2 style="margin:0 0 4px">Validar ruta ${esc(ru.id_ruta)}</h2>
