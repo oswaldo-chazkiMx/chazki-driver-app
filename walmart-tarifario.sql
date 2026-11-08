@@ -141,6 +141,57 @@ $$;
 revoke all on function private.calcular_walmart_importes(numeric,numeric,integer,integer,boolean,boolean,text,numeric,numeric,numeric)
   from public, anon, authenticated;
 
+-- El modelo debe provenir de la instantánea de inicio o de una revisión
+-- autorizada; no consultar el acuerdo actual al liquidar rutas anteriores.
+create or replace function private.calcular_walmart_tarifa_configurada(
+  p_cedis_id bigint, p_fecha date, p_unidad text, p_opcion smallint,
+  p_visitas_asignadas integer, p_visitas_realizadas integer,
+  p_aplicar_visitas boolean, p_aplicar_fallida boolean,
+  p_registro_fiscal text, p_retencion_fiscal numeric, p_iva numeric, p_comision numeric
+) returns jsonb
+language plpgsql stable set search_path = ''
+as $$
+declare
+  v_unidad text;
+  v_tarifa public.walmart_tarifas%rowtype;
+  v_count integer;
+  v_base numeric;
+  v_semanal numeric;
+begin
+  if p_cedis_id is null or p_fecha is null or p_opcion is null or p_opcion not in (1,2) then
+    raise exception 'Se requiere CEDIS, fecha y modelo Walmart confirmado';
+  end if;
+  v_unidad := case public.operativo_normalizar(p_unidad)
+    when '35t' then '3.5T'
+    when 'large' then 'Large'
+    when 'largevan' then 'Large'
+    else null end;
+  if v_unidad is null then raise exception 'Unidad sin tarifa Walmart confirmada'; end if;
+  select count(*) into v_count from public.walmart_tarifas t
+  where t.cedis_id=p_cedis_id and t.tipo_unidad=v_unidad
+    and t.esquema='RUTA' and t.zona='LOCAL' and t.variable='REGULAR'
+    and p_fecha between t.vigencia_desde and t.vigencia_hasta;
+  if v_count <> 1 then
+    raise exception 'Se requiere una sola tarifa Walmart vigente para el CEDIS y unidad; encontradas %',v_count;
+  end if;
+  select * into strict v_tarifa from public.walmart_tarifas t
+  where t.cedis_id=p_cedis_id and t.tipo_unidad=v_unidad
+    and t.esquema='RUTA' and t.zona='LOCAL' and t.variable='REGULAR'
+    and p_fecha between t.vigencia_desde and t.vigencia_hasta;
+  v_base := case p_opcion when 1 then v_tarifa.pago_opcion_1 else v_tarifa.pago_opcion_2 end;
+  v_semanal := case p_opcion when 1 then v_tarifa.semanal_opcion_1 else v_tarifa.semanal_opcion_2 end;
+  return private.calcular_walmart_importes(v_base,v_semanal,
+    p_visitas_asignadas,p_visitas_realizadas,p_aplicar_visitas,p_aplicar_fallida,
+    p_registro_fiscal,p_retencion_fiscal,p_iva,p_comision)
+    || jsonb_build_object('tarifa_id',v_tarifa.id,'cedis_id',v_tarifa.cedis_id,
+      'tipo_unidad',v_unidad,'opcion',p_opcion,'porcentaje_semanal',v_semanal,
+      'tarifa_cliente',v_tarifa.tarifa_cliente,'vigencia_desde',v_tarifa.vigencia_desde,
+      'vigencia_hasta',v_tarifa.vigencia_hasta);
+end;
+$$;
+revoke all on function private.calcular_walmart_tarifa_configurada(bigint,date,text,smallint,integer,integer,boolean,boolean,text,numeric,numeric,numeric)
+  from public, anon, authenticated;
+
 alter table public.rutas
   add column if not exists walmart_visitas_asignadas integer,
   add column if not exists walmart_visitas_realizadas integer,

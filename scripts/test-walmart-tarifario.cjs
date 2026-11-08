@@ -201,6 +201,40 @@ test("Walmart applies validated penalties, fiscal treatment and weekly split",as
   }finally{await db.close()}
 });
 
+test("configured Walmart calculation uses the confirmed model and exact route tariff",async()=>{
+  const db=await database();
+  try{
+    await db.exec(migration);
+    const calc=async(cedis,fecha,unidad,opcion)=>(await db.query(
+      "select private.calcular_walmart_tarifa_configurada($1,$2::date,$3,$4::smallint,100,95,true,false,'SIN FACTURA',0.05,0.16,0.02) as value",
+      [cedis,fecha,unidad,opcion])).rows[0].value;
+    const first=await calc(1,"2026-11-01","3.5T",1);
+    assert.equal(first.pago_base,4500);
+    assert.equal(first.tarifa_cliente,5565.5);
+    assert.equal(first.porcentaje_semanal,0.75);
+    assert.equal(first.opcion,1);
+    assert.equal(first.pago_semanal,3045.94);
+    const second=await calc(1,"2026-12-31","3.5T",2);
+    assert.equal(second.pago_base,4200);
+    assert.equal(second.porcentaje_semanal,0.85);
+    assert.equal(second.opcion,2);
+    const merida=await calc(4,"2026-11-15","Large van",2);
+    assert.equal(merida.tipo_unidad,"Large");
+    assert.equal(merida.pago_base,3400);
+    assert.equal(merida.porcentaje_semanal,0.9);
+    await assert.rejects(calc(1,"2026-10-31","3.5T",1),/una sola tarifa/);
+    await assert.rejects(calc(1,"2027-01-01","3.5T",1),/una sola tarifa/);
+    await assert.rejects(calc(1,"2026-11-15","Large",1),/una sola tarifa/);
+    await assert.rejects(calc(1,"2026-11-15","5T",1),/Unidad sin tarifa/);
+    await assert.rejects(calc(1,"2026-11-15","3.5T",null),/modelo Walmart confirmado/);
+    await db.exec(`insert into public.walmart_tarifas
+      (cedis_id,tipo_unidad,esquema,zona,variable,vigencia_desde,vigencia_hasta,
+       tarifa_cliente,pago_opcion_1,pago_opcion_2,semanal_opcion_1,semanal_opcion_2)
+      values (1,'3.5T','RUTA','LOCAL','REGULAR','2026-11-15','2026-12-15',1,1,1,0.75,0.85)`);
+    await assert.rejects(calc(1,"2026-11-15","3.5T",1),/encontradas 2/);
+  }finally{await db.close()}
+});
+
 test("Walmart load rolls back if a center is missing or ambiguous",async()=>{
   for(const sql of [
     "update public.cedis set activo=false where id=4",
