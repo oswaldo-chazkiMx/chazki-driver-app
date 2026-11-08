@@ -74,6 +74,28 @@ test("rate calculation uses delivered packages with exact 90 and 95 percent thre
   }finally{await db.close()}
 });
 
+test("configured route calculation rejects special zones, vehicles and out-of-period dates",async()=>{
+  const db=await database();
+  try{
+    await db.exec(migration);
+    const calc=async(cedis,fecha,unidad,esquema,zona)=>(await db.query(
+      "select private.coppel_peak_calcular_ruta_configurada($1,$2::date,$3,$4,$5,100,95) as result",
+      [cedis,fecha,unidad,esquema,zona])).rows[0].result;
+    assert.deepEqual(await calc(22,"2026-11-09","Sedan","PAQUETE","LOCAL"),
+      {pago_base:2850,descuento_efectividad:0,bono_efectividad:475,subtotal:3325});
+    assert.deepEqual(await calc(24,"2027-01-10","SEDAN","PAQUETE","LOCAL"),
+      {pago_base:3325,descuento_efectividad:0,bono_efectividad:0,subtotal:3325});
+    await assert.rejects(calc(22,"2026-11-08","SEDAN","PAQUETE","LOCAL"),/No hay tarifa/);
+    await assert.rejects(calc(22,"2027-01-11","SEDAN","PAQUETE","LOCAL"),/No hay tarifa/);
+    await assert.rejects(calc(5,"2026-11-09","SEDAN","PAQUETE","LOCAL"),/No hay tarifa/);
+    await assert.rejects(calc(22,"2026-11-09","SEDAN","PAQUETE","LOCAL (huixquilucan)"),/no corresponde/);
+    await assert.rejects(calc(22,"2026-11-09","SEDAN","PAQUETE","LOCAL (zona 2)"),/no corresponde/);
+    await assert.rejects(calc(13,"2026-11-09","SEDAN","PAQUETE","FORANEA"),/no corresponde/);
+    await assert.rejects(calc(13,"2026-11-09","3.5T","RUTA","LOCAL"),/no corresponde/);
+    await assert.rejects(calc(13,"2026-11-09",null,"PAQUETE","LOCAL"),/no corresponde/);
+  }finally{await db.close()}
+});
+
 test("attendance requires all six weekdays and any NO SHOW disqualifies the week",async()=>{
   const db=await database();
   try{
@@ -115,7 +137,7 @@ test("weekly bonus uses each validated route's plaza and includes Sunday without
   }finally{await db.close()}
 });
 
-test("Sunday bonus pays once per Sunday with routes and never for cancellation alone",async()=>{
+test("Sunday bonus pays once per Sunday with registered routes, not cancellation alone",async()=>{
   const db=await database();
   try{
     await db.exec(migration);

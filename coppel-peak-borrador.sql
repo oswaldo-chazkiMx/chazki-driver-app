@@ -92,6 +92,33 @@ $$;
 revoke all on function private.calcular_coppel_peak_ruta(numeric,numeric,integer,integer)
   from public, anon, authenticated;
 
+create or replace function private.coppel_peak_calcular_ruta_configurada(
+  p_cedis_id bigint, p_fecha date, p_unidad text, p_esquema text, p_zona text,
+  p_asignados integer, p_entregados integer
+) returns jsonb
+language plpgsql stable set search_path = ''
+as $$
+declare v_plaza private.coppel_peak_plazas%rowtype;
+begin
+  if p_cedis_id is null or p_fecha is null or
+    upper(btrim(coalesce(p_unidad,''))) <> 'SEDAN' or
+    upper(btrim(coalesce(p_esquema,''))) <> 'PAQUETE' or
+    upper(btrim(coalesce(p_zona,''))) <> 'LOCAL' then
+    raise exception 'La ruta no corresponde al esquema COPPEL Peak SEDAN local';
+  end if;
+  select * into v_plaza from private.coppel_peak_plazas p
+  where p.cedis_id=p_cedis_id and p_fecha between p.inicio and p.fin;
+  if not found then
+    raise exception 'No hay tarifa COPPEL Peak para el CEDIS y fecha indicados';
+  end if;
+  return private.calcular_coppel_peak_ruta(
+    v_plaza.pago_paquete,v_plaza.bono_efectividad_paquete,p_asignados,p_entregados
+  );
+end;
+$$;
+revoke all on function private.coppel_peak_calcular_ruta_configurada(bigint,date,text,text,text,integer,integer)
+  from public, anon, authenticated;
+
 create or replace function private.coppel_peak_asistencia_completa(
   p_lunes date, p_dias date[], p_hubo_no_show boolean
 ) returns boolean
@@ -161,16 +188,16 @@ revoke all on function private.calcular_coppel_peak_asistencia(date,date[],boole
   from public, anon, authenticated;
 
 create or replace function private.coppel_peak_bono_domingo(
-  p_fecha date, p_rutas_validas integer
+  p_fecha date, p_rutas_registradas integer
 ) returns numeric
 language plpgsql immutable set search_path = ''
 as $$
 begin
   if p_fecha is null or p_fecha < date '2026-11-09' or p_fecha > date '2027-01-10'
-    or p_rutas_validas is null or p_rutas_validas < 0 then
+    or p_rutas_registradas is null or p_rutas_registradas < 0 then
     raise exception 'Fecha o número de rutas inválidos para el bono dominical COPPEL';
   end if;
-  return case when extract(isodow from p_fecha)=7 and p_rutas_validas>0 then 300 else 0 end;
+  return case when extract(isodow from p_fecha)=7 and p_rutas_registradas>0 then 300 else 0 end;
 end;
 $$;
 revoke all on function private.coppel_peak_bono_domingo(date,integer)
