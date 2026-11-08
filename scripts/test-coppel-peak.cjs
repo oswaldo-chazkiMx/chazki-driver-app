@@ -68,6 +68,9 @@ test("rate calculation uses delivered packages with exact 90 and 95 percent thre
     assert.equal((await calc(100,0)).subtotal,0);
     await assert.rejects(calc(100,101),/Datos inválidos/);
     await assert.rejects(calc(0,0),/Datos inválidos/);
+    await assert.rejects(db.query("select private.calcular_coppel_peak_ruta('Infinity'::numeric,5,100,95)"),/Datos inválidos/);
+    await assert.rejects(db.query("select private.calcular_coppel_peak_ruta(30,'Infinity'::numeric,100,95)"),/Datos inválidos/);
+    await assert.rejects(db.query("select private.calcular_coppel_peak_ruta('NaN'::numeric,5,100,95)"),/Datos inválidos/);
   }finally{await db.close()}
 });
 

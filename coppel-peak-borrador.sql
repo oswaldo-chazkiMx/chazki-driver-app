@@ -74,8 +74,8 @@ declare
   v_descuento numeric;
   v_bono numeric;
 begin
-  if p_base is null or p_base::text = 'NaN' or p_base <= 0
-    or p_bono_efectividad is null or p_bono_efectividad::text = 'NaN' or p_bono_efectividad < 0
+  if p_base is null or p_base::text in ('NaN','Infinity','-Infinity') or p_base <= 0
+    or p_bono_efectividad is null or p_bono_efectividad::text in ('NaN','Infinity','-Infinity') or p_bono_efectividad < 0
     or p_asignados is null or p_asignados <= 0
     or p_entregados is null or p_entregados < 0 or p_entregados > p_asignados then
     raise exception 'Datos inválidos para calcular la ruta COPPEL';
