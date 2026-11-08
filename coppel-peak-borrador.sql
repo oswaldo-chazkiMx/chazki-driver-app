@@ -198,6 +198,12 @@ declare
   v_rutas jsonb;
   v_asistencia numeric;
   v_rutas_domingo integer;
+  v_proveedores bigint[];
+  v_faltan_proveedores boolean;
+  v_registros_fiscales integer;
+  v_domingo_sin_destino integer;
+  v_domingo_proveedores bigint[];
+  v_domingo_registros_fiscales integer;
 begin
   if p_driver_id is null or p_lunes is null or extract(isodow from p_lunes) <> 1
     or p_lunes < date '2026-11-09' or p_lunes + 6 > date '2027-01-10' then
@@ -230,7 +236,8 @@ begin
   select coalesce(jsonb_agg(jsonb_build_object(
     'ruta_id',r.id,'cedis_id',r.cedis_id,
     'fecha',(r.checkin_at at time zone 'America/Mexico_City')::date,
-    'entregados',l.entregados
+    'entregados',l.entregados,'proveedor_id',l.proveedor_id,
+    'registro_fiscal',l.registro_fiscal
   ) order by r.id),'[]'::jsonb) into v_rutas
   from public.liquidaciones l
   join public.rutas r on r.id=l.ruta_id
@@ -243,17 +250,33 @@ begin
     and (r.checkin_at at time zone 'America/Mexico_City')::date between p_lunes and p_lunes+6
     and (r.checkin_at at time zone 'America/Mexico_City')::date between p.inicio and p.fin;
   v_asistencia := private.calcular_coppel_peak_asistencia(p_lunes,v_dias,v_hubo_no_show,v_rutas);
+  select coalesce(array_agg(distinct x.proveedor_id) filter (where x.proveedor_id is not null),'{}'::bigint[]),
+         coalesce(bool_or(x.proveedor_id is null or x.registro_fiscal is null
+           or x.registro_fiscal not in ('FACTURA','SIN FACTURA')),false),
+         count(distinct x.registro_fiscal)
+    into v_proveedores,v_faltan_proveedores,v_registros_fiscales
+  from jsonb_to_recordset(v_rutas) as x(proveedor_id bigint,registro_fiscal text);
 
-  select count(*) into v_rutas_domingo
+  select count(*),
+    count(*) filter (where l.id is null or l.cuenta is distinct from 'COPPEL'
+      or l.proveedor_id is null or l.registro_fiscal is null
+      or l.registro_fiscal not in ('FACTURA','SIN FACTURA')),
+    coalesce(array_agg(distinct l.proveedor_id) filter (where l.proveedor_id is not null),'{}'::bigint[]),
+    count(distinct l.registro_fiscal)
+  into v_rutas_domingo,v_domingo_sin_destino,v_domingo_proveedores,v_domingo_registros_fiscales
   from public.rutas r
   join public.cedis ce on ce.id=r.cedis_id
   join public.clientes cl on cl.id=ce.cliente_id
+  left join public.liquidaciones l on l.ruta_id=r.id
   where r.driver_id=p_driver_id and public.operativo_normalizar(cl.nombre) in ('coppel','coppelbt')
     and (r.checkin_at at time zone 'America/Mexico_City')::date=p_lunes+6;
   return jsonb_build_object(
     'lunes',p_lunes,'dias_asistencia',to_jsonb(v_dias),'hubo_no_show',v_hubo_no_show,
     'rutas_validadas',v_rutas,'bono_asistencia_base',v_asistencia,
+    'proveedores',to_jsonb(v_proveedores),
+    'asistencia_requiere_revision',v_faltan_proveedores or cardinality(v_proveedores)>1 or v_registros_fiscales>1,
     'rutas_domingo',v_rutas_domingo,
+    'domingo_requiere_revision',v_domingo_sin_destino>0 or cardinality(v_domingo_proveedores)>1 or v_domingo_registros_fiscales>1,
     'bono_domingo_base',case when v_rutas_domingo>0 then 300 else 0 end
   );
 end;

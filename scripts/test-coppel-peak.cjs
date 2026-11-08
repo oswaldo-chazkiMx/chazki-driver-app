@@ -15,7 +15,7 @@ async function database(){
     create table public.cancelaciones(id bigint primary key,driver_id uuid,cedis_id bigint,capturado_at timestamptz,estatus text);
     create table public.no_show_casos(id bigint primary key,driver_id uuid,cuenta text,fecha_servicio date,estado text);
     create table public.tarifas(id bigint primary key,zona text);
-    create table public.liquidaciones(id bigint primary key,ruta_id bigint,tarifa_id bigint,cuenta text,tipo_unidad text,esquema text,entregados integer);
+    create table public.liquidaciones(id bigint primary key,ruta_id bigint,tarifa_id bigint,cuenta text,tipo_unidad text,esquema text,entregados integer,proveedor_id bigint,registro_fiscal text);
     create function public.operativo_normalizar(p_texto text) returns text language sql immutable as $$
       select regexp_replace(translate(lower(btrim(coalesce(p_texto,''))),'áéíóúüñ','aeiouun'),'[^a-z0-9]+','','g')
     $$;
@@ -159,27 +159,41 @@ test("weekly preview derives attendance and validated routes from database recor
         (1,'${driver}',22,'2026-11-10 16:00+00','pendiente');
       insert into public.tarifas values (1,'LOCAL'),(2,'LOCAL (huixquilucan)');
       insert into public.liquidaciones values
-        (1,1,1,'COPPEL','SEDAN','PAQUETE',100),
-        (2,2,2,'COPPEL','SEDAN','PAQUETE',100);
+        (1,1,1,'COPPEL','SEDAN','PAQUETE',100,10,'FACTURA'),
+        (2,2,2,'COPPEL','SEDAN','PAQUETE',100,10,'FACTURA');
     `);
     const preview=async()=>(await db.query("select private.coppel_peak_previsualizar_semana($1,'2026-11-09') as result",[driver])).rows[0].result;
     let result=await preview();
     assert.equal(result.bono_asistencia_base,0);
     assert.equal(result.rutas_domingo,1);
     assert.equal(result.bono_domingo_base,300);
+    assert.equal(result.domingo_requiere_revision,true);
     assert.equal(result.rutas_validadas.length,1);
+    assert.deepEqual(result.proveedores,[10]);
+    assert.equal(result.asistencia_requiere_revision,false);
     await db.exec("update public.cancelaciones set estatus='aprobada' where id=1");
     result=await preview();
     assert.equal(result.bono_asistencia_base,200);
     assert.deepEqual(result.dias_asistencia,["2026-11-09","2026-11-10","2026-11-11","2026-11-12","2026-11-13","2026-11-14","2026-11-15"]);
-    await db.exec("insert into public.liquidaciones values (3,6,1,'COPPEL','SEDAN','PAQUETE',50)");
+    await db.exec("insert into public.liquidaciones values (3,6,1,'COPPEL','SEDAN','PAQUETE',50,11,'SIN FACTURA')");
     assert.equal((await preview()).bono_asistencia_base,350);
+    assert.equal((await preview()).asistencia_requiere_revision,true);
+    assert.equal((await preview()).domingo_requiere_revision,false);
+    await db.exec("update public.liquidaciones set proveedor_id=null where id=3");
+    assert.equal((await preview()).asistencia_requiere_revision,true);
+    assert.equal((await preview()).domingo_requiere_revision,true);
+    await db.exec("update public.liquidaciones set proveedor_id=10,registro_fiscal=null where id=3");
+    assert.equal((await preview()).asistencia_requiere_revision,true);
+    await db.exec("update public.liquidaciones set registro_fiscal='SIN FACTURA' where id=3");
+    assert.equal((await preview()).asistencia_requiere_revision,true);
+    await db.exec("update public.liquidaciones set registro_fiscal='FACTURA' where id=3");
+    assert.equal((await preview()).asistencia_requiere_revision,false);
     await db.exec(`insert into public.no_show_casos values (1,'${driver}','COPPEL','2026-11-11','apelacion_aceptada')`);
     result=await preview();
     assert.equal(result.hubo_no_show,true);
     assert.equal(result.bono_asistencia_base,0);
     assert.equal(result.bono_domingo_base,300);
-    await db.exec("insert into public.liquidaciones values (4,1,1,'COPPEL','SEDAN','PAQUETE',100)");
+    await db.exec("insert into public.liquidaciones values (4,1,1,'COPPEL','SEDAN','PAQUETE',100,10,'FACTURA')");
     await assert.rejects(preview(),/duplicada o inválida/);
   }finally{await db.close()}
 });
