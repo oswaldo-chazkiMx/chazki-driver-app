@@ -65,7 +65,8 @@ end;
 $$;
 
 create or replace function private.calcular_coppel_peak_ruta(
-  p_base numeric, p_bono_efectividad numeric, p_asignados integer, p_entregados integer
+  p_base numeric, p_bono_efectividad numeric, p_asignados integer, p_entregados integer,
+  p_aplicar_descuento boolean
 ) returns jsonb
 language plpgsql immutable set search_path = ''
 as $$
@@ -77,11 +78,12 @@ begin
   if p_base is null or p_base::text in ('NaN','Infinity','-Infinity') or p_base <= 0
     or p_bono_efectividad is null or p_bono_efectividad::text in ('NaN','Infinity','-Infinity') or p_bono_efectividad < 0
     or p_asignados is null or p_asignados <= 0
-    or p_entregados is null or p_entregados < 0 or p_entregados > p_asignados then
+    or p_entregados is null or p_entregados < 0 or p_entregados > p_asignados
+    or p_aplicar_descuento is null then
     raise exception 'Datos inválidos para calcular la ruta COPPEL';
   end if;
   v_base := round(p_base*p_entregados,2);
-  v_descuento := case when p_entregados::numeric*100 < p_asignados::numeric*90
+  v_descuento := case when p_aplicar_descuento
     then round(v_base*0.05,2) else 0 end;
   v_bono := case when p_entregados::numeric*100 >= p_asignados::numeric*95
     then round(p_bono_efectividad*p_entregados,2) else 0 end;
@@ -89,12 +91,21 @@ begin
     'bono_efectividad',v_bono,'subtotal',v_base-v_descuento+v_bono);
 end;
 $$;
+revoke all on function private.calcular_coppel_peak_ruta(numeric,numeric,integer,integer,boolean)
+  from public, anon, authenticated;
+
+create or replace function private.calcular_coppel_peak_ruta(
+  p_base numeric, p_bono_efectividad numeric, p_asignados integer, p_entregados integer
+) returns jsonb language sql immutable set search_path = ''
+as $$
+  select private.calcular_coppel_peak_ruta(p_base,p_bono_efectividad,p_asignados,p_entregados,false)
+$$;
 revoke all on function private.calcular_coppel_peak_ruta(numeric,numeric,integer,integer)
   from public, anon, authenticated;
 
 create or replace function private.coppel_peak_calcular_ruta_configurada(
   p_cedis_id bigint, p_fecha date, p_unidad text, p_esquema text, p_zona text,
-  p_asignados integer, p_entregados integer
+  p_asignados integer, p_entregados integer, p_aplicar_descuento boolean
 ) returns jsonb
 language plpgsql stable set search_path = ''
 as $$
@@ -112,9 +123,21 @@ begin
     raise exception 'No hay tarifa COPPEL Peak para el CEDIS y fecha indicados';
   end if;
   return private.calcular_coppel_peak_ruta(
-    v_plaza.pago_paquete,v_plaza.bono_efectividad_paquete,p_asignados,p_entregados
+    v_plaza.pago_paquete,v_plaza.bono_efectividad_paquete,p_asignados,p_entregados,p_aplicar_descuento
   );
 end;
+$$;
+revoke all on function private.coppel_peak_calcular_ruta_configurada(bigint,date,text,text,text,integer,integer,boolean)
+  from public, anon, authenticated;
+
+create or replace function private.coppel_peak_calcular_ruta_configurada(
+  p_cedis_id bigint, p_fecha date, p_unidad text, p_esquema text, p_zona text,
+  p_asignados integer, p_entregados integer
+) returns jsonb language sql stable set search_path = ''
+as $$
+  select private.coppel_peak_calcular_ruta_configurada(
+    p_cedis_id,p_fecha,p_unidad,p_esquema,p_zona,p_asignados,p_entregados,false
+  )
 $$;
 revoke all on function private.coppel_peak_calcular_ruta_configurada(bigint,date,text,text,text,integer,integer)
   from public, anon, authenticated;

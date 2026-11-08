@@ -75,19 +75,22 @@ test("peak configuration retains plaza amounts and exact dates",async()=>{
   }finally{await db.close()}
 });
 
-test("rate calculation uses delivered packages with exact 90 and 95 percent thresholds",async()=>{
+test("route calculation applies the selected 5 percent to base and bonus from 95 percent",async()=>{
   const db=await database();
   try{
     await db.exec(migration);
-    const calc=async(asignados,entregados)=>(await db.query(
-      "select private.calcular_coppel_peak_ruta(30,5,$1,$2) as result",[asignados,entregados])).rows[0].result;
-    assert.deepEqual(await calc(100,89),{pago_base:2670,descuento_efectividad:133.5,bono_efectividad:0,subtotal:2536.5});
+    const calc=async(asignados,entregados,descuento=false)=>(await db.query(
+      "select private.calcular_coppel_peak_ruta(30,5,$1,$2,$3) as result",[asignados,entregados,descuento])).rows[0].result;
+    assert.deepEqual(await calc(100,89),{pago_base:2670,descuento_efectividad:0,bono_efectividad:0,subtotal:2670});
+    assert.deepEqual(await calc(100,89,true),{pago_base:2670,descuento_efectividad:133.5,bono_efectividad:0,subtotal:2536.5});
     assert.deepEqual(await calc(100,90),{pago_base:2700,descuento_efectividad:0,bono_efectividad:0,subtotal:2700});
     assert.deepEqual(await calc(100,94),{pago_base:2820,descuento_efectividad:0,bono_efectividad:0,subtotal:2820});
     assert.deepEqual(await calc(100,95),{pago_base:2850,descuento_efectividad:0,bono_efectividad:475,subtotal:3325});
+    assert.deepEqual(await calc(100,95,true),{pago_base:2850,descuento_efectividad:142.5,bono_efectividad:475,subtotal:3182.5});
     assert.equal((await calc(100,0)).subtotal,0);
     await assert.rejects(calc(100,101),/Datos inválidos/);
     await assert.rejects(calc(0,0),/Datos inválidos/);
+    await assert.rejects(calc(100,95,null),/Datos inválidos/);
     await assert.rejects(db.query("select private.calcular_coppel_peak_ruta('Infinity'::numeric,5,100,95)"),/Datos inválidos/);
     await assert.rejects(db.query("select private.calcular_coppel_peak_ruta(30,'Infinity'::numeric,100,95)"),/Datos inválidos/);
     await assert.rejects(db.query("select private.calcular_coppel_peak_ruta('NaN'::numeric,5,100,95)"),/Datos inválidos/);

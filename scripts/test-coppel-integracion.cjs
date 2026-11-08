@@ -251,9 +251,9 @@ test("the existing calculator applies Peak rates, fiscal rules, exceptions and C
     assert.equal(invoice.utilidad,1425);
     const below=await calc(2,428);
     assert.equal(below.pago_base,2670);
-    assert.equal(below.dcto_pago,-133.5);
+    assert.equal(below.dcto_pago,0);
     assert.equal(below.bono_pago,0);
-    assert.equal(below.costo_total,2536.5);
+    assert.equal(below.costo_total,2670);
     assert.equal((await calc(2,428,"SIN FACTURA",true)).dcto_pago,0);
     assert.equal((await calc(3,429)).pago_base,4000);
     const before=await calc(4,428);
