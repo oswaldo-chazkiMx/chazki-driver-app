@@ -8,18 +8,21 @@ const source = fs.readFileSync(path.join(__dirname, "..", "ops.js"), "utf8");
 const escapeFunction = source.slice(0, source.indexOf("\n"));
 const view = source.slice(source.indexOf("let AFILIADOS="), source.indexOf("let PADRON="));
 
-function render(afiliados, isOps = false, expanded = null, editing = null) {
+function render(afiliados, isOps = false, expanded = null, editing = null, providerEditing = null) {
   const context = vm.createContext({ DRV: [], PRV: [], ROL: isOps ? "ops" : "ih", esOps: () => isOps });
   vm.runInContext(escapeFunction + "\n" + view, context);
   context.items = afiliados;
   context.expanded = expanded;
   context.editing = editing;
-  return vm.runInContext("AFILIADOS=items; AFILIADO_ABIERTO=expanded; AFILIADO_EDITAR=editing; vistaProveedores()", context);
+  context.providerEditing = providerEditing;
+  context.cedis = [{id:9,nombre:"CEDIS Norte"}];
+  return vm.runInContext("AFILIADOS=items; AFILIADO_ABIERTO=expanded; AFILIADO_EDITAR=editing; AFILIADO_PROVEEDOR_EDITAR=providerEditing; CEDIS_EDICION=cedis; vistaProveedores()", context);
 }
 const fixtures = [
-  {id:"owner", nombre:"<Flotillero>", rol:"flotillero", proveedor_id:1, proveedor_tipo:"flotillero", titular_id:"owner", proveedor_activo:true},
-  {id:"driver", nombre:"Ana", rol:"driver", proveedor_id:1, proveedor_tipo:"flotillero", telefono:"123", correo_contacto:"a@example.test"},
-  {id:"other", nombre:"Otro", rol:"driver", proveedor_id:2, proveedor_tipo:"independiente"}
+  {id:"owner", nombre:"<Flotillero>", rol:"flotillero", proveedor_id:1, proveedor_nombre:"Flota Uno", proveedor_tipo:"flotillero", proveedor_tipo_registro:"FACTURA", titular_id:"owner", proveedor_activo:true},
+  {id:"driver", nombre:"Ana", rol:"driver", proveedor_id:1, proveedor_nombre:"Flota Uno", proveedor_tipo:"flotillero", telefono:"123", correo_contacto:"a@example.test"},
+  {id:"other", nombre:"Otro", rol:"driver", proveedor_id:2, proveedor_nombre:"Independiente", proveedor_tipo:"independiente", proveedor_tipo_registro:"SIN FACTURA", titular_id:"other"},
+  {id:"independent-no-owner", nombre:"Independiente sin titular", rol:"driver", proveedor_id:3, proveedor_nombre:"Proveedor sin titular", proveedor_tipo:"independiente", proveedor_tipo_registro:"FACTURA", titular_id:null}
 ];
 
 test("affiliate view omits provider creation and the provider table for operations and supervisors", () => {
@@ -42,12 +45,12 @@ test("finance retains its separate provider listing", () => {
 test("fleet, roster and documents hide their heading and filters without changing other tabs", async () => {
   const classes=()=>({hidden:false,toggle(name, force){if(name==="hide")this.hidden=force}});
   const bar={classList:classes()}, heading={classList:classes()};
-  const title={}, description={};
+  const title={}, description={}, view={dataset:{},classList:{add(){},toggle(){}},parentElement:{classList:{add(){}}}};
   const button=tab=>({dataset:{t:tab},classList:classes()});
   const context=vm.createContext({
     tab:"r",ROL:"finanzas",PADRON_LOADING:false,NAV_INFO:{p:["Proveedores","",""],j:["Padrón","",""],r:["Rutas","",""],n:["NO SHOW","",""]},
-    document:{querySelectorAll:()=>[],querySelector:s=>s===".bar"?bar:heading},
-    $:id=>id==="page-title"?title:description,render(){},load(){},cargarPadron:async()=>{}
+    document:{querySelectorAll:()=>[],querySelector:s=>s===".bar"?bar:s===".page-heading"?heading:{dataset:{},classList:{add(){}},parentElement:{classList:{add(){}}}}},
+    $:id=>id==="page-title"?title:id==="page-description"?description:view,render(){},load(){},cargarPadron:async()=>{}
   });
   const select=source.slice(source.indexOf("function seleccionarTab("),source.indexOf("function aplicarRol()"));
   vm.runInContext(select,context);
@@ -80,6 +83,43 @@ test("supervisor can expand only a fleet owner and sees only their drivers", () 
   assert.doesNotMatch(html, /<option[^>]*>ops|<option[^>]*>master/);
   assert.equal((html.match(/>Ana</g)||[]).length,1);
   assert.match(html, /Driver independiente/);
+});
+
+test("provider and driver forms expose the requested editable fields", () => {
+  const provider = render(fixtures, true, null, null, "1");
+  assert.match(provider, /Nombre o razón social/);
+  assert.match(provider, /data-af-prov-guardar="1"/);
+  assert.match(provider, /id="af-prov-tipo"/);
+  assert.match(provider, /id="af-prov-esquema"/);
+  const independentProvider = render(fixtures, true);
+  assert.match(independentProvider, /data-af-editar-prov="3"/);
+  const driver = render(fixtures, true, null, "owner");
+  assert.match(driver, /CEDIS predeterminado/);
+  assert.match(driver, /CEDIS Norte/);
+  assert.match(driver, /Guardar driver/);
+});
+
+test("editing provider data is available for independent drivers without a titular", () => {
+  const html = render(fixtures.filter(x => x.id === "independent-no-owner"), true);
+  assert.match(html, /data-af-editar-driver="independent-no-owner"/);
+  assert.match(html, /data-af-editar-prov="3"/);
+});
+
+test("saving an independent provider without a titular sends the provider edit", async () => {
+  const fn=source.slice(source.indexOf("async function guardarProveedorFlota("),source.indexOf("async function anular("));
+  const calls=[];
+  const context=vm.createContext({
+    AFILIADOS:fixtures,AFILIADOS_ERR:"",AFILIADO_PROVEEDOR_EDITAR:"3",
+    $:id=>({"af-prov-nombre":{value:"Nombre actualizado"},"af-prov-tipo":{value:"independiente"},"af-prov-esquema":{value:"FACTURA"}}[id]),
+    sb:{rpc:async(name,args)=>{calls.push({name,args});return {error:null}}},
+    cargarAfiliados:async()=>{},render(){},toast(){}
+  });
+  vm.runInContext(fn,context);
+  context.button={dataset:{afProvGuardar:"3"},disabled:false};
+  await vm.runInContext("guardarProveedorFlota(button)",context);
+  assert.equal(calls[0].name,"editar_proveedor_flota");
+  assert.equal(calls[0].args.p_proveedor_id,3);
+  assert.equal(calls[0].args.p_nombre,"Nombre actualizado");
 });
 
 test("linked drivers appear only under their owner, without hiding ungrouped drivers", () => {

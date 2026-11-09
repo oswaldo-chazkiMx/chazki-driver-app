@@ -27,7 +27,7 @@ test("pending fleet invitations preserve authorization and resolve on fleet regi
       );
       create unique index inv_activa on public.invitaciones_red(lower(email)) where estatus in ('enviada','pendiente_aprobacion');
       create table public.padron_fleet(email text,estatus text);
-      create table public.cedis(id bigint primary key);
+      create table public.cedis(id bigint primary key,nombre text not null default 'CEDIS',cliente_id bigint default 1,activo boolean default true);
       create table public.asignaciones_operativas(cedis_id bigint,supervisor_id uuid,coordinador_id uuid);
       create function public.mi_acceso_administrativo() returns boolean language sql stable as $$ select current_setting('test.role',true) in ('ih','coordinador','ops','master') $$;
       create function public.operativo_rol_actual() returns text language sql stable as $$ select current_setting('test.role',true) $$;
@@ -48,7 +48,7 @@ test("pending fleet invitations preserve authorization and resolve on fleet regi
       select set_config('test.uid','${admin}',false);
       select set_config('test.role','ih',false);
     `);
-    for (const migration of ["invitation-status-audit.sql", "registro-por-invitacion.sql", "invitaciones-flotillero-pendiente.sql", "gestion-flotillas-supervisor.sql", "editar-invitaciones-red.sql", "solicitudes-vinculacion-flotilla.sql"]) {
+    for (const migration of ["invitation-status-audit.sql", "registro-por-invitacion.sql", "invitaciones-flotillero-pendiente.sql", "gestion-flotillas-supervisor.sql", "editar-invitaciones-red.sql", "solicitudes-vinculacion-flotilla.sql", "editar-afiliados-flota.sql"]) {
       await db.exec(fs.readFileSync(path.join(root, migration), "utf8"));
     }
     const addUser = (id, email) => db.query(
@@ -83,7 +83,7 @@ test("pending fleet invitations preserve authorization and resolve on fleet regi
     await assert.rejects(edit(driverId, await snapshot(driverId), "titular@example.test", "Driver", "driver", null, null, null, 10), /diferente/);
     await assert.rejects(edit(driverId, await snapshot(driverId), "driver@example.test", "Driver", "independiente", "FACTURA", 99, null, null), /CEDIS asignado/);
     await assert.rejects(edit(driverId, await snapshot(driverId), "driver@example.test", "Driver", "driver", null, null, 2, null), /no esta activa/);
-    await db.exec(`insert into public.cedis values (99);
+    await db.exec(`insert into public.cedis(id) values (99),(100);
       insert into public.asignaciones_operativas(cedis_id,supervisor_id) values (99,'00000000-0000-0000-0000-000000000002');`);
     await edit(driverId, await snapshot(driverId), "driver@example.test", "Driver", "independiente", "SIN FACTURA", 99, null, null);
     assert.equal((await db.query("select tipo from public.invitaciones_red where id=$1",[driverId])).rows[0].tipo,"independiente");
@@ -117,6 +117,37 @@ test("pending fleet invitations preserve authorization and resolve on fleet regi
     assert.equal(listedOwner.titular_id, listedOwner.id);
     assert.equal(listedDriver.titular_id, listedOwner.id);
     assert.equal(listedDriver.proveedor_id, listedOwner.proveedor_id);
+    await db.query("select public.editar_datos_driver_flota($1,$2,$3,$4,$5,$6)", [
+      listedDriver.id, child.proveedor_id, "Nombre con CEDIS", "123", "CONTACTO@example.test", 99
+    ]);
+    const driverEdited = (await db.query("select nombre,cedis_default_id from public.drivers where id=$1",[listedDriver.id])).rows[0];
+    assert.equal(driverEdited.nombre,"Nombre con CEDIS");
+    assert.equal(Number(driverEdited.cedis_default_id),99);
+    await assert.rejects(db.query("select public.editar_datos_driver_flota($1,$2,$3,$4,$5,$6)", [
+      listedDriver.id, child.proveedor_id, "Nombre", "", "", 100
+    ]), /CEDIS asignado/);
+    await db.query("select public.editar_proveedor_flota($1,$2,$3,$4)", [
+      listedOwner.proveedor_id, "Razón social actualizada", "flotillero", "SIN FACTURA"
+    ]);
+    const providerEdited = (await db.query("select nombre,tipo,tipo_registro from public.proveedores where id=$1",[listedOwner.proveedor_id])).rows[0];
+    assert.deepEqual(providerEdited,{nombre:"Razón social actualizada",tipo:"flotillero",tipo_registro:"SIN FACTURA"});
+    await assert.rejects(db.query("select public.editar_proveedor_flota($1,$2,$3,$4)", [
+      listedOwner.proveedor_id, "No permitido", "independiente", "FACTURA"
+    ]), /drivers vinculados/);
+    await db.exec(`
+      insert into public.proveedores(id,nombre,tipo,activo,tipo_registro,titular_id)
+      values (99,'Independiente sin titular','independiente',true,'FACTURA',null);
+      insert into public.drivers(id,nombre,codigo,rol,estatus,proveedor_id)
+      values ('00000000-0000-0000-0000-000000000006','Driver independiente','INDEP-1','driver','activo',99);
+    `);
+    await db.query("select public.editar_proveedor_flota($1,$2,$3,$4)", [
+      99, "Proveedor independiente actualizado", "independiente", "SIN FACTURA"
+    ]);
+    const independentEdited = (await db.query("select nombre,tipo,tipo_registro from public.proveedores where id=99")).rows[0];
+    assert.deepEqual(independentEdited,{nombre:"Proveedor independiente actualizado",tipo:"independiente",tipo_registro:"SIN FACTURA"});
+    await assert.rejects(db.query("select public.editar_proveedor_flota($1,$2,$3,$4)", [
+      99, "No permitido", "flotillero", "FACTURA"
+    ]), /sin titular/);
     await db.query("select public.editar_contacto_driver_flota($1,$2,$3,$4,$5)", [
       "00000000-0000-0000-0000-000000000003", child.proveedor_id, "Nombre real", "123", "CONTACTO@example.test"
     ]);
@@ -201,6 +232,14 @@ test("pending fleet invitations preserve authorization and resolve on fleet regi
     await assert.rejects(db.query("select * from public.listar_afiliados_supervisor()"), /No tienes permiso/);
     await assert.rejects(db.query("select public.editar_contacto_driver_flota($1,$2,$3,$4,$5)", [
       "00000000-0000-0000-0000-000000000003", child.proveedor_id, "Nombre", "", ""
+    ]), /No tienes permiso/);
+    await assert.rejects(db.query("select * from public.listar_afiliados_edicion_flota()"), /No tienes permiso/);
+    await assert.rejects(db.query("select * from public.listar_cedis_edicion_flota()"), /No tienes permiso/);
+    await assert.rejects(db.query("select public.editar_datos_driver_flota($1,$2,$3,$4,$5,$6)", [
+      "00000000-0000-0000-0000-000000000003", child.proveedor_id, "Nombre", "", "", null
+    ]), /No tienes permiso/);
+    await assert.rejects(db.query("select public.editar_proveedor_flota($1,$2,$3,$4)", [
+      child.proveedor_id, "Proveedor", "flotillero", null
     ]), /No tienes permiso/);
     await assert.rejects(db.query("select public.invitar_driver_flotilla_sin_traslado('otro@example.test','Otro',1)"), /No tienes permiso/);
     await assert.rejects(db.query("select * from public.listar_independientes_vinculacion()"), /No tienes permiso/);

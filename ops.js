@@ -1119,11 +1119,13 @@ async function asignarRol(){const m=$("eq-m").value.trim().toLowerCase();
   if(!/^[^@\s]+@chazki\.com$/.test(m)){toast("Solo correos @chazki.com");return}
   const {data,error}=await sb.rpc("asignar_rol",{p_email:m,p_rol:$("eq-r").value});
   if(error){toast(error.message);return}toast(data);await cargaExtra();render()}
-let AFILIADOS=[],AFILIADOS_ERR="",AFILIADOS_LOADING=false,AFILIADO_ABIERTO=null,AFILIADO_EDITAR=null,INV_PRESELECCION=null,SOL_VINCULACION=[],SOL_VINCULACION_ERR="";
+let AFILIADOS=[],AFILIADOS_ERR="",AFILIADOS_LOADING=false,AFILIADO_ABIERTO=null,AFILIADO_EDITAR=null,AFILIADO_PROVEEDOR_EDITAR=null,CEDIS_EDICION=[],CEDIS_EDICION_ERR="",INV_PRESELECCION=null,SOL_VINCULACION=[],SOL_VINCULACION_ERR="";
 async function cargarAfiliados(){
-  AFILIADOS_LOADING=true;AFILIADOS_ERR="";SOL_VINCULACION_ERR="";
-  try{AFILIADOS=await fetchPaged(()=>sb.rpc("listar_afiliados_supervisor"))}
-  catch(error){AFILIADOS=[];AFILIADOS_ERR="No se pudieron cargar los afiliados. Verifica gestion-flotillas-supervisor.sql en Supabase: "+error.message}
+  AFILIADOS_LOADING=true;AFILIADOS_ERR="";CEDIS_EDICION_ERR="";SOL_VINCULACION_ERR="";
+  try{AFILIADOS=await fetchPaged(()=>sb.rpc("listar_afiliados_edicion_flota"))}
+  catch(error){AFILIADOS=[];AFILIADOS_ERR="No se pudieron cargar los afiliados. Verifica editar-afiliados-flota.sql en Supabase: "+error.message}
+  try{CEDIS_EDICION=await fetchPaged(()=>sb.rpc("listar_cedis_edicion_flota"))}
+  catch(error){CEDIS_EDICION=[];CEDIS_EDICION_ERR="No se pudieron cargar los CEDIS disponibles para edición: "+error.message}
   try{SOL_VINCULACION=await fetchPaged(()=>sb.rpc("listar_solicitudes_vinculacion_flota"))}
   catch(error){SOL_VINCULACION=[];SOL_VINCULACION_ERR="No se pudieron cargar las solicitudes de vinculación. Verifica solicitudes-vinculacion-flotilla.sql en Supabase: "+error.message}
   finally{AFILIADOS_LOADING=false}
@@ -1134,6 +1136,32 @@ function categoriaAfiliado(d){
   if(d.proveedor_tipo==="independiente")return "Driver independiente";
   return "Driver · categoría sin definir";
 }
+function opcionesCedisAfiliado(d){
+  const actual=d.cedis_default_id==null?"":String(d.cedis_default_id);
+  const options=CEDIS_EDICION.map(c=>`<option value="${esc(c.id)}" ${String(c.id)===actual?"selected":""}>${esc(c.nombre)}</option>`).join("");
+  const conservaActual=actual&&!CEDIS_EDICION.some(c=>String(c.id)===actual)
+    ?`<option value="${esc(actual)}" selected>${esc(d.cedis_default_nombre||"CEDIS actual")} (no asignado)</option>`:"";
+  return `<option value="" ${actual?"":"selected"}>Sin CEDIS predeterminado</option>${conservaActual}${options}`;
+}
+function formularioDriverAfiliado(d,editarAttr,guardarAttr,colspan=5){
+  return `<tr><td colspan="${colspan}"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end">
+    <label>Nombre <input id="af-nombre" maxlength="200" value="${esc(d.nombre)}"></label>
+    <label>Teléfono <input id="af-telefono" maxlength="50" value="${esc(d.telefono||"")}"></label>
+    <label>Correo de contacto <input id="af-correo" type="email" maxlength="254" value="${esc(d.correo_contacto||"")}"></label>
+    <label>CEDIS predeterminado<select id="af-cedis">${opcionesCedisAfiliado(d)}</select></label>
+    <button class="btn sm" ${guardarAttr}="${esc(d.id)}">Guardar driver</button>
+    <button class="btn ghost sm" ${editarAttr}>Cancelar</button></div>
+    <small>El correo de contacto no cambia el correo de acceso. El driver podrá elegir otro CEDIS al iniciar una ruta.</small>
+  </td></tr>`;
+}
+function formularioProveedorAfiliado(d){
+  return `<tr><td colspan="5"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end">
+    <label>Nombre o razón social <input id="af-prov-nombre" maxlength="200" value="${esc(d.proveedor_nombre||"")}"></label>
+    <label>Categoría <select id="af-prov-tipo"><option value="flotillero" ${d.proveedor_tipo==="flotillero"?"selected":""}>Flotillero</option><option value="independiente" ${d.proveedor_tipo==="independiente"?"selected":""}>Independiente</option></select></label>
+    <label>Esquema <select id="af-prov-esquema"><option value="">Sin definir</option><option value="FACTURA" ${d.proveedor_tipo_registro==="FACTURA"?"selected":""}>Con factura</option><option value="SIN FACTURA" ${d.proveedor_tipo_registro==="SIN FACTURA"?"selected":""}>Sin factura</option></select></label>
+    <button class="btn sm" data-af-prov-guardar="${esc(d.proveedor_id)}">Guardar proveedor</button>
+    <button class="btn ghost sm" data-af-prov-cancelar>Cancelar</button></div></td></tr>`;
+}
 function vistaProveedores(){
   const pv=PRV.map(p=>{const t=DRV.find(d=>d.id===p.titular_id);return `<tr><td>${esc(p.nombre)}</td><td>${esc(p.tipo)}</td><td>${p.tipo_registro?esc(p.tipo_registro):'<span class="pill w">Sin definir</span>'}</td><td>${esc(t?t.nombre:"—")}</td></tr>`}).join("");
   if(ROL==="finanzas")return `<h3 style="margin:12px 8px 0">Proveedores</h3><table><tr><th>Proveedor</th><th>Tipo</th><th>Registro fiscal</th><th>Titular</th></tr>${pv}</table>`;
@@ -1142,11 +1170,17 @@ function vistaProveedores(){
     const titular=d.rol==="flotillero",valido=titular&&d.proveedor_id&&d.proveedor_tipo==="flotillero"&&d.titular_id===d.id;
     const abierto=valido&&AFILIADO_ABIERTO===d.id;
     const hijos=AFILIADOS.filter(x=>x.rol==="driver"&&valido&&String(x.proveedor_id)===String(d.proveedor_id));
-    const lista=hijos.map(x=>`<tr><td>${esc(x.nombre)}<br><small>${esc(x.codigo||"")}</small></td><td>${esc(x.estatus||"—")}</td><td><button class="btn ghost sm" data-af-editar="${esc(x.id)}">Editar driver</button></td></tr>${AFILIADO_EDITAR===x.id?`<tr><td colspan="3"><div style="display:flex;gap:8px;flex-wrap:wrap"><label>Nombre <input id="af-nombre" value="${esc(x.nombre)}"></label><label>Teléfono <input id="af-telefono" value="${esc(x.telefono||"")}"></label><label>Correo de contacto <input id="af-correo" type="email" value="${esc(x.correo_contacto||"")}"></label><button class="btn sm" data-af-guardar="${esc(x.id)}">Guardar contacto</button><button class="btn ghost sm" data-af-cancelar>Cancelar</button></div><small>El correo de contacto no cambia el correo de acceso.</small></td></tr>`:""}`).join("");
-    const detalle=abierto?`<tr><td colspan="4"><strong>Drivers de ${esc(d.nombre)}</strong> <button class="btn sm" data-af-vincular="${esc(d.proveedor_id)}" ${d.proveedor_activo?"":"disabled"}>Añadir driver</button> <button class="btn ghost sm" data-af-invitar="${esc(d.proveedor_id)}" ${d.proveedor_activo?"":"disabled"}>Invitar driver nuevo</button>${d.proveedor_activo?"":" <small>La flotilla está inactiva.</small>"}<table><tr><th>Driver</th><th>Estatus</th><th></th></tr>${lista||'<tr><td colspan="3">Esta flotilla no tiene drivers registrados.</td></tr>'}</table></td></tr>`:"";
-    return `<tr><td>${valido?`<button class="btn ghost sm" data-af-ver="${esc(d.id)}" aria-expanded="${abierto}">${abierto?"▾":"▸"} ${esc(d.nombre)}</button>`:esc(d.nombre)}<br><small>${esc(d.codigo||"")}</small></td><td>${esc(categoriaAfiliado(d))}</td><td>${esc(d.proveedor_nombre||"Sin proveedor")}</td><td>${titular&&!valido?"Sin flotilla vinculada":esc(d.estatus||"—")}</td></tr>${detalle}`;
+    const lista=hijos.map(x=>`<tr><td>${esc(x.nombre)}<br><small>${esc(x.codigo||"")}</small></td><td>${esc(x.estatus||"—")}</td><td><button class="btn ghost sm" data-af-editar="${esc(x.id)}">Editar driver</button></td></tr>${AFILIADO_EDITAR===x.id?formularioDriverAfiliado(x,"data-af-cancelar","data-af-guardar",3):""}`).join("");
+    const detalle=abierto?`<tr><td colspan="5"><strong>Drivers de ${esc(d.nombre)}</strong> <button class="btn sm" data-af-vincular="${esc(d.proveedor_id)}" ${d.proveedor_activo?"":"disabled"}>Añadir driver</button> <button class="btn ghost sm" data-af-invitar="${esc(d.proveedor_id)}" ${d.proveedor_activo?"":"disabled"}>Invitar driver nuevo</button>${d.proveedor_activo?"":" <small>La flotilla está inactiva.</small>"}<table><tr><th>Driver</th><th>Estatus</th><th></th></tr>${lista||'<tr><td colspan="3">Esta flotilla no tiene drivers registrados.</td></tr>'}</table></td></tr>`:"";
+    const esTitular=d.proveedor_id&&String(d.titular_id)===String(d.id);
+    const editarDatosProveedor=esTitular||(
+      d.proveedor_id&&d.proveedor_tipo==="independiente"&&!d.titular_id
+    );
+    const editarDriver=AFILIADO_EDITAR===d.id;
+    const editarProveedor=AFILIADO_PROVEEDOR_EDITAR!=null&&String(AFILIADO_PROVEEDOR_EDITAR)===String(d.proveedor_id);
+    return `<tr><td>${valido?`<button class="btn ghost sm" data-af-ver="${esc(d.id)}" aria-expanded="${abierto}">${abierto?"▾":"▸"} ${esc(d.nombre)}</button>`:esc(d.nombre)}<br><small>${esc(d.codigo||"")}</small></td><td>${esc(categoriaAfiliado(d))}</td><td>${esc(d.proveedor_nombre||"Sin proveedor")}</td><td>${titular&&!valido?"Sin flotilla vinculada":esc(d.estatus||"—")}</td><td><button class="btn ghost sm" data-af-editar-driver="${esc(d.id)}">Editar driver</button> ${editarDatosProveedor?`<button class="btn ghost sm" data-af-editar-prov="${esc(d.proveedor_id)}">Editar proveedor</button>`:"—"}</td></tr>${editarDriver?formularioDriverAfiliado(d,"data-af-cancelar-driver","data-af-guardar-driver"):""}${editarProveedor?formularioProveedorAfiliado(d):""}${detalle}`;
   }).join("");
-  return `<h3 style="margin:16px 8px 0">Drivers y flotilleros</h3><small style="padding:0 8px">Abre un flotillero para ver, editar, invitar o solicitar vincular drivers. El personal administrativo se consulta en Equipo. La aprobación y el traslado seguro aún no están habilitados.</small>${AFILIADOS_ERR?`<div class="errbox">${esc(AFILIADOS_ERR)}</div>`:""}${AFILIADOS_LOADING?"<p>Cargando afiliados…</p>":`<table><tr><th>Driver</th><th>Categoría</th><th>Proveedor</th><th>Estatus</th></tr>${dr||'<tr><td colspan="4">No hay drivers ni flotilleros registrados.</td></tr>'}</table>`}
+  return `<h3 style="margin:16px 8px 0">Drivers y flotilleros</h3><small style="padding:0 8px">Abre un flotillero para ver, editar, invitar o solicitar vincular drivers. El personal administrativo se consulta en Equipo. La aprobación y el traslado seguro aún no están habilitados.</small>${AFILIADOS_ERR?`<div class="errbox">${esc(AFILIADOS_ERR)}</div>`:""}${CEDIS_EDICION_ERR?`<div class="errbox">${esc(CEDIS_EDICION_ERR)}</div>`:""}${AFILIADOS_LOADING?"<p>Cargando afiliados…</p>":`<table><tr><th>Driver</th><th>Categoría</th><th>Proveedor</th><th>Estatus</th><th></th></tr>${dr||'<tr><td colspan="5">No hay drivers ni flotilleros registrados.</td></tr>'}</table>`}
     <h3 style="margin:16px 8px 0">Solicitudes de vinculación pendientes</h3><small>La solicitud no cambia la flotilla. La aprobación segura está pendiente de implementación.</small>${SOL_VINCULACION_ERR?`<div class="errbox">${esc(SOL_VINCULACION_ERR)}</div>`:""}<table><tr><th>Driver</th><th>Flotillero solicitado</th><th>Fecha</th><th></th></tr>${SOL_VINCULACION.map(s=>`<tr><td>${esc(s.driver_nombre)}</td><td>${esc(s.flotillero_nombre)}</td><td>${esc(new Date(s.solicitada_en).toLocaleString("es-MX"))}</td><td><button class="btn ghost sm" data-af-cancelar-solicitud="${esc(s.id)}">Cancelar solicitud</button></td></tr>`).join("")||'<tr><td colspan="4">Sin solicitudes visibles.</td></tr>'}</table>`}
 let PADRON=[],PADRON_ERR="",PADRON_Q="",PADRON_OFFSET=0,PADRON_MAS=false,PADRON_LOADING=false;
 async function cargarPadron(){
@@ -1391,10 +1425,14 @@ function enlazar(){
   document.querySelectorAll("[data-det]").forEach(b=>b.onclick=()=>verDetalleRuta(b.dataset.det));
   document.querySelectorAll("[data-val]").forEach(b=>b.onclick=()=>abrirValidar(+b.dataset.val));
   document.querySelectorAll("[data-anu]").forEach(b=>b.onclick=()=>anular(+b.dataset.anu));
-  document.querySelectorAll("[data-af-ver]").forEach(b=>b.onclick=()=>{AFILIADO_ABIERTO=AFILIADO_ABIERTO===b.dataset.afVer?null:b.dataset.afVer;AFILIADO_EDITAR=null;render()});
-  document.querySelectorAll("[data-af-editar]").forEach(b=>b.onclick=()=>{AFILIADO_EDITAR=b.dataset.afEditar;render()});
-  document.querySelectorAll("[data-af-cancelar]").forEach(b=>b.onclick=()=>{AFILIADO_EDITAR=null;render()});
-  document.querySelectorAll("[data-af-guardar]").forEach(b=>b.onclick=()=>guardarContactoFlota(b));
+  document.querySelectorAll("[data-af-ver]").forEach(b=>b.onclick=()=>{AFILIADO_ABIERTO=AFILIADO_ABIERTO===b.dataset.afVer?null:b.dataset.afVer;AFILIADO_EDITAR=null;AFILIADO_PROVEEDOR_EDITAR=null;render()});
+  document.querySelectorAll("[data-af-editar]").forEach(b=>b.onclick=()=>{AFILIADO_EDITAR=b.dataset.afEditar;AFILIADO_PROVEEDOR_EDITAR=null;render()});
+  document.querySelectorAll("[data-af-cancelar],[data-af-cancelar-driver]").forEach(b=>b.onclick=()=>{AFILIADO_EDITAR=null;render()});
+  document.querySelectorAll("[data-af-guardar],[data-af-guardar-driver]").forEach(b=>b.onclick=()=>guardarContactoFlota(b));
+  document.querySelectorAll("[data-af-editar-driver]").forEach(b=>b.onclick=()=>{AFILIADO_EDITAR=AFILIADO_EDITAR===b.dataset.afEditarDriver?null:b.dataset.afEditarDriver;AFILIADO_PROVEEDOR_EDITAR=null;render()});
+  document.querySelectorAll("[data-af-editar-prov]").forEach(b=>b.onclick=()=>{AFILIADO_PROVEEDOR_EDITAR=AFILIADO_PROVEEDOR_EDITAR===b.dataset.afEditarProv?null:b.dataset.afEditarProv;AFILIADO_EDITAR=null;render()});
+  document.querySelectorAll("[data-af-prov-cancelar]").forEach(b=>b.onclick=()=>{AFILIADO_PROVEEDOR_EDITAR=null;render()});
+  document.querySelectorAll("[data-af-prov-guardar]").forEach(b=>b.onclick=()=>guardarProveedorFlota(b));
   document.querySelectorAll("[data-af-vincular]").forEach(b=>b.onclick=()=>abrirSolicitudVinculacion(b.dataset.afVincular));
   document.querySelectorAll("[data-af-cancelar-solicitud]").forEach(b=>b.onclick=async()=>{if(!confirm("¿Cancelar esta solicitud de vinculación?"))return;b.disabled=true;const {error}=await sb.rpc("cancelar_solicitud_vinculacion_flota",{p_id:+b.dataset.afCancelarSolicitud});if(error){toast(error.message);b.disabled=false;return}await cargarAfiliados();render();toast("Solicitud cancelada")});
   document.querySelectorAll("[data-af-invitar]").forEach(b=>b.onclick=()=>{INV_PRESELECCION=`proveedor:${b.dataset.afInvitar}`;INVR_FLOTAS=[];document.querySelector('.role-nav button[data-t="w"]').click()});
@@ -1519,12 +1557,31 @@ async function abrirSolicitudVinculacion(proveedorId){
   }catch(error){$("af-sol-contenido").innerHTML="";$("af-sol-error").innerHTML=`<div class="errbox">No se pudieron cargar los drivers: ${esc(error.message||error)}</div>`}
 }
 async function guardarContactoFlota(button){
-  const d=AFILIADOS.find(x=>x.id===button.dataset.afGuardar);
+  const d=AFILIADOS.find(x=>x.id===(button.dataset.afGuardar||button.dataset.afGuardarDriver));
   if(!d){toast("No se encontró el driver; actualiza la lista.");return}
   button.disabled=true;
-  const {error}=await sb.rpc("editar_contacto_driver_flota",{p_driver_id:d.id,p_proveedor_id:d.proveedor_id,p_nombre:$("af-nombre").value,p_telefono:$("af-telefono").value,p_correo_contacto:$("af-correo").value});
+  const {error}=await sb.rpc("editar_datos_driver_flota",{
+    p_driver_id:d.id,p_proveedor_id:d.proveedor_id,p_nombre:$("af-nombre").value,
+    p_telefono:$("af-telefono").value,p_correo_contacto:$("af-correo").value,
+    p_cedis_default_id:$("af-cedis").value?Number($("af-cedis").value):null
+  });
   if(error){toast(error.message);button.disabled=false;return}
-  AFILIADO_EDITAR=null;await cargarAfiliados();render();toast(AFILIADOS_ERR?"Contacto guardado, pero no se pudo actualizar la lista.":"Contacto actualizado");
+  AFILIADO_EDITAR=null;await cargarAfiliados();render();toast(AFILIADOS_ERR?"Driver guardado, pero no se pudo actualizar la lista.":"Datos del driver actualizados");
+}
+async function guardarProveedorFlota(button){
+  const proveedor=AFILIADOS.find(x=>String(x.proveedor_id)===button.dataset.afProvGuardar
+    &&(String(x.titular_id)===String(x.id)||x.proveedor_tipo==="independiente"));
+  if(!proveedor){toast("No se encontró el proveedor; actualiza la lista.");return}
+  button.disabled=true;
+  const {error}=await sb.rpc("editar_proveedor_flota",{
+    p_proveedor_id:Number(proveedor.proveedor_id),
+    p_nombre:$("af-prov-nombre").value,
+    p_tipo:$("af-prov-tipo").value,
+    p_tipo_registro:$("af-prov-esquema").value||null
+  });
+  if(error){toast(error.message);button.disabled=false;return}
+  AFILIADO_PROVEEDOR_EDITAR=null;await cargarAfiliados();render();
+  toast(AFILIADOS_ERR?"Proveedor guardado, pero no se pudo actualizar la lista.":"Datos del proveedor actualizados");
 }
 async function anular(rutaId){
   const pg=await sb.from("pagos").select("estatus").eq("ruta_id",rutaId).eq("concepto","servicio");
