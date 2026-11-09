@@ -164,6 +164,15 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
       <div class="note" style="margin:0 0 6px">Reparte los fallidos por causa. Debe sumar <b id="ftot">0</b>.</div>
       <div id="clist"></div><div class="note" id="csum"></div>
     </div>
+    <div id="walmart-visitas" class="hide">
+      <h3>Visitas Walmart</h3>
+      <div class="note">Registra las visitas por separado de las entregas. El supervisor revisará la información.</div>
+      <div class="grid2"><div><label>Visitas asignadas</label><input id="wm-asignadas" type="number" inputmode="numeric" min="1" step="1"></div>
+      <div><label>Visitas realizadas</label><input id="wm-realizadas" type="number" inputmode="numeric" min="0" step="1"></div></div>
+      <label>Folios Avaya (uno por línea; obligatorios si hay fallidos)</label>
+      <textarea id="wm-folios" rows="3"></textarea>
+      <div class="note" id="wm-error"></div>
+    </div>
     <button class="btn" id="b2" disabled>Continuar</button>
   </div>
   <div class="card lock" id="s3">
@@ -213,6 +222,12 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
     <button class="btn bad" id="bcam">📷 Tomar foto de evidencia</button>
     <canvas id="cv" class="hide"></canvas>
     <div id="cmeta" class="note"></div>
+    <div id="wm-can-evidencia" class="hide">
+      <div class="note">Para Walmart, la foto anterior debe mostrar la salida de la unidad. Agrega también la foto de la bitácora de cancelación.</div>
+      <input type="file" id="wm-can-file" accept="image/*" capture="environment" class="hide">
+      <button class="btn ghost" type="button" id="wm-can-camera">📷 Tomar foto de la bitácora</button>
+      <div class="note" id="wm-can-status"></div>
+    </div>
     <button class="btn" id="bcan" disabled>Registrar cancelación</button>
     <div id="canerr"></div>
   </div>
@@ -285,6 +300,7 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
 
 <script src="vendor/supabase-js-2.118.0.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=perfiles-flotilla-1"></script>
+<script src="invitaciones.js?v=estados-1"></script>
+<script src="app.js?v=invitaciones-estados-1"></script>
 </body>
 </html>

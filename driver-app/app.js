@@ -2,6 +2,8 @@ const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&
 const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);
 const $=id=>document.getElementById(id);
 const LOCAL_DB="chazki-driver-offline";
+const WALMART_TARIFARIO_ENABLED=false; // Activar solo con migración y pagos Walmart validados.
+const WALMART_VISITAS_ENABLED=false; // La captura adicional no forma parte del flujo simplificado.
 const CANCEL_DAILY_LIMIT_EXEMPT_DRIVER_ID="f640638a-d9a6-4136-a7dd-481e86715c7e";
 let OFFLINE_MODE=!navigator.onLine, syncBusy=false, syncCancelBusy=false, ROUTE_SYNC_ERROR=null;
 function openLocalDb(){
@@ -50,6 +52,16 @@ let ME=null,DRIVER=null,VEHICULO=null,CLI=[],CAUSAS=[],INCID=[],vt=null,ACC={pue
 const S={stage:0,zonas:[],route:null,fallos:{},inc:null,incSel:new Set()};
 
 // ---------- Autenticación ----------
+function authErrorMessage(error){
+  if(error.code==="over_email_send_rate_limit"||/email rate limit exceeded/i.test(error.message))
+    return "Se alcanzó el límite de correos de confirmación. Espera antes de intentar de nuevo y avisa al administrador si continúa.";
+  if(error.code==="email_address_not_authorized")
+    return "El servicio de correo aún no permite enviar confirmaciones a esta dirección. Contacta al administrador.";
+  if(error.message==="Invalid login credentials")return "Correo o contraseña incorrectos.";
+  if(/Database error saving new user/i.test(error.message))
+    return "No se pudo crear la cuenta. Verifica con tu supervisor que exista una invitación aprobada para este correo; si el problema continúa, contacta al administrador.";
+  return error.message;
+}
 let signup=false;
 function authMode(s){signup=s;$("agroup-nombre").classList.toggle("hide",!s);$("abtn").textContent=s?"Crear cuenta":"Entrar";
   $("aswitch").textContent=s?"Ya tengo cuenta":"Crear cuenta nueva";$("amode-sub").textContent=s?"Crea tu cuenta de driver":"Inicia sesión con tu correo";
@@ -65,7 +77,7 @@ $("abtn").onclick=async()=>{
     if(!r.error&&!r.data.session){$("abtn").disabled=false;authMode(false);$("amsg").innerHTML='<div class="okbox">Revisa tu correo y confirma tu cuenta si recibiste un mensaje; después inicia sesión.</div>';return}
   }else r=await sb.auth.signInWithPassword({email,password});
   $("abtn").disabled=false;
-  if(r.error){$("amsg").innerHTML=`<div class="errbox">${esc(r.error.message==="Invalid login credentials"?"Correo o contraseña incorrectos.":/Database error saving new user/i.test(r.error.message)?"No se pudo crear la cuenta. Verifica con tu supervisor que exista una invitación aprobada para este correo; si el problema continúa, contacta al administrador.":r.error.message)}</div>`;return}
+  if(r.error){$("amsg").innerHTML=`<div class="errbox">${esc(authErrorMessage(r.error))}</div>`;return}
   boot();
 };
 $("blogout").onclick=async()=>{await sb.auth.signOut();location.reload()};
@@ -146,9 +158,16 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
 // ---------- Cliente / CEDIS ----------
 // El cliente de la base de fleet solo se precarga: el driver puede elegir cualquier otro
 function prefillCliente(){
-  const id=DRIVER&&DRIVER.cliente_default_id;if(!id||!CLI.some(c=>c.id===id))return;
-  ["cli","ccli"].forEach(sid=>{const sel=$(sid);sel.value=String(id);fillCedis($(sid==="cli"?"cedis":"ccedis"),id)});
-  const n=cliName(id);$("cli-hint").textContent=`Tu cliente habitual es ${n}. Puedes elegir otro si hoy trabajas en otra cuenta.`;
+  const cedisDefaultId=DRIVER&&DRIVER.cedis_default_id;
+  const habitual=cedisDefaultId&&CLI.flatMap(c=>c.cedis.map(e=>({...e,cliente_id:c.id,cliente_nombre:c.nombre}))).find(e=>String(e.id)===String(cedisDefaultId));
+  const clienteId=habitual?.cliente_id??(DRIVER&&DRIVER.cliente_default_id);
+  if(!clienteId||!CLI.some(c=>String(c.id)===String(clienteId)))return;
+  ["cli","ccli"].forEach(sid=>{
+    const sel=$(sid);sel.value=String(clienteId);
+    const cedisSel=$(sid==="cli"?"cedis":"ccedis");fillCedis(cedisSel,clienteId);
+    if(habitual)cedisSel.value=String(habitual.id);
+  });
+  const n=cliName(clienteId);$("cli-hint").textContent=`Tu ${habitual?"CEDIS habitual":"cliente habitual"} es ${habitual?habitual.cliente_nombre+" · "+habitual.nombre:n}. Puedes elegir otro si hoy trabajas en otra cuenta.`;
   checkIn();checkCan();
 }
 function fillClientes(sel){sel.innerHTML='<option value="">Selecciona cliente…</option>'+CLI.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join("")}
@@ -176,7 +195,7 @@ const cedObjById=id=>CLI.flatMap(c=>c.cedis.map(e=>({...e,cliente_id:c.id,client
 const cedNameById=id=>cedObjById(id)?.nombre||"";
 const cedName=(cid,eid)=>{const c=CLI.find(x=>String(x.id)===String(cid));const e=c&&c.cedis.find(y=>String(y.id)===String(eid));return e?e.nombre:""};
 $("cli").onchange=()=>{fillCedis($("cedis"),$("cli").value);checkIn()};
-function resetFoto(){if(canBlob){canBlob=null;$("cv").classList.add("hide");$("cmeta").innerHTML='<span style="color:var(--bad)">Cambiaste el CEDIS: vuelve a tomar la foto para validar tu ubicación.</span>'}}
+function resetFoto(){const hadEvidence=canBlob||canBitacoraBlob;canBlob=null;canMeta=null;canBitacoraBlob=null;canEvidenceGeneration++;canLocationGeneration++;$("cv").classList.add("hide");$("wm-can-status").textContent="";if(hadEvidence)$("cmeta").innerHTML='<span style="color:var(--bad)">Cambiaste el CEDIS: vuelve a tomar las fotos para validar tu ubicación.</span>'}
 $("ccli").onchange=()=>{fillCedis($("ccedis"),$("ccli").value);resetFoto();checkCan()};
 $("ccedis").onchange=()=>{resetFoto();checkCan()};
 
@@ -386,7 +405,7 @@ function renderRouteSyncError(){
     <br><small>Tus datos siguen guardados en este dispositivo. Usa 🔄 para reintentar.</small></div>`;
 }
 function showRouteDone(pending=false){routeDoneMarkup(pending)}
-function prefillCan(){const r=S.route;$("ccli").value=r.cliId;fillCedis($("ccedis"),r.cliId);$("ccedis").value=r.cedisId}
+function prefillCan(){const r=S.route;resetFoto();$("ccli").value=r.cliId;fillCedis($("ccedis"),r.cliId);$("ccedis").value=r.cedisId;checkCan()}
 
 $("zinp").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();addZona()}});
 $("zinp").addEventListener("blur",addZona);
@@ -525,13 +544,26 @@ $("bin").onclick=async()=>{
   const saved=await localGet("routes",routeLocalKey());
   S.route={...routeInfo,dbId:saved?.serverRouteId||null,localKey:record.key,checkin:checkinAt};
   clearAuxCapture("in");
-  prefillCan();setStage(1);$("ent").value="";$("fal").value="";updFin();
+  prefillCan();setStage(1);$("ent").value="";$("fal").value="";$("wm-asignadas").value="";$("wm-realizadas").value="";$("wm-folios").value="";updFin();
   $("hstate").className=`pill ${synced?"ok":"w"}`;$("hstate").textContent=synced?"En ruta":"Check-in pendiente de enviar";
   if(synced){toast("Check-in registrado · ¡Buena ruta!")}
   else{setNetStatus("Sin conexión o sincronización pendiente · check-in y evidencia guardados en este dispositivo.",true);toast("Check-in guardado en este dispositivo")}
 };
 
-["ent","fal"].forEach(id=>$(id).addEventListener("input",updFin));
+["ent","fal","wm-asignadas","wm-realizadas","wm-folios"].forEach(id=>$(id).addEventListener("input",updFin));
+const esRutaWalmart=()=>WALMART_TARIFARIO_ENABLED&&WALMART_VISITAS_ENABLED&&String(S.route?.cli||"").trim().toUpperCase()==="WALMART";
+function datosVisitasWalmart(){
+  const asignadas=$("wm-asignadas").value.trim(),realizadas=$("wm-realizadas").value.trim();
+  const folios=$("wm-folios").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+  if(!/^\d+$/.test(asignadas)||!/^\d+$/.test(realizadas)||
+     !Number.isSafeInteger(Number(asignadas))||!Number.isSafeInteger(Number(realizadas))||
+     Number(asignadas)<1||Number(asignadas)>2147483647||Number(realizadas)>Number(asignadas))
+    return {error:"Indica visitas asignadas y realizadas válidas; las realizadas no pueden superar las asignadas."};
+  if(folios.length>100||folios.some(x=>x.length>120))
+    return {error:"Puedes registrar hasta 100 folios de máximo 120 caracteres cada uno."};
+  if(+$("fal").value>0&&!folios.length)return {error:"Captura al menos un folio Avaya cuando haya entregas fallidas."};
+  return {datos:{walmart_visitas_asignadas:Number(asignadas),walmart_visitas_realizadas:Number(realizadas),walmart_folios_avaya:folios}};
+}
 function sumC(){return Object.values(S.fallos).reduce((a,b)=>a+b,0)}
 function updFin(){
   const pk=S.route?S.route.pk:0,e=+$("ent").value||0,f=+$("fal").value||0,filled=$("ent").value!==""&&$("fal").value!=="";
@@ -539,6 +571,8 @@ function updFin(){
   $("s2note").innerHTML=filled?(e+f===pk?`<span style="color:var(--ok)">✔ Cuadra con los ${pk} paquetes asignados</span>`:`<span style="color:var(--bad)">Entregados + fallidos = ${e+f}; debes cuadrar con ${pk}</span>`):`Asignados: <b>${pk}</b>`;
   $("causes").classList.toggle("hide",!(f>0));$("ftot").textContent=f;
   if(f>0){drawCauses();const s=sumC();ok=ok&&s===f;$("csum").innerHTML=s===f?`<span style="color:var(--ok)">✔ Causas completas (${s}/${f})</span>`:`<span style="color:var(--bad)">Asignadas ${s} de ${f}</span>`}else S.fallos={};
+  const walmart=esRutaWalmart();$("walmart-visitas").classList.toggle("hide",!walmart);
+  if(walmart){const result=datosVisitasWalmart();$("wm-error").textContent=result.error||"";ok=ok&&!result.error}
   $("b2").disabled=!ok;
 }
 function drawCauses(){$("clist").innerHTML=CAUSAS.map(c=>`<div class="cause"><span>${esc(c.nombre)}</span><div class="qty"><button data-c="${esc(c.id)}" data-d="-1">−</button><span>${S.fallos[c.id]||0}</span><button data-c="${esc(c.id)}" data-d="1">+</button></div></div>`).join("")}
@@ -613,9 +647,11 @@ $("bout").onclick=async()=>{
   const checkoutAt=new Date().toISOString();
   const fl=Object.entries(S.fallos).filter(([,q])=>q>0).map(([c,q])=>({causa_id:+c,cantidad:q}));
   const ic=S.inc?[...S.incSel].map(i=>({incidencia_id:+i,comentario:$("inctxt").value.trim()||null})):[];
+  const walmart=esRutaWalmart()?datosVisitasWalmart():null;
+  if(walmart?.error){err("outerr",new Error(walmart.error));$("bout").disabled=false;return}
   record.status="checkout_pending";
   record.checkout={checkoutAt,ent:res.ent,fal:res.fal,hubo_incidencias:!!S.inc,fallos:fl,incidencias:ic,auxiliaryBlob,auxiliaryEvidencePath:null,
-    extras:llevaExtras()?{maniobras:$("x-man").value.trim()||null,estadia:$("x-est").value.trim()||null,otros:$("x-otr").value.trim()||null}:{}};
+    extras:{...(llevaExtras()?{maniobras:$("x-man").value.trim()||null,estadia:$("x-est").value.trim()||null,otros:$("x-otr").value.trim()||null}:{}),...(walmart?.datos||{})}};
   try{await localPut("routes",record)}catch(e){err("outerr",e);$("bout").disabled=false;return}
   S.routeLocalCheckout=record.checkout;
   let synced=false;
@@ -625,9 +661,23 @@ $("bout").onclick=async()=>{
 };
 
 // ---------- Cancelación ----------
-let canBlob=null,canMeta=null;
+let canBlob=null,canMeta=null,canBitacoraBlob=null,canEvidenceGeneration=0,canLocationGeneration=0;
 $("bcam").onclick=()=>$("cfile").click();
-$("cfile").onchange=e=>{const f=e.target.files[0];if(!f)return;const img=new Image();img.onload=()=>stamp(img);img.src=URL.createObjectURL(f);e.target.value=""};
+$("cfile").onchange=e=>{const f=e.target.files[0];e.target.value="";if(!f)return;canBlob=null;canMeta=null;const generation=++canLocationGeneration;checkCan();const img=new Image(),url=URL.createObjectURL(f);img.onload=async()=>{try{await stamp(img,generation)}catch(error){err("canerr",error)}finally{URL.revokeObjectURL(url)}};img.onerror=()=>{URL.revokeObjectURL(url);err("canerr",new Error("No se pudo leer la foto de evidencia."))};img.src=url};
+const esCancelacionWalmart=()=>WALMART_TARIFARIO_ENABLED&&cliName($("ccli").value).trim().toUpperCase()==="WALMART";
+$("wm-can-camera").onclick=()=>$("wm-can-file").click();
+$("wm-can-file").onchange=async e=>{
+  const file=e.target.files[0];e.target.value="";if(!file)return;
+  const generation=++canEvidenceGeneration;
+  canBitacoraBlob=null;$("wm-can-status").textContent="Procesando foto…";checkCan();
+  try{
+    const blob=await comprimir(file);
+    if(generation!==canEvidenceGeneration)return;
+    if(!blob)throw new Error("No se pudo procesar la foto de la bitácora.");
+    canBitacoraBlob=blob;$("wm-can-status").textContent="Foto de bitácora capturada.";
+  }catch(error){if(generation===canEvidenceGeneration){$("wm-can-status").textContent="";err("canerr",error)}}
+  checkCan();
+};
 function getLoc(){
   if(!navigator.geolocation)return Promise.resolve(null);
   const locate=options=>new Promise(resolve=>{
@@ -644,9 +694,10 @@ function getLoc(){
     return accurate||await locate({enableHighAccuracy:false,timeout:12000,maximumAge:120000});
   })();
 }
-async function stamp(img){
+async function stamp(img,generation){
   $("cmeta").textContent="Obteniendo ubicación…";err("canerr",null);
   const loc=await getLoc();
+  if(generation!==canLocationGeneration)return;
   const d=new Date(),iw=img.naturalWidth||img.width,ih=img.naturalHeight||img.height,w=Math.min(1000,iw),h=Math.round(ih*w/iw);
   const cv=$("cv");cv.width=w;cv.height=h;const x=cv.getContext("2d");x.drawImage(img,0,0,w,h);
   const cli=cliName($("ccli").value)||"—",ced=cedName($("ccli").value,$("ccedis").value)||"—";
@@ -659,22 +710,27 @@ async function stamp(img){
   lines.forEach((l,i)=>{x.font=(i===0?"bold ":"")+fs+"px sans-serif";x.fillStyle=i===0?"#ffb4b6":"#fff";x.fillText(l,pad,h-bh+pad+fs*1.1+i*fs*1.35)});
   x.save();x.translate(w/2,h/2);x.rotate(-.4);x.font="bold "+Math.round(w/9)+"px sans-serif";x.fillStyle="rgba(255,255,255,.18)";x.textAlign="center";x.fillText("CHAZKI",0,0);x.restore();
   cv.classList.remove("hide");
-  canBlob=await new Promise(r=>cv.toBlob(r,"image/jpeg",.78));canMeta={loc,d,val};
+  const blob=await new Promise(r=>cv.toBlob(r,"image/jpeg",.78));
+  if(generation!==canLocationGeneration)return;
+  if(!blob)throw new Error("No se pudo procesar la foto de evidencia.");
+  canBlob=blob;canMeta={loc,d,val};
   const vm=val.estado==="dentro"?`<span style="color:var(--ok)">✔ Estás a ${fmtDist(val.dist)} del CEDIS: ubicación validada</span>`:
     val.estado==="fuera"?`<span style="color:var(--bad)">⚠ Estás a ${fmtDist(val.dist)} del CEDIS (máximo ${fmtDist(val.radio)}). Si el CEDIS es otro, cámbialo y toma la foto de nuevo. Si lo registras así, Operaciones lo revisará.</span>`:
     val.estado==="sin_ubicacion"?`<span style="color:var(--bad)">⚠ No se pudo detectar tu ubicación. Puedes registrar la cancelación igual: la foto lleva la marca de agua con fecha y hora, y Operaciones la revisará. Si puedes, activa el GPS y toma la foto otra vez.</span>`:
     `<span style="color:var(--mut)">Este CEDIS aún no tiene ubicación registrada; se registra sin validar.</span>`;
   $("cmeta").innerHTML=`📍 ${loc?loc.lat.toFixed(5)+", "+loc.lng.toFixed(5):"ubicación no disponible"} · ${dia} ${fecha} ${hora}<br>${vm}`;checkCan();
 }
-function checkCan(){const dailyLimitLocked=ME?.id!==CANCEL_DAILY_LIMIT_EXEMPT_DRIVER_ID&&(canUsedToday||canLimitUnknown);$("bcan").disabled=dailyLimitLocked||!(canBlob&&$("ccli").value&&$("ccedis").value)}
+function checkCan(){const dailyLimitLocked=ME?.id!==CANCEL_DAILY_LIMIT_EXEMPT_DRIVER_ID&&(canUsedToday||canLimitUnknown),walmart=esCancelacionWalmart();$("wm-can-evidencia").classList.toggle("hide",!walmart);$("bcan").disabled=dailyLimitLocked||!(canBlob&&$("ccli").value&&$("ccedis").value&&(!walmart||canBitacoraBlob))}
 $("bcan").onclick=async()=>{
   $("bcan").disabled=true;err("canerr",null);
   try{
+    if(!canBlob||!canMeta||(esCancelacionWalmart()&&!canBitacoraBlob))throw new Error("Completa la evidencia requerida antes de registrar la cancelación.");
     const record={key:crypto.randomUUID(),driver_id:ME.id,ruta_id:S.route?S.route.dbId:null,cedis_id:+$("ccedis").value,id_ruta:S.route?.rid||null,
-      lat:canMeta.loc?canMeta.loc.lat:null,lng:canMeta.loc?canMeta.loc.lng:null,capturado_at:canMeta.d.toISOString(),blob:canBlob};
+      lat:canMeta.loc?canMeta.loc.lat:null,lng:canMeta.loc?canMeta.loc.lng:null,capturado_at:canMeta.d.toISOString(),blob:canBlob,
+      ...(esCancelacionWalmart()?{bitacoraBlob:canBitacoraBlob}:{})};
     await localPut("cancellations",record);
     canUsedToday=true;updateCancelAvailability();
-    canBlob=null;$("cv").classList.add("hide");$("cmeta").textContent="";checkCan();
+    canBlob=null;canBitacoraBlob=null;canEvidenceGeneration++;$("wm-can-status").textContent="";$("cv").classList.add("hide");$("cmeta").textContent="";checkCan();
     if(navigator.onLine&&await syncPendingCancellations())toast("Cancelación registrada y enviada a Operaciones");
     else{OFFLINE_MODE=true;setNetStatus("Sin conexión o red intermitente · cancelación y foto guardadas en este dispositivo, pendientes de envío.",true);toast("Cancelación guardada en este dispositivo")}
     await loadCan();
@@ -696,7 +752,7 @@ function updateCancelAvailability(){
   else box.textContent=canUsedToday
     ?"Ya registraste una cancelación hoy. Solo se permite una cancelación por día."
     :"No se pudo verificar si ya registraste una cancelación hoy. Conéctate a internet y actualiza antes de continuar.";
-  ["ccli","ccedis","det2","bcam","cfile"].forEach(id=>$(id).disabled=locked);
+  ["ccli","ccedis","det2","bcam","cfile","wm-can-camera","wm-can-file"].forEach(id=>$(id).disabled=locked);
   checkCan();
 }
 async function loadCan(){
@@ -732,12 +788,18 @@ async function syncPendingCancellations(){
       const path=`${ME.id}/offline-${record.key}.jpg`;
       const {error:uploadError}=await sb.storage.from("cancelaciones").upload(path,record.blob,{contentType:"image/jpeg",upsert:true});
       if(uploadError)throw uploadError;
+      let bitacoraPath=null;
+      if(record.bitacoraBlob){
+        bitacoraPath=`${ME.id}/offline-${record.key}-bitacora.jpg`;
+        const {error}=await sb.storage.from("cancelaciones").upload(bitacoraPath,record.bitacoraBlob,{contentType:"image/jpeg",upsert:true});
+        if(error)throw error;
+      }
       const {data:existing,error:lookupError}=await sb.from("cancelaciones").select("id")
         .eq("driver_id",record.driver_id).eq("capturado_at",record.capturado_at).eq("foto_path",path).maybeSingle();
       if(lookupError)throw lookupError;
       if(!existing){
         const {driver_id,ruta_id,cedis_id,id_ruta,lat,lng,capturado_at}=record;
-        const {error}=await sb.from("cancelaciones").insert({driver_id,ruta_id,cedis_id,id_ruta,lat,lng,capturado_at,foto_path:path});
+        const {error}=await sb.from("cancelaciones").insert({driver_id,ruta_id,cedis_id,id_ruta,lat,lng,capturado_at,foto_path:path,...(bitacoraPath?{foto_bitacora_path:bitacoraPath}:{})});
         if(error)throw error;
       }
       await localDelete("cancellations",record.key);
@@ -785,15 +847,43 @@ function suscribirAvisos(){loadNotifs();setInterval(loadNotifs,60000);
     if(p.new.tipo&&p.new.tipo.startsWith("cancelacion"))loadCan().then(loadEstatus)}).subscribe()}
 
 // ---------- Ganancias ----------
-let PAGOS=[],gp="sem";
+let PAGOS=[],PAGOS_ERROR="",BOLSA_WALMART=null,BOLSA_WALMART_ERROR="",gp="sem";
 async function loadGan(){
   // Un driver que pertenece a un flotillero no ve los pagos: los ve su transportista
   if(!ACC.puede_ver_ganancias){$("t-gan").innerHTML='<div class="card"><h2>💰 Tus pagos</h2><div class="note" style="font-size:14px;margin-top:0">Los pagos de tus servicios los recibe y consulta tu transportista. Si tienes dudas sobre un pago, habla con él.</div></div><div class="card"><h2>Mis rutas y cancelaciones</h2><div id="gest"></div></div>';$("t-gan").insertAdjacentHTML("afterbegin",'<div id="gkpi-w"><div class="card" id="gkpi"></div></div>');loadEstatus();return}
   loadEstatus();
   const d=new Date();d.setDate(d.getDate()-62);
+  const desde=d.toLocaleDateString("en-CA");
   const sel=ACC.es_flotillero?"*,drivers(nombre),rutas(id_ruta)":"*";
-  const q=sb.from("pagos").select(sel).gte("fecha",d.toLocaleDateString("en-CA")).order("fecha",{ascending:false});
-  const {data}=ACC.es_flotillero?await q:await q.eq("driver_id",ME.id);PAGOS=data||[];drawG()}
+  const q=sb.from("pagos").select(sel).gte("fecha",desde).order("fecha",{ascending:false});
+  const pagoQuery=ACC.es_flotillero?q:q.eq("driver_id",ME.id);
+  const [pagosResult,bolsaResult]=await Promise.all([
+    pagoQuery,
+    ACC.es_flotillero&&WALMART_TARIFARIO_ENABLED?Promise.all([
+      sb.rpc("walmart_mi_bolsa"),
+      sb.rpc("walmart_mis_movimientos_bolsa",{p_desde:desde})
+    ]).then(data=>({data}),error=>({error})):Promise.resolve(null)
+  ]);
+  if(pagosResult.error){PAGOS=[];PAGOS_ERROR=pagosResult.error.message||"Error al consultar los pagos";}
+  else if(!Array.isArray(pagosResult.data)){PAGOS=[];PAGOS_ERROR="La respuesta de pagos no es válida";}
+  else{PAGOS=pagosResult.data;PAGOS_ERROR=""}
+  BOLSA_WALMART=null;BOLSA_WALMART_ERROR="";
+  if(bolsaResult){
+    const [saldoResult,movimientosResult]=bolsaResult.data||[];
+    if(bolsaResult.error||saldoResult?.error||movimientosResult?.error)
+      BOLSA_WALMART_ERROR=bolsaResult.error?.message||saldoResult?.error?.message||movimientosResult?.error?.message||"No se pudo consultar la bolsa Walmart";
+    else if(!saldoResult?.data||!Array.isArray(movimientosResult?.data)||!movimientosResult.data.every(x=>
+      x&&typeof x.id==="string"&&x.concepto==="liberacion_retencion_walmart"
+      &&Number.isFinite(Number(x.monto))&&Number(x.monto)>0
+      &&typeof x.fecha==="string"&&/^\d{4}-\d{2}-\d{2}$/.test(x.fecha)
+      &&["pendiente","pagado"].includes(x.estatus)))
+      BOLSA_WALMART_ERROR="La respuesta de la bolsa Walmart no es válida";
+    else{
+      BOLSA_WALMART=saldoResult.data;
+      PAGOS.push(...movimientosResult.data.map(x=>({...x,monto:Number(x.monto),bolsa_walmart:true})));
+    }
+  }
+  drawG()}
 let RUTAS_K=[],CANS_K=[],kp="sem",PNRS=[],PNR_DISCOUNTS={},PNR_ERROR="",PNR_SEEN=false,NO_SHOW_CASES=[],NO_SHOW_EVENTS=[],NO_SHOW_ERROR="";
 function rangoK(p,prev){const n=new Date();let a,b;
   if(p==="sem"){a=monday(n);if(prev)a.setDate(a.getDate()-7);b=new Date(a);b.setDate(b.getDate()+7)}
@@ -818,19 +908,22 @@ function drawKpi(){const box=$("gkpi");if(!box)return;const s=statsK(kp,false),q
 const FLEET_PROFILE_ENABLED=true;
 let DRVS=[],BAJAS=[],INVS=[],INVS_ERR="",dp="sem",dopen={},dform=null;
 async function loadDrivers(){
-  const [d,r,c,b,iv]=await Promise.all([sb.from("drivers").select("id,nombre,codigo,estatus,telefono").neq("id",ME.id).order("nombre"),sb.rpc("mis_rutas_estatus"),sb.rpc("mis_cancelaciones_estatus"),sb.from("bajas_solicitudes").select("*").order("solicitado_en",{ascending:false}),sb.from("invitaciones_red").select("*").eq("invitado_por",ME.id).order("creado_en",{ascending:false}).limit(30)]);
+  const [d,r,c,b,iv]=await Promise.all([sb.from("drivers").select("id,nombre,codigo,estatus,telefono").neq("id",ME.id).order("nombre"),sb.rpc("mis_rutas_estatus"),sb.rpc("mis_cancelaciones_estatus"),sb.from("bajas_solicitudes").select("*").order("solicitado_en",{ascending:false}),listarInvitacionesRed(sb,true).then(data=>({data,error:null}),error=>({data:null,error}))]);
   DRVS=d.data||[];RUTAS_K=r.data||RUTAS_K;CANS_K=c.data||CANS_K;BAJAS=b.data||[];INVS=iv.data||[];INVS_ERR=iv.error?"No se pudieron cargar las solicitudes: "+iv.error.message:"";drawDrivers()}
 function invitarHtml(){
   const f=x=>new Date(x).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
   const est={pendiente_aprobacion:["Pendiente de aprobación del supervisor","#946200"],enviada:["Aprobada · falta que se registre","#1d4ed8"],aceptada:["Registrado","#0f7a3d"],rechazada:["Rechazada","#b42318"],cancelada:["Cancelada","#555b7a"]};
   const ced=CLI.flatMap(c=>(c.cedis||[]).map(x=>`<option value="${esc(x.id)}">${esc(c.nombre+" · "+x.nombre)}</option>`)).join("");
-  const lista=INVS.map(x=>{const e=est[x.estatus]||[x.estatus,"#555b7a"];
+  const fila=x=>{const e=est[x.estatus]||[x.estatus,"#555b7a"];
     const appUrl=location.protocol==="https:"?location.origin:"https://chazki-driver-app.vercel.app";
     const mensaje=`Hola${x.nombre?" "+x.nombre:""}, tu solicitud para Chazki Driver fue aprobada. Abre ${appUrl}/ y ${x.estatus==="aceptada"?"entra":"regístrate o entra"} con ${x.email}.`;
     const activo=x.aceptada_por&&DRVS.some(d=>d.id===x.aceptada_por&&String(d.estatus||"").toLowerCase()==="activo");
-    const accion=x.estatus==="pendiente_aprobacion"?`<button class="btn ghost" data-iv-reenviar="${esc(x.id)}">Reenviar solicitud</button>`:["enviada","aceptada"].includes(x.estatus)&&!activo?`<a class="btn ghost" href="mailto:${encodeURIComponent(x.email)}?subject=${encodeURIComponent("Acceso a Chazki Driver")}&body=${encodeURIComponent(mensaje)}">Preparar correo</a>`:"";
-    return `<div class="item"><div><b>${esc(x.nombre||x.email)}</b><small>${esc(x.email)} · ${f(x.creado_en)}${x.motivo?" · "+esc(x.motivo):""}</small>${accion}</div><span style="color:${e[1]};font-size:12px;font-weight:700;text-align:right">${esc(e[0])}</span></div>`}).join("");
-  return `<div class="card"><h2 style="margin:0">✉️ Invitar a un driver</h2><label>Nombre</label><input id="iv-n" placeholder="Nombre del driver"><label>Correo</label><input id="iv-m" type="email" placeholder="correo@ejemplo.com"><label>CEDIS donde operará</label><select id="iv-c"><option value="">Selecciona…</option>${ced}</select><div id="iv-e" class="note" style="color:#b42318">${esc(INVS_ERR)}</div><button class="btn" id="iv-ok" style="margin-top:8px">Enviar solicitud</button><div class="note" style="margin-top:6px">Tu supervisor debe aprobarla. El registro sigue sujeto al padrón de Flota; el correo preparado se envía desde tu aplicación de correo.</div>${lista}</div>`}
+    const accion=x.estatus==="cancelada"?`<button class="btn ghost" data-iv-eliminar="${esc(x.id)}">Eliminar de la lista</button>`:x.estatus==="pendiente_aprobacion"?`<button class="btn ghost" data-iv-reenviar="${esc(x.id)}">Reenviar solicitud</button>`:["enviada","aceptada"].includes(x.estatus)&&!activo?`<a class="btn ghost" href="mailto:${encodeURIComponent(x.email)}?subject=${encodeURIComponent("Acceso a Chazki Driver")}&body=${encodeURIComponent(mensaje)}">Preparar correo</a>`:"";
+    const cancelar=["enviada","pendiente_aprobacion"].includes(x.estatus)?`<button class="btn ghost" data-iv-cancelar="${esc(x.id)}">Cancelar invitación</button>`:"";
+    return `<div class="item"><div><b>${esc(x.nombre||x.email)}</b><small>${esc(x.email)} · ${f(x.creado_en)}${x.motivo?" · "+esc(x.motivo):""}</small>${correoInvitacionHtml(x)}${accion}${cancelar}</div><span style="color:${e[1]};font-size:12px;font-weight:700;text-align:right">${esc(e[0])}</span></div>`};
+  const canceladas=INVS.filter(x=>x.estatus==="cancelada");
+  const lista=INVS.filter(x=>x.estatus!=="cancelada").map(fila).join("")+`<h3>Canceladas (${esc(canceladas.length)})</h3>`+(canceladas.map(fila).join("")||'<div class="note">Sin invitaciones canceladas.</div>');
+  return `<div class="card"><h2 style="margin:0">✉️ Invitar a un driver</h2><label>Nombre</label><input id="iv-n" placeholder="Nombre del driver"><label>Correo</label><input id="iv-m" type="email" placeholder="correo@ejemplo.com"><label>CEDIS donde operará</label><select id="iv-c"><option value="">Selecciona…</option>${ced}</select><div id="iv-e" class="note" style="color:#b42318">${esc(INVS_ERR)}</div><button class="btn" id="iv-ok" style="margin-top:8px">Enviar solicitud</button><button class="btn ghost" id="iv-actualizar">Actualizar estados</button><div class="note" style="margin-top:6px">Tu supervisor debe aprobarla. El registro requiere una invitación aprobada; el correo preparado se envía desde tu aplicación de correo. Supabase envía la validación al registrarse, sujeto al límite del servicio, no en un horario programado. La fecha es el último envío registrado, no garantiza entrega en bandeja.</div>${lista}</div>`}
 function drawDrivers(){
   const box=$("drbox");if(!box)return;const pct=v=>v==null?"—":Math.round(v*100)+"%";
   const [a,z]=rangoK(dp,false),ok=x=>{const t=new Date(x);return t>=a&&t<z};
@@ -851,6 +944,19 @@ function drawDrivers(){
     ivOk.disabled=true;const {data,error}=await sb.rpc("invitar_a_red",{p_email:m,p_nombre:$("iv-n").value.trim(),p_tipo:"driver",p_esquema:null,p_cedis_id:+c});if(error){$("iv-e").textContent=error.message;ivOk.disabled=false;return}
     toast(data);await loadDrivers()};
   box.querySelectorAll("[data-iv-reenviar]").forEach(b=>b.onclick=async()=>{b.disabled=true;const {data,error}=await sb.rpc("reenviar_solicitud_invitacion_red",{p_id:+b.dataset.ivReenviar});if(error){$("iv-e").textContent=error.message;b.disabled=false;return}toast(data);await loadDrivers()});
+  const actualizar=$("iv-actualizar");if(actualizar)actualizar.onclick=async()=>{actualizar.disabled=true;await loadDrivers()};
+  for(const [atributo,rpc] of [["iv-eliminar","eliminar_invitacion_red"],["iv-cancelar","cancelar_invitacion_red"]]){
+    box.querySelectorAll(`[data-${atributo}]`).forEach(b=>b.onclick=async()=>{
+      const eliminar=atributo==="iv-eliminar";
+      if(!confirm(eliminar?"¿Eliminar esta invitación cancelada de la lista? Se conservará su historial; no se eliminará ninguna cuenta.":"¿Cancelar esta invitación?"))return;
+      b.disabled=true;
+      try{
+        const {data,error}=await sb.rpc(rpc,{p_id:+b.getAttribute("data-"+atributo)});
+        if(error)throw error;
+        toast(data||(eliminar?"Invitación eliminada de la lista":"Invitación cancelada"));await loadDrivers();
+      }catch(error){$("iv-e").textContent=error.message;b.disabled=false}
+    });
+  }
   box.querySelectorAll("#dseg button").forEach(b=>b.onclick=()=>{dp=b.dataset.p;drawDrivers()});
   box.querySelectorAll("[data-dv]").forEach(b=>b.onclick=()=>{dopen[b.dataset.dv]=!dopen[b.dataset.dv];drawDrivers()});
   box.querySelectorAll("[data-driver-perfil]").forEach(b=>b.onclick=()=>abrirPerfilDriver(b.dataset.driverPerfil));
@@ -922,20 +1028,51 @@ async function loadEstatus(){
 const parseF=s=>{const [y,m,d]=s.split("-");return new Date(+y,m-1,+d)};
 const monday=d=>{const x=new Date(d);x.setHours(0,0,0,0);x.setDate(x.getDate()-((x.getDay()+6)%7));return x};
 function drawG(){
+  if(PAGOS_ERROR){
+    $("glabel").textContent="Pagos no disponibles";$("gtot").textContent="—";$("gsub").textContent="Vuelve a intentarlo cuando tengas conexión.";
+    $("bars").innerHTML="";$("gdes").innerHTML="";$("gflo").innerHTML="";
+    $("gflota").classList.toggle("hide",true);
+    $("gpag").innerHTML=`${vistaBolsaWalmart()}<div class="errbox">No se pudieron cargar los pagos: ${esc(PAGOS_ERROR)}</div>`;
+    return;
+  }
   const all=pagosConNoShow(),hoy=new Date(),lm=monday(hoy);let xs,vals,sel;
   if(gp==="sem"){xs=["L","M","X","J","V","S","D"];vals=Array(7).fill(0);sel=all.filter(p=>monday(parseF(p.fecha)).getTime()===lm.getTime());sel.forEach(p=>vals[(parseF(p.fecha).getDay()+6)%7]+=+p.monto)}
   else{const y=hoy.getFullYear(),m=hoy.getMonth();xs=["S1","S2","S3","S4","S5"];vals=Array(5).fill(0);sel=all.filter(p=>{const f=parseF(p.fecha);return f.getFullYear()===y&&f.getMonth()===m});sel.forEach(p=>vals[Math.min(4,Math.floor((parseF(p.fecha).getDate()-1)/7))]+=+p.monto)}
   const tot=vals.reduce((a,b)=>a+b,0),mx=Math.max(...vals.map(Math.abs),1);
   $("glabel").textContent=gp==="sem"?"Ganancias de la semana":"Ganancias del mes";$("gtot").textContent=fmt(tot);
-  $("gsub").textContent=`${sel.filter(p=>p.concepto==="servicio").length} servicios pagados`;
+  $("gsub").textContent=`${sel.filter(p=>p.concepto==="servicio").length} servicios registrados · incluye pendientes y pagados`;
   $("bars").innerHTML=vals.map((v,i)=>`<div><span>${v?fmt(v):""}</span><b style="height:${Math.max(3,Math.abs(v)/mx*100)}%;${v<0?"background:#d94848":""}"></b>${xs[i]}</div>`).join("");
   const by=c=>sel.filter(p=>p.concepto===c).reduce((a,p)=>a+ +p.monto,0);
   $("gdes").innerHTML=[["Servicios","servicio"],["Bonos","bono"],["Propinas","propina"],["Ajustes","ajuste"],["Penalizaciones NO SHOW","penalizacion_no_show"],["Reversiones NO SHOW","reversion_no_show"]].map(([l,c])=>`<div class="item"><span>${l}</span><b>${fmt(by(c))}</b></div>`).join("");
   $("gflota").classList.toggle("hide",!ACC.es_flotillero);
-  if(ACC.es_flotillero){const m={};sel.forEach(p=>{const n=p.drivers?p.drivers.nombre:"—";m[n]=(m[n]||0)+ +p.monto});
+  if(ACC.es_flotillero){const m={};sel.filter(p=>p.concepto!=="liberacion_retencion_walmart").forEach(p=>{const n=p.drivers?p.drivers.nombre:"—";m[n]=(m[n]||0)+ +p.monto});
     $("gflo").innerHTML=Object.entries(m).sort((a,b)=>b[1]-a[1]).map(([n,v])=>`<div class="item"><span>${n}</span><b>${fmt(v)}</b></div>`).join("")||'<div class="note">Sin pagos en este periodo.</div>'}
-  const paymentLabel=p=>({penalizacion_no_show:"Penalización NO SHOW",reversion_no_show:"Reversión NO SHOW"}[p.concepto]||p.concepto[0].toUpperCase()+p.concepto.slice(1));
-  $("gpag").innerHTML=all.length?all.slice(0,ACC.es_flotillero?15:8).map(p=>`<div class="item"><div>${esc(paymentLabel(p))}${esc(ACC.es_flotillero&&p.drivers?" · "+p.drivers.nombre:"")}<small>${parseF(p.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short"})}${esc(p.rutas?" · Ruta "+p.rutas.id_ruta:"")}</small></div><div style="text-align:right"><b>${fmt(p.monto)}</b><small><span class="pill ${p.estatus==="pagado"?"ok":"w"}">${esc(p.estatus)}</span></small></div></div>`).join(""):'<div class="note">Aún no tienes pagos registrados.</div>';
+  const paymentLabel=p=>({penalizacion_no_show:"Penalización NO SHOW",reversion_no_show:"Reversión NO SHOW",liberacion_retencion_walmart:"Liberación retención Walmart"}[p.concepto]||p.concepto[0].toUpperCase()+p.concepto.slice(1));
+  $("gpag").innerHTML=`${vistaBolsaWalmart()}${all.length?all.slice(0,ACC.es_flotillero?15:8).map(p=>`<div class="item"><div>${esc(paymentLabel(p))}${esc(ACC.es_flotillero&&p.drivers?" · "+p.drivers.nombre:"")}<small>${parseF(p.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short"})}${esc(p.rutas?" · Ruta "+p.rutas.id_ruta:"")}</small></div><div style="text-align:right"><b>${fmt(p.monto)}</b><small><span class="pill ${p.estatus==="pagado"?"ok":"w"}">${esc(p.estatus)}</span></small></div></div>`).join(""):'<div class="note">Aún no tienes pagos registrados.</div>'}`;
+}
+function vistaBolsaWalmart(){
+  if(!ACC?.es_flotillero||!WALMART_TARIFARIO_ENABLED)return "";
+  if(BOLSA_WALMART_ERROR)return `<div class="errbox">No se pudo cargar la bolsa del flotillero: ${esc(BOLSA_WALMART_ERROR)}</div>`;
+  if(!BOLSA_WALMART)return "";
+  const saldo=BOLSA_WALMART.saldo,plazo=BOLSA_WALMART.plazo;
+  const monto=Number(saldo?.saldo_total);
+  if(!saldo||!plazo||!Number.isFinite(monto)||monto<0
+    ||!["calculado","requiere_revision","sin_ruta_confirmada"].includes(plazo.estado)
+    ||typeof plazo.plazo_cumplido!=="boolean"
+    ||(plazo.estado==="calculado"&&!plazo.disponible_desde)
+    ||(plazo.plazo_cumplido&&(plazo.estado!=="calculado"||!plazo.disponible_desde))
+    ||BOLSA_WALMART.liberacion_validada!==false)
+    return '<div class="errbox">La bolsa Walmart devolvió una respuesta inválida.</div>';
+  const fecha=plazo.estado==="calculado"&&plazo.disponible_desde?new Date(plazo.disponible_desde):null;
+  if(fecha&&Number.isNaN(fecha.getTime()))return '<div class="errbox">La fecha de vencimiento de la bolsa no es válida.</div>';
+  const aviso=plazo.estado==="requiere_revision"
+    ?"Hay rutas pendientes de identificar o sincronizar; no se puede estimar el vencimiento."
+    :plazo.estado==="sin_ruta_confirmada"
+      ?"Aún no hay una ruta confirmada para calcular el vencimiento."
+      :plazo.plazo_cumplido
+        ?`El plazo de retención venció el ${fecha.toLocaleString("es-MX",{timeZone:"America/Mexico_City"})}; la bolsa aún requiere revisión y no representa un pago.`
+        :`El plazo de retención vence el ${fecha.toLocaleString("es-MX",{timeZone:"America/Mexico_City"})}.`;
+  return `<div class="note" style="margin-bottom:10px"><b>Bolsa Walmart retenida: ${fmt(monto)}</b><br>${esc(aviso)}<br>El vencimiento del plazo no autoriza ni confirma la liberación del saldo.</div>`;
 }
 function pagosConNoShow(){
   const penalties=new Set(NO_SHOW_CASES.map(c=>c.pago_penalizacion_id).filter(id=>id!=null).map(String));

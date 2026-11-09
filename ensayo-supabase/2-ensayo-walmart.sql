@@ -175,9 +175,10 @@ begin
   if p_base is null or p_base::text in ('NaN','Infinity','-Infinity') or p_base < 0
      or p_porcentaje_semanal is null or p_porcentaje_semanal::text in ('NaN','Infinity','-Infinity')
      or p_porcentaje_semanal not between 0 and 1
-     or p_visitas_asignadas is null or p_visitas_asignadas <= 0
-     or p_visitas_realizadas is null or p_visitas_realizadas < 0
-     or p_visitas_realizadas > p_visitas_asignadas
+     or ((p_aplicar_visitas is true or p_visitas_asignadas is not null or p_visitas_realizadas is not null)
+       and (p_visitas_asignadas is null or p_visitas_asignadas <= 0
+         or p_visitas_realizadas is null or p_visitas_realizadas < 0
+         or p_visitas_realizadas > p_visitas_asignadas))
      or p_aplicar_visitas is null or p_aplicar_fallida is null
      or p_registro_fiscal is null or p_registro_fiscal not in ('FACTURA','SIN FACTURA')
      or p_retencion_fiscal is null or p_retencion_fiscal::text in ('NaN','Infinity','-Infinity') or p_retencion_fiscal not between 0 and 1
@@ -230,8 +231,10 @@ begin
   end if;
   v_unidad := case public.operativo_normalizar(p_unidad)
     when '35t' then '3.5T'
+    when '35tn' then '3.5T'
     when 'large' then 'Large'
     when 'largevan' then 'Large'
+    when '15tn' then 'Large'
     else null end;
   if v_unidad is null then raise exception 'Unidad sin tarifa Walmart confirmada'; end if;
   select count(*) into v_count from public.walmart_tarifas t

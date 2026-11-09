@@ -3,6 +3,7 @@ const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);
 const $=id=>document.getElementById(id);
 const LOCAL_DB="chazki-driver-offline";
 const WALMART_TARIFARIO_ENABLED=false; // Activar solo con migración y pagos Walmart validados.
+const WALMART_VISITAS_ENABLED=false; // La captura adicional no forma parte del flujo simplificado.
 const CANCEL_DAILY_LIMIT_EXEMPT_DRIVER_ID="f640638a-d9a6-4136-a7dd-481e86715c7e";
 let OFFLINE_MODE=!navigator.onLine, syncBusy=false, syncCancelBusy=false, ROUTE_SYNC_ERROR=null;
 function openLocalDb(){
@@ -157,9 +158,16 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
 // ---------- Cliente / CEDIS ----------
 // El cliente de la base de fleet solo se precarga: el driver puede elegir cualquier otro
 function prefillCliente(){
-  const id=DRIVER&&DRIVER.cliente_default_id;if(!id||!CLI.some(c=>c.id===id))return;
-  ["cli","ccli"].forEach(sid=>{const sel=$(sid);sel.value=String(id);fillCedis($(sid==="cli"?"cedis":"ccedis"),id)});
-  const n=cliName(id);$("cli-hint").textContent=`Tu cliente habitual es ${n}. Puedes elegir otro si hoy trabajas en otra cuenta.`;
+  const cedisDefaultId=DRIVER&&DRIVER.cedis_default_id;
+  const habitual=cedisDefaultId&&CLI.flatMap(c=>c.cedis.map(e=>({...e,cliente_id:c.id,cliente_nombre:c.nombre}))).find(e=>String(e.id)===String(cedisDefaultId));
+  const clienteId=habitual?.cliente_id??(DRIVER&&DRIVER.cliente_default_id);
+  if(!clienteId||!CLI.some(c=>String(c.id)===String(clienteId)))return;
+  ["cli","ccli"].forEach(sid=>{
+    const sel=$(sid);sel.value=String(clienteId);
+    const cedisSel=$(sid==="cli"?"cedis":"ccedis");fillCedis(cedisSel,clienteId);
+    if(habitual)cedisSel.value=String(habitual.id);
+  });
+  const n=cliName(clienteId);$("cli-hint").textContent=`Tu ${habitual?"CEDIS habitual":"cliente habitual"} es ${habitual?habitual.cliente_nombre+" · "+habitual.nombre:n}. Puedes elegir otro si hoy trabajas en otra cuenta.`;
   checkIn();checkCan();
 }
 function fillClientes(sel){sel.innerHTML='<option value="">Selecciona cliente…</option>'+CLI.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join("")}
@@ -543,7 +551,7 @@ $("bin").onclick=async()=>{
 };
 
 ["ent","fal","wm-asignadas","wm-realizadas","wm-folios"].forEach(id=>$(id).addEventListener("input",updFin));
-const esRutaWalmart=()=>WALMART_TARIFARIO_ENABLED&&String(S.route?.cli||"").trim().toUpperCase()==="WALMART";
+const esRutaWalmart=()=>WALMART_TARIFARIO_ENABLED&&WALMART_VISITAS_ENABLED&&String(S.route?.cli||"").trim().toUpperCase()==="WALMART";
 function datosVisitasWalmart(){
   const asignadas=$("wm-asignadas").value.trim(),realizadas=$("wm-realizadas").value.trim();
   const folios=$("wm-folios").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
@@ -839,15 +847,43 @@ function suscribirAvisos(){loadNotifs();setInterval(loadNotifs,60000);
     if(p.new.tipo&&p.new.tipo.startsWith("cancelacion"))loadCan().then(loadEstatus)}).subscribe()}
 
 // ---------- Ganancias ----------
-let PAGOS=[],gp="sem";
+let PAGOS=[],PAGOS_ERROR="",BOLSA_WALMART=null,BOLSA_WALMART_ERROR="",gp="sem";
 async function loadGan(){
   // Un driver que pertenece a un flotillero no ve los pagos: los ve su transportista
   if(!ACC.puede_ver_ganancias){$("t-gan").innerHTML='<div class="card"><h2>💰 Tus pagos</h2><div class="note" style="font-size:14px;margin-top:0">Los pagos de tus servicios los recibe y consulta tu transportista. Si tienes dudas sobre un pago, habla con él.</div></div><div class="card"><h2>Mis rutas y cancelaciones</h2><div id="gest"></div></div>';$("t-gan").insertAdjacentHTML("afterbegin",'<div id="gkpi-w"><div class="card" id="gkpi"></div></div>');loadEstatus();return}
   loadEstatus();
   const d=new Date();d.setDate(d.getDate()-62);
+  const desde=d.toLocaleDateString("en-CA");
   const sel=ACC.es_flotillero?"*,drivers(nombre),rutas(id_ruta)":"*";
-  const q=sb.from("pagos").select(sel).gte("fecha",d.toLocaleDateString("en-CA")).order("fecha",{ascending:false});
-  const {data}=ACC.es_flotillero?await q:await q.eq("driver_id",ME.id);PAGOS=data||[];drawG()}
+  const q=sb.from("pagos").select(sel).gte("fecha",desde).order("fecha",{ascending:false});
+  const pagoQuery=ACC.es_flotillero?q:q.eq("driver_id",ME.id);
+  const [pagosResult,bolsaResult]=await Promise.all([
+    pagoQuery,
+    ACC.es_flotillero&&WALMART_TARIFARIO_ENABLED?Promise.all([
+      sb.rpc("walmart_mi_bolsa"),
+      sb.rpc("walmart_mis_movimientos_bolsa",{p_desde:desde})
+    ]).then(data=>({data}),error=>({error})):Promise.resolve(null)
+  ]);
+  if(pagosResult.error){PAGOS=[];PAGOS_ERROR=pagosResult.error.message||"Error al consultar los pagos";}
+  else if(!Array.isArray(pagosResult.data)){PAGOS=[];PAGOS_ERROR="La respuesta de pagos no es válida";}
+  else{PAGOS=pagosResult.data;PAGOS_ERROR=""}
+  BOLSA_WALMART=null;BOLSA_WALMART_ERROR="";
+  if(bolsaResult){
+    const [saldoResult,movimientosResult]=bolsaResult.data||[];
+    if(bolsaResult.error||saldoResult?.error||movimientosResult?.error)
+      BOLSA_WALMART_ERROR=bolsaResult.error?.message||saldoResult?.error?.message||movimientosResult?.error?.message||"No se pudo consultar la bolsa Walmart";
+    else if(!saldoResult?.data||!Array.isArray(movimientosResult?.data)||!movimientosResult.data.every(x=>
+      x&&typeof x.id==="string"&&x.concepto==="liberacion_retencion_walmart"
+      &&Number.isFinite(Number(x.monto))&&Number(x.monto)>0
+      &&typeof x.fecha==="string"&&/^\d{4}-\d{2}-\d{2}$/.test(x.fecha)
+      &&["pendiente","pagado"].includes(x.estatus)))
+      BOLSA_WALMART_ERROR="La respuesta de la bolsa Walmart no es válida";
+    else{
+      BOLSA_WALMART=saldoResult.data;
+      PAGOS.push(...movimientosResult.data.map(x=>({...x,monto:Number(x.monto),bolsa_walmart:true})));
+    }
+  }
+  drawG()}
 let RUTAS_K=[],CANS_K=[],kp="sem",PNRS=[],PNR_DISCOUNTS={},PNR_ERROR="",PNR_SEEN=false,NO_SHOW_CASES=[],NO_SHOW_EVENTS=[],NO_SHOW_ERROR="";
 function rangoK(p,prev){const n=new Date();let a,b;
   if(p==="sem"){a=monday(n);if(prev)a.setDate(a.getDate()-7);b=new Date(a);b.setDate(b.getDate()+7)}
@@ -872,19 +908,22 @@ function drawKpi(){const box=$("gkpi");if(!box)return;const s=statsK(kp,false),q
 const FLEET_PROFILE_ENABLED=true;
 let DRVS=[],BAJAS=[],INVS=[],INVS_ERR="",dp="sem",dopen={},dform=null;
 async function loadDrivers(){
-  const [d,r,c,b,iv]=await Promise.all([sb.from("drivers").select("id,nombre,codigo,estatus,telefono").neq("id",ME.id).order("nombre"),sb.rpc("mis_rutas_estatus"),sb.rpc("mis_cancelaciones_estatus"),sb.from("bajas_solicitudes").select("*").order("solicitado_en",{ascending:false}),sb.from("invitaciones_red").select("*").eq("invitado_por",ME.id).order("creado_en",{ascending:false}).limit(30)]);
+  const [d,r,c,b,iv]=await Promise.all([sb.from("drivers").select("id,nombre,codigo,estatus,telefono").neq("id",ME.id).order("nombre"),sb.rpc("mis_rutas_estatus"),sb.rpc("mis_cancelaciones_estatus"),sb.from("bajas_solicitudes").select("*").order("solicitado_en",{ascending:false}),listarInvitacionesRed(sb,true).then(data=>({data,error:null}),error=>({data:null,error}))]);
   DRVS=d.data||[];RUTAS_K=r.data||RUTAS_K;CANS_K=c.data||CANS_K;BAJAS=b.data||[];INVS=iv.data||[];INVS_ERR=iv.error?"No se pudieron cargar las solicitudes: "+iv.error.message:"";drawDrivers()}
 function invitarHtml(){
   const f=x=>new Date(x).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
   const est={pendiente_aprobacion:["Pendiente de aprobación del supervisor","#946200"],enviada:["Aprobada · falta que se registre","#1d4ed8"],aceptada:["Registrado","#0f7a3d"],rechazada:["Rechazada","#b42318"],cancelada:["Cancelada","#555b7a"]};
   const ced=CLI.flatMap(c=>(c.cedis||[]).map(x=>`<option value="${esc(x.id)}">${esc(c.nombre+" · "+x.nombre)}</option>`)).join("");
-  const lista=INVS.map(x=>{const e=est[x.estatus]||[x.estatus,"#555b7a"];
+  const fila=x=>{const e=est[x.estatus]||[x.estatus,"#555b7a"];
     const appUrl=location.protocol==="https:"?location.origin:"https://chazki-driver-app.vercel.app";
     const mensaje=`Hola${x.nombre?" "+x.nombre:""}, tu solicitud para Chazki Driver fue aprobada. Abre ${appUrl}/ y ${x.estatus==="aceptada"?"entra":"regístrate o entra"} con ${x.email}.`;
     const activo=x.aceptada_por&&DRVS.some(d=>d.id===x.aceptada_por&&String(d.estatus||"").toLowerCase()==="activo");
-    const accion=x.estatus==="pendiente_aprobacion"?`<button class="btn ghost" data-iv-reenviar="${esc(x.id)}">Reenviar solicitud</button>`:["enviada","aceptada"].includes(x.estatus)&&!activo?`<a class="btn ghost" href="mailto:${encodeURIComponent(x.email)}?subject=${encodeURIComponent("Acceso a Chazki Driver")}&body=${encodeURIComponent(mensaje)}">Preparar correo</a>`:"";
-    return `<div class="item"><div><b>${esc(x.nombre||x.email)}</b><small>${esc(x.email)} · ${f(x.creado_en)}${x.motivo?" · "+esc(x.motivo):""}</small>${accion}</div><span style="color:${e[1]};font-size:12px;font-weight:700;text-align:right">${esc(e[0])}</span></div>`}).join("");
-  return `<div class="card"><h2 style="margin:0">✉️ Invitar a un driver</h2><label>Nombre</label><input id="iv-n" placeholder="Nombre del driver"><label>Correo</label><input id="iv-m" type="email" placeholder="correo@ejemplo.com"><label>CEDIS donde operará</label><select id="iv-c"><option value="">Selecciona…</option>${ced}</select><div id="iv-e" class="note" style="color:#b42318">${esc(INVS_ERR)}</div><button class="btn" id="iv-ok" style="margin-top:8px">Enviar solicitud</button><div class="note" style="margin-top:6px">Tu supervisor debe aprobarla. El registro sigue sujeto al padrón de Flota; el correo preparado se envía desde tu aplicación de correo.</div>${lista}</div>`}
+    const accion=x.estatus==="cancelada"?`<button class="btn ghost" data-iv-eliminar="${esc(x.id)}">Eliminar de la lista</button>`:x.estatus==="pendiente_aprobacion"?`<button class="btn ghost" data-iv-reenviar="${esc(x.id)}">Reenviar solicitud</button>`:["enviada","aceptada"].includes(x.estatus)&&!activo?`<a class="btn ghost" href="mailto:${encodeURIComponent(x.email)}?subject=${encodeURIComponent("Acceso a Chazki Driver")}&body=${encodeURIComponent(mensaje)}">Preparar correo</a>`:"";
+    const cancelar=["enviada","pendiente_aprobacion"].includes(x.estatus)?`<button class="btn ghost" data-iv-cancelar="${esc(x.id)}">Cancelar invitación</button>`:"";
+    return `<div class="item"><div><b>${esc(x.nombre||x.email)}</b><small>${esc(x.email)} · ${f(x.creado_en)}${x.motivo?" · "+esc(x.motivo):""}</small>${correoInvitacionHtml(x)}${accion}${cancelar}</div><span style="color:${e[1]};font-size:12px;font-weight:700;text-align:right">${esc(e[0])}</span></div>`};
+  const canceladas=INVS.filter(x=>x.estatus==="cancelada");
+  const lista=INVS.filter(x=>x.estatus!=="cancelada").map(fila).join("")+`<h3>Canceladas (${esc(canceladas.length)})</h3>`+(canceladas.map(fila).join("")||'<div class="note">Sin invitaciones canceladas.</div>');
+  return `<div class="card"><h2 style="margin:0">✉️ Invitar a un driver</h2><label>Nombre</label><input id="iv-n" placeholder="Nombre del driver"><label>Correo</label><input id="iv-m" type="email" placeholder="correo@ejemplo.com"><label>CEDIS donde operará</label><select id="iv-c"><option value="">Selecciona…</option>${ced}</select><div id="iv-e" class="note" style="color:#b42318">${esc(INVS_ERR)}</div><button class="btn" id="iv-ok" style="margin-top:8px">Enviar solicitud</button><button class="btn ghost" id="iv-actualizar">Actualizar estados</button><div class="note" style="margin-top:6px">Tu supervisor debe aprobarla. El registro requiere una invitación aprobada; el correo preparado se envía desde tu aplicación de correo. Supabase envía la validación al registrarse, sujeto al límite del servicio, no en un horario programado. La fecha es el último envío registrado, no garantiza entrega en bandeja.</div>${lista}</div>`}
 function drawDrivers(){
   const box=$("drbox");if(!box)return;const pct=v=>v==null?"—":Math.round(v*100)+"%";
   const [a,z]=rangoK(dp,false),ok=x=>{const t=new Date(x);return t>=a&&t<z};
@@ -905,6 +944,19 @@ function drawDrivers(){
     ivOk.disabled=true;const {data,error}=await sb.rpc("invitar_a_red",{p_email:m,p_nombre:$("iv-n").value.trim(),p_tipo:"driver",p_esquema:null,p_cedis_id:+c});if(error){$("iv-e").textContent=error.message;ivOk.disabled=false;return}
     toast(data);await loadDrivers()};
   box.querySelectorAll("[data-iv-reenviar]").forEach(b=>b.onclick=async()=>{b.disabled=true;const {data,error}=await sb.rpc("reenviar_solicitud_invitacion_red",{p_id:+b.dataset.ivReenviar});if(error){$("iv-e").textContent=error.message;b.disabled=false;return}toast(data);await loadDrivers()});
+  const actualizar=$("iv-actualizar");if(actualizar)actualizar.onclick=async()=>{actualizar.disabled=true;await loadDrivers()};
+  for(const [atributo,rpc] of [["iv-eliminar","eliminar_invitacion_red"],["iv-cancelar","cancelar_invitacion_red"]]){
+    box.querySelectorAll(`[data-${atributo}]`).forEach(b=>b.onclick=async()=>{
+      const eliminar=atributo==="iv-eliminar";
+      if(!confirm(eliminar?"¿Eliminar esta invitación cancelada de la lista? Se conservará su historial; no se eliminará ninguna cuenta.":"¿Cancelar esta invitación?"))return;
+      b.disabled=true;
+      try{
+        const {data,error}=await sb.rpc(rpc,{p_id:+b.getAttribute("data-"+atributo)});
+        if(error)throw error;
+        toast(data||(eliminar?"Invitación eliminada de la lista":"Invitación cancelada"));await loadDrivers();
+      }catch(error){$("iv-e").textContent=error.message;b.disabled=false}
+    });
+  }
   box.querySelectorAll("#dseg button").forEach(b=>b.onclick=()=>{dp=b.dataset.p;drawDrivers()});
   box.querySelectorAll("[data-dv]").forEach(b=>b.onclick=()=>{dopen[b.dataset.dv]=!dopen[b.dataset.dv];drawDrivers()});
   box.querySelectorAll("[data-driver-perfil]").forEach(b=>b.onclick=()=>abrirPerfilDriver(b.dataset.driverPerfil));
@@ -976,20 +1028,51 @@ async function loadEstatus(){
 const parseF=s=>{const [y,m,d]=s.split("-");return new Date(+y,m-1,+d)};
 const monday=d=>{const x=new Date(d);x.setHours(0,0,0,0);x.setDate(x.getDate()-((x.getDay()+6)%7));return x};
 function drawG(){
+  if(PAGOS_ERROR){
+    $("glabel").textContent="Pagos no disponibles";$("gtot").textContent="—";$("gsub").textContent="Vuelve a intentarlo cuando tengas conexión.";
+    $("bars").innerHTML="";$("gdes").innerHTML="";$("gflo").innerHTML="";
+    $("gflota").classList.toggle("hide",true);
+    $("gpag").innerHTML=`${vistaBolsaWalmart()}<div class="errbox">No se pudieron cargar los pagos: ${esc(PAGOS_ERROR)}</div>`;
+    return;
+  }
   const all=pagosConNoShow(),hoy=new Date(),lm=monday(hoy);let xs,vals,sel;
   if(gp==="sem"){xs=["L","M","X","J","V","S","D"];vals=Array(7).fill(0);sel=all.filter(p=>monday(parseF(p.fecha)).getTime()===lm.getTime());sel.forEach(p=>vals[(parseF(p.fecha).getDay()+6)%7]+=+p.monto)}
   else{const y=hoy.getFullYear(),m=hoy.getMonth();xs=["S1","S2","S3","S4","S5"];vals=Array(5).fill(0);sel=all.filter(p=>{const f=parseF(p.fecha);return f.getFullYear()===y&&f.getMonth()===m});sel.forEach(p=>vals[Math.min(4,Math.floor((parseF(p.fecha).getDate()-1)/7))]+=+p.monto)}
   const tot=vals.reduce((a,b)=>a+b,0),mx=Math.max(...vals.map(Math.abs),1);
   $("glabel").textContent=gp==="sem"?"Ganancias de la semana":"Ganancias del mes";$("gtot").textContent=fmt(tot);
-  $("gsub").textContent=`${sel.filter(p=>p.concepto==="servicio").length} servicios pagados`;
+  $("gsub").textContent=`${sel.filter(p=>p.concepto==="servicio").length} servicios registrados · incluye pendientes y pagados`;
   $("bars").innerHTML=vals.map((v,i)=>`<div><span>${v?fmt(v):""}</span><b style="height:${Math.max(3,Math.abs(v)/mx*100)}%;${v<0?"background:#d94848":""}"></b>${xs[i]}</div>`).join("");
   const by=c=>sel.filter(p=>p.concepto===c).reduce((a,p)=>a+ +p.monto,0);
   $("gdes").innerHTML=[["Servicios","servicio"],["Bonos","bono"],["Propinas","propina"],["Ajustes","ajuste"],["Penalizaciones NO SHOW","penalizacion_no_show"],["Reversiones NO SHOW","reversion_no_show"]].map(([l,c])=>`<div class="item"><span>${l}</span><b>${fmt(by(c))}</b></div>`).join("");
   $("gflota").classList.toggle("hide",!ACC.es_flotillero);
-  if(ACC.es_flotillero){const m={};sel.forEach(p=>{const n=p.drivers?p.drivers.nombre:"—";m[n]=(m[n]||0)+ +p.monto});
+  if(ACC.es_flotillero){const m={};sel.filter(p=>p.concepto!=="liberacion_retencion_walmart").forEach(p=>{const n=p.drivers?p.drivers.nombre:"—";m[n]=(m[n]||0)+ +p.monto});
     $("gflo").innerHTML=Object.entries(m).sort((a,b)=>b[1]-a[1]).map(([n,v])=>`<div class="item"><span>${n}</span><b>${fmt(v)}</b></div>`).join("")||'<div class="note">Sin pagos en este periodo.</div>'}
-  const paymentLabel=p=>({penalizacion_no_show:"Penalización NO SHOW",reversion_no_show:"Reversión NO SHOW"}[p.concepto]||p.concepto[0].toUpperCase()+p.concepto.slice(1));
-  $("gpag").innerHTML=all.length?all.slice(0,ACC.es_flotillero?15:8).map(p=>`<div class="item"><div>${esc(paymentLabel(p))}${esc(ACC.es_flotillero&&p.drivers?" · "+p.drivers.nombre:"")}<small>${parseF(p.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short"})}${esc(p.rutas?" · Ruta "+p.rutas.id_ruta:"")}</small></div><div style="text-align:right"><b>${fmt(p.monto)}</b><small><span class="pill ${p.estatus==="pagado"?"ok":"w"}">${esc(p.estatus)}</span></small></div></div>`).join(""):'<div class="note">Aún no tienes pagos registrados.</div>';
+  const paymentLabel=p=>({penalizacion_no_show:"Penalización NO SHOW",reversion_no_show:"Reversión NO SHOW",liberacion_retencion_walmart:"Liberación retención Walmart"}[p.concepto]||p.concepto[0].toUpperCase()+p.concepto.slice(1));
+  $("gpag").innerHTML=`${vistaBolsaWalmart()}${all.length?all.slice(0,ACC.es_flotillero?15:8).map(p=>`<div class="item"><div>${esc(paymentLabel(p))}${esc(ACC.es_flotillero&&p.drivers?" · "+p.drivers.nombre:"")}<small>${parseF(p.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short"})}${esc(p.rutas?" · Ruta "+p.rutas.id_ruta:"")}</small></div><div style="text-align:right"><b>${fmt(p.monto)}</b><small><span class="pill ${p.estatus==="pagado"?"ok":"w"}">${esc(p.estatus)}</span></small></div></div>`).join(""):'<div class="note">Aún no tienes pagos registrados.</div>'}`;
+}
+function vistaBolsaWalmart(){
+  if(!ACC?.es_flotillero||!WALMART_TARIFARIO_ENABLED)return "";
+  if(BOLSA_WALMART_ERROR)return `<div class="errbox">No se pudo cargar la bolsa del flotillero: ${esc(BOLSA_WALMART_ERROR)}</div>`;
+  if(!BOLSA_WALMART)return "";
+  const saldo=BOLSA_WALMART.saldo,plazo=BOLSA_WALMART.plazo;
+  const monto=Number(saldo?.saldo_total);
+  if(!saldo||!plazo||!Number.isFinite(monto)||monto<0
+    ||!["calculado","requiere_revision","sin_ruta_confirmada"].includes(plazo.estado)
+    ||typeof plazo.plazo_cumplido!=="boolean"
+    ||(plazo.estado==="calculado"&&!plazo.disponible_desde)
+    ||(plazo.plazo_cumplido&&(plazo.estado!=="calculado"||!plazo.disponible_desde))
+    ||BOLSA_WALMART.liberacion_validada!==false)
+    return '<div class="errbox">La bolsa Walmart devolvió una respuesta inválida.</div>';
+  const fecha=plazo.estado==="calculado"&&plazo.disponible_desde?new Date(plazo.disponible_desde):null;
+  if(fecha&&Number.isNaN(fecha.getTime()))return '<div class="errbox">La fecha de vencimiento de la bolsa no es válida.</div>';
+  const aviso=plazo.estado==="requiere_revision"
+    ?"Hay rutas pendientes de identificar o sincronizar; no se puede estimar el vencimiento."
+    :plazo.estado==="sin_ruta_confirmada"
+      ?"Aún no hay una ruta confirmada para calcular el vencimiento."
+      :plazo.plazo_cumplido
+        ?`El plazo de retención venció el ${fecha.toLocaleString("es-MX",{timeZone:"America/Mexico_City"})}; la bolsa aún requiere revisión y no representa un pago.`
+        :`El plazo de retención vence el ${fecha.toLocaleString("es-MX",{timeZone:"America/Mexico_City"})}.`;
+  return `<div class="note" style="margin-bottom:10px"><b>Bolsa Walmart retenida: ${fmt(monto)}</b><br>${esc(aviso)}<br>El vencimiento del plazo no autoriza ni confirma la liberación del saldo.</div>`;
 }
 function pagosConNoShow(){
   const penalties=new Set(NO_SHOW_CASES.map(c=>c.pago_penalizacion_id).filter(id=>id!=null).map(String));

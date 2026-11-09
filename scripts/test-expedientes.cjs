@@ -27,8 +27,8 @@ test("documents view lists all affiliates and preserves document history",()=>{
   const html=vm.runInContext("vistaDocumentosOps()",c);
   assert.match(html,/Ana/);assert.match(html,/Bruno/);assert.match(html,/Carla/);
   assert.match(html,/Driver independiente/);assert.match(html,/Driver de flotillero/);assert.match(html,/Flotillero/);
-  assert.match(html,/Comprobante de domicilio: sin registrar/);
-  assert.match(html,/Constancia de situación fiscal: sin registrar/);
+  assert.match(html,/Comprobante de domicilio<\/dt><dd><span class="doc-status doc-status-missing">sin registrar/);
+  assert.match(html,/Constancia de situación fiscal<\/dt><dd><span class="doc-status doc-status-missing">sin registrar/);
   assert.match(html,/rechazado/);
   assert.equal(vm.runInContext("tiposExpediente(DOCDRIVERS[0]).length",c),5);
   assert.equal(vm.runInContext("tiposExpediente(DOCDRIVERS[2]).length",c),7);
@@ -43,6 +43,52 @@ test("finance sees only read-only fiscal and bank document view",()=>{
   assert.match(html,/&lt;Flotillero&gt;/);
   assert.match(html,/Estado de cuenta/);
   assert.doesNotMatch(html,/data-doc-approve|data-doc-reject|doc-flota-save/);
+});
+
+test("executive document presentation uses labelled status rows and preserves explicit states",()=>{
+  const c=vm.createContext({ROL:"ops",esOps:()=>true,DOCDRIVERSERR:"",DOCOPSERR:"",DOCOPS:[
+    {driver_id:"a",tipo:"seguro",estado:"aprobado",vigencia:"2099-01-01"},
+    {driver_id:"a",tipo:"licencia",estado:"aprobado",vigencia:"2000-01-01"},
+    {driver_id:"a",tipo:"ine",estado:"pendiente"},
+    {driver_id:"a",tipo:"tarjeta",estado:"rechazado",nota:"<Revisar archivo>"}
+  ],DOCDRIVERS:[{id:"a",nombre:"<Afiliado>",rol:"driver"}]});
+  vm.runInContext(escapeFunction+"\n"+ops.slice(ops.indexOf("const DOC_OPS_TIPOS="),ops.indexOf("async function importarDocumentoFlota()")),c);
+  const html=vm.runInContext("vistaDocumentosOps()",c);
+  assert.match(html,/<dl class="doc-status-list">/);
+  for(const [label,state,style] of [
+    ["Seguro del vehículo","aprobado","approved"],
+    ["Licencia de conducir","vencido","expired"],
+    ["INE","en revisión","pending"],
+    ["Comprobante de domicilio","sin registrar","missing"]
+  ]){
+    assert.ok(html.includes(`<dt>${label}</dt><dd><span class="doc-status doc-status-${style}">${state}</span></dd>`));
+  }
+  assert.match(html,/doc-status-rejected">rechazado/);
+  assert.match(html,/&lt;Afiliado&gt;/);
+  assert.match(html,/&lt;Revisar archivo&gt;/);
+  assert.doesNotMatch(html,/class="pill/);
+  assert.match(html,/<div class="doc-actions">/);
+});
+
+test("documents dashboard retains actions and does not present failed loads as empty data",()=>{
+  const c=vm.createContext({ROL:"ops",esOps:()=>true,DOCDRIVERSERR:"",DOCOPSERR:"",DOCOPS:[
+    {id:"request-1",driver_id:"a",tipo:"ine",estado:"pendiente",drivers:{nombre:"Ana"},url:"https://example.test/a"}
+  ],DOCDRIVERS:[{id:"a",nombre:"Ana",rol:"driver"}]});
+  vm.runInContext(escapeFunction+"\n"+ops.slice(ops.indexOf("const DOC_OPS_TIPOS="),ops.indexOf("async function importarDocumentoFlota()")),c);
+  let html=vm.runInContext("vistaDocumentosOps()",c);
+  for(const id of ["doc-flota-driver","doc-flota-type","doc-flota-date","doc-flota-file","doc-flota-save"]){
+    assert.match(html,new RegExp(`id="${id}"`));
+  }
+  assert.match(html,/data-doc-approve="request-1"/);
+  assert.match(html,/data-doc-reject="request-1"/);
+  assert.match(html,/INE<\/dt><dd><span class="doc-status doc-status-pending">en revisión/);
+  assert.match(html,/En revisión<\/span><strong>1<\/strong>/);
+  vm.runInContext('DOCOPS=[];DOCDRIVERS=[];DOCOPSERR="<error>";DOCDRIVERSERR="sin acceso"',c);
+  html=vm.runInContext("vistaDocumentosOps()",c);
+  assert.match(html,/&lt;error&gt;/);
+  assert.match(html,/Datos no disponibles por error de carga/);
+  assert.match(html,/En revisión<\/span><strong>—<\/strong>/);
+  assert.doesNotMatch(html,/Sin documentos registrados|Sin afiliados disponibles/);
 });
 
 test("driver app selects required documents according to role and handles no-expiry documents",()=>{

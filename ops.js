@@ -1,11 +1,14 @@
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_KEY);const $=id=>document.getElementById(id);
 let R=[],C=[],tab="r",photos={},LIQ={},DRV=[],PRV=[],TAR=null,ANU=[],ANUERR="",AUD={},AUDERR="",DOCOPS=[],DOCOPSERR="",DOCDRIVERS=[],DOCDRIVERSERR="",PNR_OPS=[],PNR_OPS_ERR="",NO_SHOW_OPS=[],NO_SHOW_EVENTS=[],NO_SHOW_CLIENTS=[],NO_SHOW_ERR="",CLIENTES_NOMBRE={},analyticsGrain="dia",financeGrain="dia";
+let WM_NO_SHOW_REVIEW=null;
 const fd=m=>m==null?"—":(m<1000?m+" m":(m/1000).toFixed(1)+" km");
 const hh=s=>s?new Date(s).toTimeString().slice(0,5):"—";
 const dd=s=>new Date(s).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
 const dominioOk=e=>/^[^@\s]+@chazki\.com$/i.test((e||"").trim());
 let ROL=null,PEND=[],BAJ=[],CAMB=[],DSET=[],DLOG=[],NOTIF_UID=null;
+let COPPEL_REVISIONES=[],COPPEL_REVISIONES_ERR="";
+let COPPEL_AJUSTES=[],COPPEL_AJUSTES_ERR="",COPPEL_DESTINOS=[],COPPEL_DESTINOS_ERR="";
 let CAMBIOS_TARIFARIO=[],CAMBIOS_TARIFARIO_ERR="",CSV_ASIGNACIONES_RESULT=null;
 $("apw-toggle").onclick=e=>{e.preventDefault();$("apw").classList.toggle("hide")};
 // Google Workspace: la cuenta debe ser de la organización; el dominio se vuelve a exigir en la base de datos
@@ -26,8 +29,8 @@ $("abtn").onclick=async()=>{
   if(!dominioOk(email)){$("amsg").innerHTML='<div class="errbox">Solo personal de Chazki: usa tu correo @chazki.com.</div>';return}
   const r=await sb.auth.signInWithPassword({email,password});
   if(r.error){$("amsg").innerHTML='<div class="errbox">Correo o contraseña incorrectos.</div>';return}boot()};
-const TABS={master:"rvalbkcifpedtnxyzgqnhwj",ops:"rvalbkcifpdtnxyzgqnwj",coordinador:"rvalbkcifpdtxyzqnwj",finanzas:"rlcpdxyzqg",ih:"rvabkcifpdxnwj"};
-const puede=t=>(TABS[ROL]||"").includes(t);
+const TABS={master:"rvalbkcifpedtnxyzgqnhwj",ops:"rvalbkcifpdtnxyzgqnwj",coordinador:"rvalbkcifpdtxyzqnwj",finanzas:"rlcapdxyzqg",ih:"rvabkcifpdxnwj"};
+const puede=t=>(TABS[ROL]||"").includes(t)&&!(ROL==="finanzas"&&t==="a");
 const veFin=()=>["master","ops","coordinador","finanzas"].includes(ROL);
 const cargaFin=()=>veFin()||ROL==="ih";
 const esCoord=()=>["master","ops","coordinador"].includes(ROL);
@@ -57,7 +60,7 @@ const NAV_INFO={
   w:["Invitaciones","✉","Invita flotilleros y drivers independientes, y aprueba los drivers que piden los flotilleros."],
   e:["Equipo","♧","Gestiona el acceso del equipo administrativo."]
 };
-function seleccionarTab(b){
+function seleccionarTab(b,actualizar=true){
   document.querySelectorAll(".role-nav button").forEach(x=>x.classList.toggle("on",x===b));
   const prevTab=tab;tab=b.dataset.t;
   document.querySelectorAll(".nav-sub").forEach(sub=>{
@@ -70,13 +73,14 @@ function seleccionarTab(b){
   const [title,,description]=NAV_INFO[tab]||["Operación","",""];
   $("page-title").textContent=title;
   $("page-description").textContent=description;
-  if(tab==="h"){cargarCambiosTarifario();return}
-  if(tab==="p"&&ROL!=="finanzas"){AFILIADOS_LOADING=true;render();cargarAfiliados().then(()=>{if(tab==="p")render()});return}
-  if(tab==="w"){if(INVR_LOADING){render();return}INVR_LOADING=true;render();cargarInvitaciones().then(()=>{if(tab==="w")render()});return}
-  if(tab==="j"){PADRON_LOADING=true;render();cargarPadron().then(()=>{if(tab==="j")render()});return}
-  if(tab==="e"){render();cargarAsignacionesEquipo().then(()=>{if(tab==="e")render()});return}
-  if(["l","x","y","z","g","q","n"].includes(tab)){load();return}
-  render();
+  const navGroup=b.closest?.(".nav-group"),sectionLabel=navGroup?.previousElementSibling?.textContent.trim()||"Administración";
+  const eyebrow=$("section-eyebrow");if(eyebrow)eyebrow.textContent=sectionLabel;
+  const view=$("view");
+  if(view.dataset)view.dataset.section=navGroup?.dataset.navGroup||"administracion";
+  view.classList.add("executive-view");
+  $("view").parentElement?.classList.add("executive-layout");
+  $("kpis").classList.toggle("executive-kpis",tab==="r");
+  if(actualizar)return load();
 }
 function aplicarRol(){
   document.querySelectorAll(".role-nav button").forEach(b=>{
@@ -99,7 +103,7 @@ function aplicarRol(){
     group.appendChild(b);group.classList.remove("hide");
     group.previousElementSibling.classList.remove("hide");
   }
-  const f=document.querySelector(".role-nav button");if(f)seleccionarTab(f);
+  const f=document.querySelector(".role-nav button");if(f)seleccionarTab(f,false);
 }
 $("out").onclick=async()=>{await sb.auth.signOut();location.reload()};
 $("lb").onclick=()=>$("lb").classList.add("hide");
@@ -115,6 +119,14 @@ async function fetchPaged(buildQuery){
   }
 }
 async function boot(){
+  try{await iniciarPanel()}
+  catch(error){
+    const mensaje="No se pudo iniciar el panel: "+(error.message||error);
+    if($("panel").classList.contains("hide")){$("auth").classList.remove("hide");$("amsg").innerHTML=`<div class="errbox">${esc(mensaje)}</div>`}
+    else toast(mensaje);
+  }finally{$("loading").classList.add("hide")}
+}
+async function iniciarPanel(){
   $("loading").classList.remove("hide");
   const {data:{session}}=await sb.auth.getSession();
   if(!session){$("auth").classList.remove("hide");$("loading").classList.add("hide");return}
@@ -138,39 +150,103 @@ async function boot(){
   if(clientError){toast("No se pudieron cargar los clientes: "+clientError.message);return}
   CLIENTES_NOMBRE=Object.fromEntries((cl||[]).map(c=>[String(c.id),c.nombre]));
   $("fcli").innerHTML='<option value="">Todos los clientes</option>'+(cl||[]).map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join("");
-  try{await load()}finally{$("loading").classList.add("hide")}
+  await load();
 }
-async function load(){
+let PANEL_LOAD=Promise.resolve(),PANEL_REQUEST=0;
+const FRASES_CARGA=[
+  "Los datos vienen en camino. Y estos sí traen ubicación.",
+  "Acomodando paquetes… de información.",
+  "Esta camioneta funciona con datos, no con gasolina.",
+  "Buscando el dato. No estaba en la guantera.",
+  "Un segundo: el Excel pidió aventón.",
+  "Si lees esto, ya eres del equipo de cargas rápidas.",
+  "Tu café sigue caliente. Nosotros seguimos consultando.",
+  "Los números se están poniendo el cinturón.",
+  "Recalculando… pero sin dar la vuelta a la manzana.",
+  "Cargando datos. Las excusas vienen en otro camión.",
+  "No es magia. Es logística con buena conexión.",
+  "Tu siguiente decisión está a una curva de aquí."
+];
+let fraseCargaIndice=Math.floor(Math.random()*FRASES_CARGA.length);
+function siguienteFraseCarga(){
+  const frase=FRASES_CARGA[fraseCargaIndice];
+  fraseCargaIndice=(fraseCargaIndice+1)%FRASES_CARGA.length;
+  return frase;
+}
+function cargaPanelHtml(pestana){
+  const seccion=NAV_INFO[pestana]?.[0]||"tu panel";
+  return `<div class="dispatch-loader" role="status" aria-live="polite">
+    <span class="dispatch-tag">Operación en movimiento</span>
+    <h2>${esc(siguienteFraseCarga())}</h2>
+    <p>Consultando lo más reciente de ${esc(seccion)}.</p>
+    <div class="dispatch-map" aria-hidden="true">
+      <span class="dispatch-stop"></span>
+      <div class="dispatch-van"><span class="dispatch-cab"></span><span class="dispatch-parcel"></span><span class="dispatch-wheel rear"></span><span class="dispatch-wheel front"></span></div>
+      <span class="dispatch-stop"></span>
+    </div>
+    <div class="dispatch-caption" aria-hidden="true"><span>Datos de origen</span><span>Tu siguiente decisión</span></div>
+    <div class="dispatch-status"><span class="dispatch-pulse" aria-hidden="true"><i></i><i></i><i></i></span>Actualizando datos…</div>
+  </div>`;
+}
+function load(){
+  const solicitud=++PANEL_REQUEST,pestana=tab;
+  const filtros={desde:$("d1").value,hasta:$("d2").value,cliente:$("fcli").value};
+  $("view").setAttribute("aria-busy","true");
+  $("view").innerHTML=cargaPanelHtml(pestana);
+  $("kpis").classList.add("hide");
+  const ejecutar=async()=>{
+    if(solicitud!==PANEL_REQUEST)return;
+    try{
+      await cargarDatosPanel(pestana,filtros);
+      if(solicitud===PANEL_REQUEST)render();
+    }catch(error){
+      if(solicitud===PANEL_REQUEST){
+        const mensaje="No se pudo actualizar la sección: "+(error.message||error);
+        $("view").innerHTML=`<div class="errbox" role="alert">${esc(mensaje)}. Vuelve a seleccionar la opción para reintentar.</div>`;
+        toast(mensaje);
+      }
+    }finally{if(solicitud===PANEL_REQUEST)$("view").setAttribute("aria-busy","false")}
+  };
+  PANEL_LOAD=PANEL_LOAD.then(ejecutar);
+  return PANEL_LOAD;
+}
+async function cargarDatosPanel(tab,filtros){
+  if(tab==="h"){await cargarCambiosTarifario(false);return}
+  if(tab==="t"){TAR=null;await cargaTF(false);return}
+  if(tab==="p"&&ROL!=="finanzas"){AFILIADOS_LOADING=true;await cargarAfiliados();return}
+  if(tab==="w"){INVR_LOADING=true;await cargarInvitaciones();return}
+  if(tab==="j"){PADRON_LOADING=true;try{await cargarPadron()}finally{PADRON_LOADING=false}return}
+  if(tab==="e"){await cargaExtra();await cargarAsignacionesEquipo();return}
   if(tab==="g"&&ROL==="finanzas"){
-    await cargarDocumentosFinanzas();render();return;
+    await cargarDocumentosFinanzas();return;
   }
   if(tab==="n"){
     await cargaExtra();
     await cargarNoShowsOps();
-    render();
     return;
   }
-  const a=new Date($("d1").value+"T00:00:00").toISOString(),b=new Date($("d2").value+"T23:59:59").toISOString();
+  if(!filtros.desde||!filtros.hasta||filtros.desde>filtros.hasta)throw new Error("Selecciona un periodo de fechas válido");
+  const a=new Date(filtros.desde+"T00:00:00").toISOString(),b=new Date(filtros.hasta+"T23:59:59").toISOString();
   let routeRows,cancelRows;
   try{
     [routeRows,cancelRows]=await Promise.all([
       fetchPaged(()=>sb.from("rutas").select("*,drivers(nombre,codigo,cliente_default_id),cedis(*),ruta_fallos(cantidad,causas_fallo(nombre)),ruta_incidencias(comentario,tipos_incidencia(nombre)),ruta_manifiestos(foto_path)").gte("checkin_at",a).lte("checkin_at",b).order("checkin_at",{ascending:false})),
       fetchPaged(()=>sb.from("cancelaciones").select("*,drivers(nombre,codigo),cedis(*)").gte("capturado_at",a).lte("capturado_at",b).order("capturado_at",{ascending:false}))
     ]);
-  }catch(error){toast("No se pudieron cargar las rutas y cancelaciones: "+(error.message||error));return}
+  }catch(error){throw new Error("No se pudieron cargar las rutas y cancelaciones: "+(error.message||error))}
   for(const row of routeRows.concat(cancelRows)){
     if(row.cedis)row.cedis.clientes={nombre:CLIENTES_NOMBRE[String(row.cedis.cliente_id)]||""}
   }
-  const f=$("fcli").value;const keep=x=>!f||String(x.cedis.cliente_id)===f;
+  const f=filtros.cliente;const keep=x=>!f||String(x.cedis.cliente_id)===f;
   R=routeRows.filter(keep);C=cancelRows.filter(keep);
   const paths=C.flatMap(x=>[x.foto_path,x.foto_bitacora_path]).filter(Boolean);photos={};
   if(paths.length){const s=await sb.storage.from("cancelaciones").createSignedUrls(paths,3600);if(s.error)toast("No se pudieron cargar las fotos de cancelación: "+s.error.message);(s.data||[]).forEach(x=>{photos[x.path]=x.signedUrl})}
   await cargaEventos();await cargaExtra();
+  if(tab==="a"&&COPPEL_PEAK_ENABLED&&esCoord())await cargarRevisionesCoppel();
   if(tab==="l")await cargarAnulaciones();
   if(veFin()&&["x","y","z"].includes(tab))await cargarAuditorias();
   if(esOps()&&tab==="g")await cargarDocumentosOps();
   if(tab==="q")await cargarPnrsOps();
-  render();
 }
 async function cargarAnulaciones(){
   ANU=[];ANUERR="";
@@ -251,6 +327,12 @@ async function cargarNoShowsOps(){
           <label class="pnr-field pnr-span-3">Cliente<select id="ns-client"><option value="">Selecciona un cliente…</option>${NO_SHOW_CLIENTS.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join("")}</select></label>
           <label class="pnr-field pnr-span-3">CEDIS<select id="ns-cedis" disabled><option value="">Selecciona primero un cliente…</option></select></label>
           <label class="pnr-field pnr-span-3">Fecha del servicio<input id="ns-date" type="date" max="${new Date().toLocaleDateString("en-CA")}"></label>
+          ${WALMART_VALIDACION_ENABLED?`<div id="ns-wm-fields" class="pnr-span-6 hide">
+            <label>Proveedor confirmado<select id="ns-wm-provider"><option value="">Selecciona un proveedor…</option>${PRV.filter(p=>p.activo).map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)}</option>`).join("")}</select></label>
+            <label>Unidad confirmada<select id="ns-wm-unit"><option value="">Selecciona unidad…</option><option value="3.5T">3.5T</option><option value="Large">Large</option></select></label>
+            <label>Modelo del servicio<select id="ns-wm-option"><option value="">Selecciona modelo…</option><option value="1">Opción 1</option><option value="2">Opción 2</option></select></label>
+            <div class="note">Confirma los datos del servicio; el NO SHOW se calcula al 60 % y no genera un ajuste inmediato.</div>
+          </div>`:""}
           <label class="pnr-field pnr-span-3">Entregas contratadas (solo tarifas por paquete)<input id="ns-packages" type="number" min="1" max="10000" step="1" inputmode="numeric" placeholder="Ej. 40"><small>El límite se calcula como pago base × entregas contratadas.</small></label>
           <label class="pnr-field pnr-span-3">Importe manual (solo si no hay regla/tarifa NO SHOW)<input id="ns-amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="$0.00"></label>
           <label class="pnr-field pnr-span-6">Observaciones del Supervisor <span style="font-weight:400">Máximo 200 caracteres; no se permiten groserías.</span><textarea id="ns-observations" rows="3" maxlength="200" placeholder="Describe brevemente el servicio al que no se presentó"></textarea></label>
@@ -260,7 +342,7 @@ async function cargarNoShowsOps(){
       </section>`:'<div class="note">La captura corresponde al Supervisor. Coordinación puede revisar y resolver las apelaciones.</div>';
       const rows=NO_SHOW_OPS.map(c=>{
         const appealExpired=c.estado==="reportado"&&new Date(c.vence_apelacion_en)<=Date.now();
-        const [label,style]=appealExpired?["Reportado · plazo vencido","w"]:noShowStatus[c.estado]||["Estatus desconocido","w"];
+        const [label,style]=appealExpired?["Reportado · plazo vencido","w"]:c.metodo_calculo==="walmart_60_saldo"&&c.estado==="apelacion_aceptada"?["Apelación aceptada · sin descuento","ok"]:noShowStatus[c.estado]||["Estatus desconocido","w"];
         const events=NO_SHOW_EVENTS.filter(e=>e.caso_id===c.id);
         const driver=DRV.find(d=>d.id===c.driver_id);
         const provider=PRV.find(p=>String(p.id)===String(c.proveedor_id));
@@ -273,6 +355,7 @@ async function cargarNoShowsOps(){
           ${c.apelacion?`<div class="pnr-claim-detail"><b>Contestación del Driver</b><br>${esc(c.apelacion)}<small style="display:block;color:var(--mut);margin-top:5px">${esc(noShowFmtDateTime(c.apelacion_en))}</small></div>`:""}
           ${c.resolucion?`<div class="pnr-claim-detail"><b>Resolución</b><br>${esc(c.resolucion)}</div>`:""}
           ${events.length?`<details><summary>Historial (${events.length} movimientos)</summary><div class="pnr-timeline">${events.map(e=>`<div class="pnr-event"><b>${esc(({reportado:"Reporte creado",apelacion_driver:"Apelación del Driver",apelacion_aceptada:"Apelación aceptada",apelacion_rechazada:"Apelación rechazada"})[e.tipo]||e.tipo)}</b><small>${esc(noShowFmtDateTime(e.creado_en))}</small><div style="white-space:pre-wrap">${esc(e.mensaje)}</div></div>`).join("")}</div></details>`:""}
+          ${WALMART_VALIDACION_ENABLED&&ROL==="ih"&&String(c.cuenta||"").trim().toUpperCase()==="WALMART"?`<div class="pnr-actions"><button class="btn ghost sm" data-wm-ns-precierre="${esc(c.driver_id)}">Revisar NO SHOW en precierre</button></div>`:""}
           ${canResolve?`<div class="pnr-actions"><button class="btn sm" data-ns-resolve="aceptar" data-ns-id="${esc(c.id)}">Aceptar apelación y revertir</button><button class="btn bad sm" data-ns-resolve="rechazar" data-ns-id="${esc(c.id)}">Rechazar apelación</button></div>`:""}
         </article>`;
       }).join("");
@@ -329,6 +412,17 @@ function vistaPnrsOps(){
 function pnrEventLabelOps(type){
   return ({creado:"Reclamo generado",respuesta_driver:"Primera respuesta del driver",solicitud_soporte:"Se solicitó soporte adicional",evidencia_adicional:"Soporte adicional recibido",evidencia_aceptada:"Evidencia aceptada · caso cerrado",evidencia_rechazada:"Evidencia insuficiente · descuento aplicado",vencido:"Plazo vencido · descuento aplicado",descuento_aplicado:"Descuento aplicado a liquidación"})[type]||type;
 }
+function prepararVistaEjecutiva(){
+  const view=$("view"),label=NAV_INFO[tab]?.[0]||"Sección";
+  let index=0;
+  view.querySelectorAll("table").forEach(table=>{
+    if(table.closest(".doc-table-wrap,.exec-table-wrap,.executive-table-wrap"))return;
+    const wrapper=document.createElement("div"),columns=[...table.querySelectorAll("th")].map(th=>th.textContent.trim()).filter(Boolean).slice(0,4);
+    wrapper.className="executive-table-wrap";wrapper.tabIndex=0;wrapper.setAttribute("role","region");
+    wrapper.setAttribute("aria-label",`${label}${columns.length?": "+columns.join(", "):" · detalle"}${index?" · continuación":""}`);
+    table.before(wrapper);wrapper.appendChild(table);index++;
+  });
+}
 function render(){
   const cer=R.filter(x=>x.estado==="cerrada"),asg=R.reduce((s,x)=>s+x.paquetes_asignados,0),ent=cer.reduce((s,x)=>s+x.entregados,0),fal=cer.reduce((s,x)=>s+x.fallidos,0);
   const incs=R.reduce((s,x)=>s+x.ruta_incidencias.length,0);
@@ -338,13 +432,13 @@ function render(){
   if(tab==="r")h=`<table><tr><th>Fecha</th><th>Driver</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Zonas</th><th>Llegada</th><th>Auxiliar</th><th>Asig.</th><th>Entreg.</th><th>Fall.</th><th>Manif.</th><th>Estado</th></tr>`+
     (R.map(x=>`<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}<br><small>${esc(x.drivers.codigo||"")}</small></td><td><b>${esc(x.cedis.clientes.nombre)}</b>${x.drivers.cliente_default_id&&x.drivers.cliente_default_id!==x.cedis.cliente_id?` <span class="pill w">Otra cuenta</span>`:""}<br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta)}</td><td>${esc(x.zonas.join(", "))}</td><td>${hh(x.hora_llegada_cedis)}</td><td>${x.auxiliar_requerido?`<span class="pill ${x.viaja_con_auxiliar?"ok":"w"}">${x.viaja_con_auxiliar?"Con auxiliar":"Solo"}</span>`:"No aplica"}</td><td>${esc(x.paquetes_asignados)}</td><td>${esc(x.entregados??"—")}</td><td>${esc(x.fallidos??"—")}</td><td>${x.ruta_manifiestos&&x.ruta_manifiestos.length?`<button class="btn ghost sm" data-mf="${esc(x.id)}">📎 ${esc(x.ruta_manifiestos.length)}</button>`:(x.tipo_unidad==="3.5T"?'<span class="pill bad">Sin fotos</span>':"—")}</td><td><span class="pill ${x.estado==="cerrada"?"ok":"w"}">${x.estado==="cerrada"?"Cerrada "+hh(x.checkout_at):"En ruta"}</span></td></tr>`).join("")||`<tr><td colspan="12">Sin rutas en este periodo.</td></tr>`)+`</table>`;
   if(tab==="c")h=`<table><tr><th>Fecha y hora</th><th>Driver</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Pin</th><th>Validación de ubicación</th><th>Evidencia</th><th>Estatus</th></tr>`+
-    (C.map(x=>`<tr><td>${dd(x.capturado_at)} ${hh(x.capturado_at)}</td><td>${esc(x.drivers.nombre)}</td><td><b>${esc(x.cedis.clientes.nombre)}</b><br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta||"—")}</td><td>${x.lat==null?"—":`<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${esc(x.lat)},${esc(x.lng)}">${x.lat.toFixed(4)}, ${x.lng.toFixed(4)}</a>`}</td><td>${x.ubicacion_validada==="dentro"?`<span class="pill ok">Dentro · ${fd(x.distancia_cedis_m)}</span>`:x.ubicacion_validada==="fuera"?`<span class="pill bad">Fuera · ${fd(x.distancia_cedis_m)}</span>`:x.ubicacion_validada==="sin_ubicacion"?'<span class="pill bad">Sin ubicación del driver</span>':'<span class="pill w">CEDIS sin coordenadas</span>'}</td><td>${photos[x.foto_path]?`<img class="th" src="${photos[x.foto_path]}" data-u="${photos[x.foto_path]}">`:"—"}</td><td>${estCan(x)}</td></tr>`).join("")||`<tr><td colspan="8">Sin cancelaciones en este periodo.</td></tr>`)+`</table>`;
+    (C.map(x=>`<tr><td>${dd(x.capturado_at)} ${hh(x.capturado_at)}</td><td>${esc(x.drivers.nombre)}</td><td><b>${esc(x.cedis.clientes.nombre)}</b><br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta||"—")}</td><td>${x.lat==null?"—":`<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${esc(x.lat)},${esc(x.lng)}">${x.lat.toFixed(4)}, ${x.lng.toFixed(4)}</a>`}</td><td>${x.ubicacion_validada==="dentro"?`<span class="pill ok">Dentro · ${fd(x.distancia_cedis_m)}</span>`:x.ubicacion_validada==="fuera"?`<span class="pill bad">Fuera · ${fd(x.distancia_cedis_m)}</span>`:x.ubicacion_validada==="sin_ubicacion"?'<span class="pill bad">Sin ubicación del driver</span>':'<span class="pill w">CEDIS sin coordenadas</span>'}</td><td>${photos[x.foto_path]?`<img class="th" src="${photos[x.foto_path]}" data-u="${photos[x.foto_path]}">`:"—"}</td><td>${estCan(x)}${COPPEL_PEAK_ENABLED&&x.estatus==="aprobada"&&cuentaDe(x.cedis.clientes.nombre)==="COPPEL"&&["ih","coordinador","ops","master"].includes(ROL)?`<br><button class="btn ghost sm" data-coppel-cancelacion="${esc(x.id)}">Revisar semana COPPEL</button>`:""}</td></tr>`).join("")||`<tr><td colspan="8">Sin cancelaciones en este periodo.</td></tr>`)+`</table>`;
   if(tab==="i"){const rows=R.flatMap(x=>x.ruta_incidencias.map(i=>({x,i})));h=`<table><tr><th>Fecha</th><th>Driver</th><th>Cliente · CEDIS</th><th>Incidencia</th><th>Comentario</th></tr>`+
     (rows.map(({x,i})=>`<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${esc(x.cedis.clientes.nombre)} · ${esc(x.cedis.nombre)}</td><td><span class="pill bad">${esc(i.tipos_incidencia.nombre)}</span></td><td>${esc(i.comentario||"—")}</td></tr>`).join("")||`<tr><td colspan="5">Sin incidencias en este periodo.</td></tr>`)+`</table>`}
   if(tab==="f"){const m={};R.forEach(x=>x.ruta_fallos.forEach(f=>{m[f.causas_fallo.nombre]=(m[f.causas_fallo.nombre]||0)+f.cantidad}));const e=Object.entries(m).sort((a,b)=>b[1]-a[1]);
   h=`<table><tr><th>Causa</th><th>Paquetes</th></tr>`+(e.map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")||`<tr><td colspan="2">Sin fallidos en este periodo.</td></tr>`)+`</table>`}
   if(tab==="v")h=vistaPorValidar();if(tab==="l")h=vistaValidadas();if(tab==="p")h=vistaProveedores();if(tab==="e")h=vistaEquipo();if(tab==="a")h=vistaAprobar();if(tab==="b")h=vistaBajas();if(tab==="k")h=vistaCambios();if(tab==="d")h=vistaDescargas();if(tab==="t")h=vistaTarifario();if(tab==="h")h=vistaCambiosTarifario();if(tab==="x")h=vistaIndicadores();if(tab==="y")h=vistaFinanzas();if(tab==="z")h=vistaDesempeno();if(tab==="g")h=vistaDocumentosOps();if(tab==="q")h=vistaPnrsOps();if(tab==="n")h=vistaNoShowsOps();if(tab==="w")h=vistaInvitaciones();if(tab==="j")h=vistaPadron();
-  $("view").innerHTML=h;enlazar();
+  $("view").innerHTML=h;prepararVistaEjecutiva();enlazar();
   document.querySelectorAll("img.th").forEach(i=>i.onclick=()=>{$("lbimg").src=i.dataset.u;$("lb").classList.remove("hide")});
 }
 // ================= Validación de rutas, pagos y proveedores =================
@@ -353,9 +447,12 @@ const pc=n=>n==null?"—":(Number(n)*100).toFixed(1)+"%";
 const nz=s=>(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9 ]/g," ").trim();
 const cuentaDe=c=>c==="MERCADO LIBRE"?"MELI":(c==="COPPEL"||c==="COPPEL BT")?"COPPEL":c==="LIVERPOOL"?"LIVERPOOL":(c==="CUBBO"||c==="NESPRESSO"||c==="ESTAFETA"||c==="AMPM")?c:null;
 const COPPEL_PEAK_ENABLED=false; // Activar solo con la migración Peak validada.
+const COPPEL_POSTVAL_ENABLED=false; // Activar solo al conectar y validar pagos.
+const WALMART_VALIDACION_ENABLED=false; // Activar solo con el flujo financiero Walmart completo y probado.
 const CUENTAS_TARIFARIO=["MELI","COPPEL","LIVERPOOL","CUBBO","NESPRESSO","ESTAFETA","AMPM"];
 const sumLiq=k=>Object.values(LIQ).reduce((s,x)=>s+Number(x[k]||0),0);
-const porValidar=()=>R.filter(x=>x.estado==="cerrada"&&!LIQ[x.id]&&!PEND.some(q=>q.ruta_id===x.id)&&cuentaDe(x.cedis.clientes.nombre));
+const porValidar=()=>R.filter(x=>x.estado==="cerrada"&&!LIQ[x.id]&&!PEND.some(q=>q.ruta_id===x.id)
+  &&(cuentaDe(x.cedis.clientes.nombre)||(WALMART_VALIDACION_ENABLED&&ROL==="ih"&&String(x.cedis.clientes.nombre||"").trim().toUpperCase()==="WALMART")));
 function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),3200)}
 async function cargaExtra(){
   LIQ={};PEND=[];BAJ=[];CAMB=[];if(!cargaFin()){DRV=[];PRV=[];return}const ids=R.map(x=>x.id);
@@ -400,6 +497,10 @@ const DOC_OPS_TIPOS=[["seguro","Seguro del vehículo"],["licencia","Licencia de 
 const DOC_SIN_VIGENCIA=["domicilio","constancia_fiscal","estado_cuenta"];
 const DOC_FLOTILLERO=["constancia_fiscal","estado_cuenta"];
 const tiposExpediente=d=>DOC_OPS_TIPOS.filter(([k])=>d.rol==="flotillero"||!DOC_FLOTILLERO.includes(k));
+function estadoDocumentoOps(estado){
+  const clase=({aprobado:"approved",pendiente:"pending","en revisión":"pending",vencido:"expired",rechazado:"rejected"})[estado]||"missing";
+  return `<span class="doc-status doc-status-${clase}">${esc(estado)}</span>`;
+}
 async function cargarDocumentosFinanzas(){
   DOCOPS=[];DOCOPSERR="";
   try{DOCOPS=await fetchPaged(()=>sb.rpc("listar_documentos_finanzas"))}
@@ -414,23 +515,30 @@ async function cargarDocumentosFinanzas(){
 }
 function vistaDocumentosOps(){
   if(ROL==="finanzas"){
-    const rows=DOCOPS.map(d=>`<tr><td>${esc(d.nombre)}<br><small>${esc(d.codigo||"")}</small></td><td>${esc(DOC_OPS_TIPOS.find(x=>x[0]===d.tipo)?.[1]||d.tipo)}</td><td>${esc(d.estado)}</td><td>${d.url?`<a href="${esc(d.url)}" target="_blank" rel="noopener">Ver archivo</a>`:"—"}</td></tr>`).join("");
-    return `<h3>Documentos fiscales y bancarios de flotilleros</h3><small>Consulta únicamente. Operaciones autoriza los cambios.</small>${DOCOPSERR?`<div class="errbox">No se pudieron cargar los documentos: ${esc(DOCOPSERR)}</div>`:""}<div class="doc-table-wrap"><table><thead><tr><th>Flotillero</th><th>Documento</th><th>Estado</th><th>Archivo</th></tr></thead><tbody>${rows||'<tr><td colspan="4">Sin documentos visibles.</td></tr>'}</tbody></table></div>`;
+    const rows=DOCOPS.map(d=>`<tr><td>${esc(d.nombre)}<br><small>${esc(d.codigo||"")}</small></td><td>${esc(DOC_OPS_TIPOS.find(x=>x[0]===d.tipo)?.[1]||d.tipo)}</td><td>${estadoDocumentoOps(d.estado)}</td><td>${d.url?`<a href="${esc(d.url)}" target="_blank" rel="noopener">Ver archivo</a>`:"—"}</td></tr>`).join("");
+    return `<div class="doc-page"><div class="doc-intro"><div><span class="doc-eyebrow">Consulta documental</span><h3>Documentos fiscales y bancarios</h3><p>Expedientes de flotilleros · Consulta únicamente. Operaciones autoriza los cambios.</p></div></div>${DOCOPSERR?`<div class="errbox">No se pudieron cargar los documentos: ${esc(DOCOPSERR)}</div>`:""}<section class="doc-section"><div class="doc-section-title"><div><h3>Documentos disponibles</h3><p>Consulta los archivos autorizados para tu perfil.</p></div><span class="doc-count">${DOCOPSERR?"Consulta con incidencias":`${DOCOPS.length} ${DOCOPS.length===1?"documento":"documentos"}`}</span></div><div class="doc-table-wrap" tabindex="0" role="region" aria-label="Documentos fiscales y bancarios"><table><thead><tr><th>Flotillero</th><th>Documento</th><th>Estado</th><th>Archivo</th></tr></thead><tbody>${rows||`<tr><td colspan="4">${DOCOPSERR?"Datos no disponibles por error de carga.":"Sin documentos visibles."}</td></tr>`}</tbody></table></div><p class="doc-scroll-hint">Desliza horizontalmente para ver toda la tabla.</p></section></div>`;
   }
   if(!esOps())return '<div class="errbox">Solo Operaciones puede importar o autorizar documentos.</div>';
-  const all=DOCOPS.map(d=>`<tr><td>${esc(d.drivers?.nombre||d.driver_id)}<br><small>${esc(d.drivers?.codigo||"")}</small></td><td>${esc(DOC_OPS_TIPOS.find(x=>x[0]===d.tipo)?.[1]||d.tipo)}</td><td>${esc(d.origen==="flota"?"Importado de Flota":"Driver")}</td><td>${d.vigencia?esc(new Date(`${d.vigencia}T00:00:00`).toLocaleDateString("es-MX")):"Sin vencimiento"}</td><td><span class="pill ${d.estado==="aprobado"?"ok":d.estado==="pendiente"?"w":d.estado==="rechazado"?"bad":"w"}">${esc(d.estado)}</span>${d.nota?`<br><small>${esc(d.nota)}</small>`:""}</td><td>${d.url?`<a href="${esc(d.url)}" target="_blank" rel="noopener">Ver archivo</a>`:"—"}${d.estado==="pendiente"?`<br><button class="btn sm" data-doc-approve="${esc(d.id)}">Aprobar</button> <button class="btn ghost sm" data-doc-reject="${esc(d.id)}">Rechazar</button>`:""}</td></tr>`).join("");
+  const all=DOCOPS.map(d=>`<tr><td>${esc(d.drivers?.nombre||d.driver_id)}<br><small>${esc(d.drivers?.codigo||"")}</small></td><td>${esc(DOC_OPS_TIPOS.find(x=>x[0]===d.tipo)?.[1]||d.tipo)}</td><td>${esc(d.origen==="flota"?"Importado de Flota":"Driver")}</td><td>${d.vigencia?esc(new Date(`${d.vigencia}T00:00:00`).toLocaleDateString("es-MX")):"Sin vencimiento"}</td><td>${estadoDocumentoOps(d.estado)}${d.nota?`<br><small>${esc(d.nota)}</small>`:""}</td><td><div class="doc-actions">${d.url?`<a href="${esc(d.url)}" target="_blank" rel="noopener">Ver archivo</a>`:"—"}${d.estado==="pendiente"?`<button class="btn sm" data-doc-approve="${esc(d.id)}">Aprobar</button><button class="btn ghost sm" data-doc-reject="${esc(d.id)}">Rechazar</button>`:""}</div></td></tr>`).join("");
   const expedientes=DOCDRIVERS.map(d=>{
     const docs=DOCOPS.filter(x=>x.driver_id===d.id),tipos=tiposExpediente(d);
-    const estados=tipos.map(([k,n])=>{const pendiente=docs.some(x=>x.tipo===k&&x.estado==="pendiente"),aprobado=docs.find(x=>x.tipo===k&&x.estado==="aprobado");return `${esc(n)}: ${pendiente?"en revisión":aprobado?(aprobado.vigencia&&aprobado.vigencia<new Date().toLocaleDateString("en-CA")?"vencido":"aprobado"):"sin registrar"}`}).join(" · ");
+    const estados=tipos.map(([k,n])=>{const pendiente=docs.some(x=>x.tipo===k&&x.estado==="pendiente"),aprobado=docs.find(x=>x.tipo===k&&x.estado==="aprobado"),estado=pendiente?"en revisión":aprobado?(aprobado.vigencia&&aprobado.vigencia<new Date().toLocaleDateString("en-CA")?"vencido":"aprobado"):"sin registrar";return `<div class="doc-document-line"><dt>${esc(n)}</dt><dd>${estadoDocumentoOps(estado)}</dd></div>`}).join("");
     const categoria=d.rol==="flotillero"?"Flotillero":d.proveedores?.tipo==="flotillero"?"Driver de flotillero":d.proveedores?.tipo==="independiente"?"Driver independiente":"Driver · categoría sin definir";
-    return `<tr><td>${esc(d.nombre)}<br><small>${esc(d.codigo||"")}</small></td><td>${esc(categoria)}</td><td>${esc(d.proveedores?.nombre||"Sin proveedor")}</td><td>${esc(d.estatus||"—")}</td><td>${DOCOPSERR?"No disponible: error al cargar documentos":estados}</td></tr>`;
+    return `<tr><td>${esc(d.nombre)}<br><small>${esc(d.codigo||"")}</small></td><td>${esc(categoria)}</td><td>${esc(d.proveedores?.nombre||"Sin proveedor")}</td><td>${esc(d.estatus||"—")}</td><td>${DOCOPSERR?"No disponible: error al cargar documentos":`<dl class="doc-status-list">${estados}</dl>`}</td></tr>`;
   }).join("");
   const missingTable=/Could not find the table ['"]public\.driver_documents['"] in the schema cache/i.test(DOCOPSERR);
   const loadError=DOCOPSERR?(missingTable
     ?'<div class="doc-error"><b>Aún no está configurado el expediente de documentos.</b>En Supabase, ejecuta el archivo <code>driver-documents-workflow.sql</code> completo y vuelve a cargar esta sección. Esto crea la tabla y sus permisos.</div>'
     :`<div class="errbox">No se pudieron cargar los documentos: ${esc(DOCOPSERR)}</div>`):"";
-  return `<section class="doc-import">
-    <div class="doc-import-head"><span class="doc-import-icon" aria-hidden="true">▧</span><div><h3>Importar documentos de Flota</h3><p>Selecciona el expediente del driver, el tipo de documento, su vigencia y el archivo descargado de la carpeta de la agencia. Se guardará en el almacenamiento privado de la aplicación.</p></div></div>
+  return `<div class="doc-page">
+  <div class="doc-intro"><div><span class="doc-eyebrow">Gestión documental</span><h3>Expedientes de drivers</h3><p>Consulta el estado de los documentos y administra las solicitudes de los afiliados.</p></div></div>
+  <div class="doc-summary" aria-label="Resumen documental">
+    <div class="doc-metric"><span>Afiliados</span><strong>${DOCDRIVERSERR?"—":DOCDRIVERS.length}</strong><small>Expedientes disponibles</small></div>
+    <div class="doc-metric"><span>Documentos</span><strong>${DOCOPSERR?"—":DOCOPS.length}</strong><small>Registros en historial</small></div>
+    <div class="doc-metric"><span>En revisión</span><strong>${DOCOPSERR?"—":DOCOPS.filter(d=>d.estado==="pendiente").length}</strong><small>Solicitudes pendientes</small></div>
+  </div>
+  <section class="doc-import">
+    <div class="doc-import-head"><div><span class="doc-eyebrow">Carga administrativa</span><h3>Importar documentos de Flota</h3><p>Incorpora el archivo al expediente del afiliado. El documento se guarda aprobado en el almacenamiento privado.</p></div></div>
     <div class="doc-import-grid">
       <label class="doc-import-field">Afiliado<select id="doc-flota-driver"><option value="">Selecciona un afiliado…</option>${DOCDRIVERS.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)} · ${esc(d.codigo||"")}</option>`).join("")}</select></label>
       <label class="doc-import-field">Documento<select id="doc-flota-type">${DOC_OPS_TIPOS.map(([k,n])=>`<option value="${k}">${n}</option>`).join("")}</select></label>
@@ -439,10 +547,10 @@ function vistaDocumentosOps(){
     </div><div id="doc-flota-error"></div>
     <div class="doc-import-footer"><span class="note">PDF o imagen (JPEG, PNG, WebP), máximo 10 MB. Algunos documentos no requieren vencimiento.</span><button class="btn" id="doc-flota-save">Guardar documento aprobado</button></div>
   </section>
-  <div class="doc-section-title"><h3>Expedientes de afiliados</h3><span class="doc-count">${DOCDRIVERS.length} afiliados</span></div>${DOCDRIVERSERR?`<div class="errbox">No se pudieron cargar los afiliados: ${esc(DOCDRIVERSERR)}</div>`:""}
-  <div class="doc-table-wrap"><table><thead><tr><th>Afiliado</th><th>Categoría</th><th>Proveedor</th><th>Cuenta</th><th>Documentos</th></tr></thead><tbody>${expedientes||'<tr><td colspan="5">Sin afiliados disponibles.</td></tr>'}</tbody></table></div>
-  <div class="doc-section-title"><h3>Solicitudes y documentos</h3><span class="doc-count">${DOCOPS.length} ${DOCOPS.length===1?"documento":"documentos"}</span></div>${loadError}
-  <div class="doc-table-wrap"><table><thead><tr><th>Driver</th><th>Documento</th><th>Origen</th><th>Vigencia</th><th>Estado</th><th>Archivo / autorización</th></tr></thead><tbody>${all||'<tr><td colspan="6">Sin documentos registrados.</td></tr>'}</tbody></table></div>`;
+  <section class="doc-section"><div class="doc-section-title"><div><h3>Expedientes de afiliados</h3><p>Estado documental por persona y proveedor.</p></div><span class="doc-count">${DOCDRIVERSERR?"Consulta con incidencias":`${DOCDRIVERS.length} afiliados`}</span></div>${DOCDRIVERSERR?`<div class="errbox">No se pudieron cargar los afiliados: ${esc(DOCDRIVERSERR)}</div>`:""}
+  <div class="doc-table-wrap" tabindex="0" role="region" aria-label="Expedientes de afiliados"><table><thead><tr><th>Afiliado</th><th>Categoría</th><th>Proveedor</th><th>Cuenta</th><th>Documentos</th></tr></thead><tbody>${expedientes||`<tr><td colspan="5">${DOCDRIVERSERR?"Datos no disponibles por error de carga.":"Sin afiliados disponibles."}</td></tr>`}</tbody></table></div><p class="doc-scroll-hint">Desliza horizontalmente para ver toda la tabla.</p></section>
+  <section class="doc-section"><div class="doc-section-title"><div><h3>Solicitudes y documentos</h3><p>Historial de archivos y autorizaciones.</p></div><span class="doc-count">${DOCOPSERR?"Consulta con incidencias":`${DOCOPS.length} ${DOCOPS.length===1?"documento":"documentos"}`}</span></div>${loadError}
+  <div class="doc-table-wrap" tabindex="0" role="region" aria-label="Solicitudes y documentos"><table><thead><tr><th>Driver</th><th>Documento</th><th>Origen</th><th>Vigencia</th><th>Estado</th><th>Archivo / autorización</th></tr></thead><tbody>${all||`<tr><td colspan="6">${DOCOPSERR?"Datos no disponibles por error de carga.":"Sin documentos registrados."}</td></tr>`}</tbody></table></div><p class="doc-scroll-hint">Desliza horizontalmente para ver toda la tabla.</p></section></div>`;
 }
 async function importarDocumentoFlota(){
   const errorBox=$("doc-flota-error"),button=$("doc-flota-save"),driverId=$("doc-flota-driver").value,tipo=$("doc-flota-type").value,vigencia=DOC_SIN_VIGENCIA.includes(tipo)?null:$("doc-flota-date").value,file=$("doc-flota-file").files[0];
@@ -472,6 +580,53 @@ async function resolverDocumento(id,aprobar){
 function vistaPorValidar(){const l=porValidar();
   return `<table><tr><th>Fecha</th><th>Driver</th><th>Proveedor</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Asig.</th><th>Entreg.</th><th>Efectiv.</th><th></th></tr>`+
   (l.map(x=>{const p=provDe(x.driver_id);return `<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${p?esc(p.nombre)+`<br><small>${esc(p.tipo_registro||"sin registro fiscal")}</small>`:'<span class="pill w">Sin proveedor</span>'}</td><td><b>${esc(x.cedis.clientes.nombre)}</b><br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta)}</td><td>${esc(x.paquetes_asignados)}</td><td>${esc(x.entregados)}</td><td>${pc(x.entregados/x.paquetes_asignados)}</td><td><button class="btn ghost sm" data-det="${esc(x.id)}">Detalle</button> <button class="btn sm" data-val="${esc(x.id)}">Validar</button></td></tr>`}).join("")||`<tr><td colspan="9">No hay rutas por validar en este periodo con clientes que tengan tarifas cargadas.</td></tr>`)+`</table>`}
+function abrirRetencionWalmart(){
+  if(!WALMART_VALIDACION_ENABLED||ROL!=="ih"){toast("La consulta requiere un supervisor autorizado.");return}
+  const m=$("modal");let revision=0;
+  m.classList.remove("hide");
+  m.innerHTML=`<div class="box"><h2>Retención Walmart por proveedor</h2>
+    <label>Proveedor <select id="wm-ret-proveedor"><option value="">Selecciona proveedor</option>${PRV.map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)}</option>`).join("")}</select></label>
+    <div id="wm-ret-aviso"></div>
+    <div style="display:flex;gap:8px;margin-top:14px"><button class="btn" id="wm-ret-consultar">Consultar</button><button class="btn ghost" id="wm-ret-cerrar">Cerrar</button></div></div>`;
+  const aviso=$("wm-ret-aviso"),selector=$("wm-ret-proveedor"),boton=$("wm-ret-consultar");
+  selector.addEventListener("change",()=>{revision++;aviso.innerHTML=""});
+  $("wm-ret-cerrar").onclick=()=>{revision++;m.classList.add("hide")};
+  boton.onclick=async()=>{
+    const proveedor=selector.value,version=++revision;
+    aviso.innerHTML="";
+    if(!proveedor){aviso.innerHTML='<div class="errbox">Selecciona un proveedor.</div>';return}
+    boton.disabled=true;
+    let result;
+    try{result=await sb.rpc("walmart_consultar_retencion_proveedor",{p_proveedor_id:proveedor})}
+    catch(error){boton.disabled=false;if(version===revision)aviso.innerHTML=`<div class="errbox">No se pudo consultar: ${esc(error.message||error)}</div>`;return}
+    boton.disabled=false;
+    if(version!==revision)return;
+    if(result.error){aviso.innerHTML=`<div class="errbox">No se pudo consultar: ${esc(result.error.message)}</div>`;return}
+    const data=result.data,plazo=data?.plazo,saldo=data?.saldo,bloqueos=data?.bloqueos;
+    const camposBloqueos=["pnr_abiertos","pnr_saldo_pendiente","no_show_requiere_revision","ajustes_negativos_pendientes"];
+    if(!plazo||!saldo||!bloqueos||bloqueos.cobertura_completa!==false
+      ||camposBloqueos.some(k=>typeof bloqueos[k]!=="boolean")
+      ||!["calculado","requiere_revision","sin_ruta_confirmada"].includes(plazo.estado)
+      ||typeof plazo.plazo_cumplido!=="boolean"||saldo.saldo_total==null
+      ||(plazo.plazo_cumplido&&(plazo.estado!=="calculado"||!plazo.disponible_desde))
+      ||!Number.isFinite(Number(saldo.saldo_total))||Number(saldo.saldo_total)<0
+      ||data.liberacion_validada!==false||data.reclamaciones_verificadas!==false){
+      aviso.innerHTML='<div class="errbox">La consulta devolvió una respuesta inválida.</div>';return
+    }
+    const estado=plazo.estado==="requiere_revision"?"Requiere revisión de rutas":
+      plazo.estado==="sin_ruta_confirmada"?"Sin ruta confirmada":plazo.plazo_cumplido?"Plazo cumplido":"Plazo aún no cumplido";
+    const fecha=plazo.disponible_desde?new Date(plazo.disponible_desde):null;
+    if(fecha&&Number.isNaN(fecha.getTime())){aviso.innerHTML='<div class="errbox">La fecha de retención no es válida.</div>';return}
+    const hayBloqueos=camposBloqueos.some(k=>bloqueos[k]);
+    const fechaPlazo=fecha&&plazo.estado==="calculado"
+      ?`${plazo.plazo_cumplido?"Plazo cumplido":"El plazo vence"} ${esc(fecha.toLocaleString("es-MX",{timeZone:"America/Mexico_City"}))}`
+      :"";
+    aviso.innerHTML=`<div class="note"><b>${esc(estado)}</b> · saldo sin liberar: ${esc(fm(Number(saldo.saldo_total)))}${fechaPlazo?` · ${fechaPlazo}`:""}.
+      ${hayBloqueos?"Hay reclamaciones o descuentos que requieren revisión.":"No se detectaron bloqueos en las fuentes revisadas."}
+      Los PNR de drivers vinculados históricamente se revisan de forma conservadora, incluso si corresponden a otra cuenta.
+      La revisión es parcial y no autoriza la liberación. Revisa también rutas pendientes de sincronización.</div>`;
+  };
+}
 async function verDetalleRuta(id){
   let ru=R.find(x=>String(x.id)===String(id));
   if(!ru){
@@ -544,9 +699,251 @@ async function verDetalleRuta(id){
     <h3>Incidencias reportadas</h3>${incidencias}
     <h3>Fotos del manifiesto (${paths.length})</h3>
     ${galeria?`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px">${galeria}</div>`:'<div style="color:var(--mut)">Sin fotos de manifiesto registradas.</div>'}
+    ${COPPEL_PEAK_ENABLED&&cuentaDe(ru.cedis?.clientes?.nombre)==="COPPEL"&&["ih","coordinador","ops","master"].includes(ROL)?'<div style="margin-top:14px"><button class="btn ghost" id="route-peak-week">Consultar semana COPPEL</button><div id="route-peak-result"></div></div>':""}
     <div style="margin-top:14px"><button class="btn ghost" id="route-detail-close">Cerrar</button></div>
   </div>`;
+  if($("route-peak-week"))$("route-peak-week").onclick=()=>consultarSemanaCoppel(ru);
   $("route-detail-close").onclick=()=>modal.classList.add("hide");
+}
+function lunesCoppel(fecha){
+  const partes=new Intl.DateTimeFormat("en-US",{timeZone:"America/Mexico_City",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date(fecha));
+  const valor=tipo=>Number(partes.find(p=>p.type===tipo).value);
+  const dia=new Date(Date.UTC(valor("year"),valor("month")-1,valor("day")));
+  dia.setUTCDate(dia.getUTCDate()-((dia.getUTCDay()+6)%7));
+  return dia.toISOString().slice(0,10);
+}
+async function abrirSemanaCancelacionCoppel(id){
+  const c=C.find(x=>String(x.id)===String(id));
+  if(!c){toast("La cancelación ya no está disponible");return}
+  const modal=$("modal");modal.classList.remove("hide");
+  modal.innerHTML=`<div class="box" style="max-height:90vh;overflow:auto"><h2>Semana COPPEL · cancelación</h2>
+    <div>${esc(c.drivers?.nombre||"Driver")} · ${esc(c.cedis?.nombre||"CEDIS")}</div>
+    <button class="btn ghost" id="route-peak-week">Consultar semana</button><div id="route-peak-result"></div>
+    <button class="btn ghost" id="coppel-cancel-close">Cerrar</button></div>`;
+  $("route-peak-week").onclick=()=>consultarSemanaCoppel({driver_id:c.driver_id,checkin_at:c.capturado_at});
+  $("coppel-cancel-close").onclick=()=>modal.classList.add("hide");
+  await consultarSemanaCoppel({driver_id:c.driver_id,checkin_at:c.capturado_at});
+}
+async function consultarSemanaCoppel(ru){
+  const boton=$("route-peak-week"),resultado=$("route-peak-result");
+  if(!ru.driver_id||!ru.checkin_at||Number.isNaN(new Date(ru.checkin_at).getTime())){
+    resultado.innerHTML='<div class="errbox">La ruta no tiene driver o fecha válidos para consultar la semana.</div>';return;
+  }
+  boton.disabled=true;
+  const {data,error}=await sb.rpc("coppel_peak_consultar_precierre",{p_driver_id:ru.driver_id,p_lunes:lunesCoppel(ru.checkin_at)});
+  boton.disabled=false;
+  if(error){resultado.innerHTML=`<div class="errbox">No se pudo consultar la semana: ${esc(error.message)}</div>`;return}
+  if(data?.estado==="requiere_revision"){
+    resultado.innerHTML=`<div class="errbox">${esc(data.mensaje)}. Revisa tus rutas en el módulo de rutas.</div>${ROL==="ih"?'<button class="btn" id="route-peak-request">Solicitar revisión</button><div id="route-peak-request-result"></div>':""}`;
+    if(ROL==="ih")$("route-peak-request").onclick=async()=>{
+      const solicitud=$("route-peak-request"),aviso=$("route-peak-request-result");
+      solicitud.disabled=true;
+      const r=await sb.rpc("coppel_peak_solicitar_revision",{p_driver_id:ru.driver_id,p_lunes:lunesCoppel(ru.checkin_at)});
+      if(r.error){solicitud.disabled=false;aviso.innerHTML=`<div class="errbox">No se pudo solicitar la revisión: ${esc(r.error.message)}</div>`;return}
+      aviso.textContent="Solicitud registrada. Se avisó a coordinación autorizada o a Operaciones.";
+    };
+    return;
+  }
+  mostrarPrecierreCoppel(resultado,ru.driver_id,lunesCoppel(ru.checkin_at),data);
+}
+function resumenSemanaCoppel(r,cerrada=false){
+  return `<h3>Revisión semanal COPPEL · ${esc(r.lunes)}</h3>
+    <div class="note">${cerrada?"Esta semana ya fue cerrada. Los bonos potenciales muestran lo revisado al cierre.":"Revisa todas las cifras; cerrar la semana confirma la decisión de asistencia y registra los bonos correspondientes como pagos pendientes."}</div>
+    <div>Días registrados: ${esc((r.dias_asistencia||[]).join(", ")||"Ninguno")}</div>
+    <div>Días faltantes de lunes a sábado: ${esc((r.dias_faltantes||[]).join(", ")||"Ninguno")}</div>
+    <div>NO SHOW activo: ${r.hubo_no_show?"Sí":"No"}</div>
+    <div>Rutas locales Peak validadas: ${esc((r.rutas_validadas||[]).length)}</div>
+    <div>Bono de asistencia potencial: ${esc(fm(r.bono_asistencia_potencial))}${r.asistencia_requiere_revision?" · requiere revisar proveedor o registro fiscal":""}</div>
+    <div>Bono dominical potencial: ${esc(fm(r.bono_domingo_base))}${r.domingo_requiere_revision?" · requiere revisar proveedor o registro fiscal":""}</div>`;
+}
+async function cargarPostvalCoppel(destino,driverId,lunes,detalle,cerrada){
+  destino.innerHTML='<div class="note">Cargando post valorizaciones…</div>';
+  let respuesta;
+  try{respuesta=await sb.rpc("coppel_postval_listar",{p_driver_id:driverId,p_lunes:lunes})}
+  catch(error){destino.innerHTML=`<div class="errbox">No se pudieron consultar las post valorizaciones: ${esc(error.message||error)}</div>`;return}
+  if(destino.isConnected===false)return;
+  if(respuesta.error||!Array.isArray(respuesta.data)){
+    destino.innerHTML=`<div class="errbox">No se pudieron consultar las post valorizaciones: ${esc(respuesta.error?.message||"respuesta inválida")}</div>`;return;
+  }
+  const conceptos=respuesta.data,ids=[...new Set(detalle.rutas.concat(detalle.cancelaciones)
+    .map(x=>x.proveedor_id).filter(x=>x!=null).map(String))];
+  destino.innerHTML=`<h3>Post valorizaciones</h3>
+    <div class="note">Los conceptos requieren aprobación de coordinación y aún no se aplican a pagos.</div>
+    <ul>${conceptos.map((c,i)=>`<li>${esc(c.tipo)} · ${esc(fm(c.monto_base))} base · ${esc(c.descripcion)} · ${esc(c.estado)}${c.motivo_rechazo?` · Motivo: ${esc(c.motivo_rechazo)}`:""}
+      ${!cerrada&&ROL==="coordinador"&&c.estado==="pendiente"?`<button class="btn ghost sm" id="coppel-postval-aprobar-${i}">Aprobar</button> <button class="btn ghost sm" id="coppel-postval-rechazar-${i}">Rechazar</button>`:""}
+      <button class="btn ghost sm" id="coppel-postval-pnr-${i}">Revisar PNR</button><div id="coppel-postval-pnr-aviso-${i}"></div></li>`).join("")||"<li>Sin conceptos.</li>"}</ul>
+    ${!cerrada&&ROL==="ih"?`<label>Proveedor <select id="coppel-postval-proveedor"><option value="">Selecciona proveedor</option>${ids.map(id=>`<option value="${esc(id)}">${esc(PRV.find(p=>String(p.id)===id)?.nombre||"Proveedor "+id)}</option>`).join("")}</select></label>
+      <label>Tipo <select id="coppel-postval-tipo"><option value="">Selecciona tipo</option><option value="abono">Abono</option><option value="descuento">Descuento</option></select></label>
+      <label>Importe antes de impuestos <input id="coppel-postval-base" type="number" min="0.01" step="0.01"></label>
+      <label>Descripción <input id="coppel-postval-descripcion" maxlength="1000"></label>
+      <button class="btn" id="coppel-postval-enviar">Enviar a coordinación</button>`:""}
+    <div id="coppel-postval-aviso"></div>`;
+  conceptos.forEach((c,i)=>{
+    $(`coppel-postval-pnr-${i}`).onclick=async()=>{
+      const boton=$(`coppel-postval-pnr-${i}`),aviso=$(`coppel-postval-pnr-aviso-${i}`);
+      boton.disabled=true;
+      let r;
+      try{r=await sb.rpc("coppel_postval_resumen_pnr",{p_id:c.id})}
+      catch(error){boton.disabled=false;aviso.innerHTML=`<div class="errbox">No se pudieron consultar los PNR: ${esc(error.message||error)}</div>`;return}
+      boton.disabled=false;
+      if(r.error){aviso.innerHTML=`<div class="errbox">No se pudieron consultar los PNR: ${esc(r.error.message)}</div>`;return}
+      if(!r.data||r.data.alcance!=="actividad_confirmada"||r.data.requiere_revision_fuentes!==true
+        ||r.data.saldo_pendiente==null||!Number.isFinite(Number(r.data.saldo_pendiente))||Number(r.data.saldo_pendiente)<0
+        ||r.data.reclamos_pendientes==null||!Number.isInteger(Number(r.data.reclamos_pendientes))||Number(r.data.reclamos_pendientes)<0){
+        aviso.innerHTML='<div class="errbox">La consulta de PNR devolvió una respuesta inválida.</div>';return;
+      }
+      aviso.innerHTML=`<div class="note">PNR pendientes de actividad confirmada: ${esc(r.data.reclamos_pendientes)} · saldo ${esc(fm(r.data.saldo_pendiente))}. Es un dato parcial: falta revisar todas las fuentes de actividad. No se ha aplicado ningún descuento.</div>`;
+    };
+  });
+  if(!cerrada&&ROL==="coordinador")conceptos.forEach((c,i)=>{
+    if(c.estado!=="pendiente")return;
+    $(`coppel-postval-aprobar-${i}`).onclick=async()=>{
+      const boton=$(`coppel-postval-aprobar-${i}`),aviso=$("coppel-postval-aviso");
+      boton.disabled=true;
+      let r;
+      try{r=await sb.rpc("coppel_postval_aprobar",{p_id:c.id})}
+      catch(error){boton.disabled=false;aviso.innerHTML=`<div class="errbox">${esc(error.message||error)}</div>`;return}
+      if(r.error){boton.disabled=false;aviso.innerHTML=`<div class="errbox">${esc(r.error.message)}</div>`;return}
+      await cargarPostvalCoppel(destino,driverId,lunes,detalle,cerrada);
+    };
+    $(`coppel-postval-rechazar-${i}`).onclick=async()=>{
+      const motivo=prompt("Motivo del rechazo (mínimo 5 caracteres)");
+      if(motivo===null)return;
+      const boton=$(`coppel-postval-rechazar-${i}`),aviso=$("coppel-postval-aviso");
+      if(motivo.trim().length<5||motivo.trim().length>1000){
+        aviso.innerHTML='<div class="errbox">Indica un motivo de entre 5 y 1000 caracteres.</div>';return;
+      }
+      boton.disabled=true;
+      let r;
+      try{r=await sb.rpc("coppel_postval_rechazar",{p_id:c.id,p_motivo:motivo.trim()})}
+      catch(error){boton.disabled=false;aviso.innerHTML=`<div class="errbox">${esc(error.message||error)}</div>`;return}
+      if(r.error){boton.disabled=false;aviso.innerHTML=`<div class="errbox">${esc(r.error.message)}</div>`;return}
+      await cargarPostvalCoppel(destino,driverId,lunes,detalle,cerrada);
+    };
+  });
+  if(!cerrada&&ROL==="ih"){
+    let solicitudId=null;
+    $("coppel-postval-enviar").onclick=async()=>{
+      const proveedor=$("coppel-postval-proveedor").value,tipo=$("coppel-postval-tipo").value;
+      const base=$("coppel-postval-base").value.trim(),descripcion=$("coppel-postval-descripcion").value.trim();
+      const boton=$("coppel-postval-enviar"),aviso=$("coppel-postval-aviso");
+      if(!proveedor||!["abono","descuento"].includes(tipo)||!/^\d{1,10}(\.\d{1,2})?$/.test(base)
+        ||Number(base)<=0||descripcion.length<5){
+        aviso.innerHTML='<div class="errbox">Indica proveedor, tipo, importe y descripción válidos.</div>';return;
+      }
+      if(!globalThis.crypto?.randomUUID){aviso.innerHTML='<div class="errbox">Este dispositivo no puede generar una solicitud segura.</div>';return}
+      solicitudId||=globalThis.crypto.randomUUID();boton.disabled=true;
+      let r;
+      try{r=await sb.rpc("coppel_postval_proponer",{p_id:solicitudId,p_driver_id:driverId,p_lunes:lunes,
+        p_proveedor_id:proveedor,p_tipo:tipo,p_monto_base:base,p_descripcion:descripcion})}
+      catch(error){boton.disabled=false;aviso.innerHTML=`<div class="errbox">${esc(error.message||error)}</div>`;return}
+      if(r.error){boton.disabled=false;aviso.innerHTML=`<div class="errbox">${esc(r.error.message)}</div>`;return}
+      await cargarPostvalCoppel(destino,driverId,lunes,detalle,cerrada);
+    };
+  }
+}
+function mostrarPrecierreCoppel(resultado,driverId,lunes,data){
+  const cerrada=data?.estado==="cerrada",detalle=cerrada?data.precierre:data;
+  if((data?.estado!=="completo"&&!cerrada)||!detalle?.resumen
+    ||!Array.isArray(detalle.rutas)||!Array.isArray(detalle.cancelaciones)||!Array.isArray(detalle.no_shows)){
+    resultado.innerHTML='<div class="errbox">La consulta devolvió una respuesta de precierre inválida.</div>';return;
+  }
+  const rutas=detalle.rutas.map(r=>`<tr><td>${esc(r.fecha)}</td><td>${esc(r.ruta_id)}</td><td>${esc(r.cedis_id)}</td><td>${esc(fm(r.pago_base))}</td><td>${esc(fm(r.descuento))}</td><td>${esc(fm(r.bono_efectividad))}</td><td>${esc(fm(r.pago))}</td><td>${esc(r.pago_estatus||"Sin pago")}</td></tr>`).join("");
+  const proveedores=PRV.map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)}</option>`).join("");
+  const cancelaciones=detalle.cancelaciones.map((c,i)=>`<li>Cancelación ${esc(c.cancelacion_id)} · ${esc(c.fecha)} · CEDIS ${esc(c.cedis_id)} · base ${esc(fm(c.base))}${c.pnr_aplicado!=null?` · PNR aplicado ${esc(fm(c.pnr_aplicado))}`:""} · pago ${esc(fm(c.pago))}
+    ${!cerrada&&c.base==null?`<div><label>Importe base <input id="coppel-cancel-base-${i}" type="number" min="0" step="0.01"></label>
+      <label>Confirma el proveedor <select id="coppel-cancel-proveedor-${i}"><option value="">Selecciona proveedor</option>${proveedores}</select></label>
+      <button class="btn sm" id="coppel-cancel-guardar-${i}">Registrar cancelación</button><div id="coppel-cancel-aviso-${i}"></div></div>`:""}</li>`).join("");
+  const noShows=detalle.no_shows.map(n=>`<li>NO SHOW ${esc(n.caso_id)} · ${esc(n.fecha)} · ${esc(n.estado)} · penalización ${esc(fm(n.penalizacion))} · reversión ${esc(fm(n.reversion))}</li>`).join("");
+  resultado.innerHTML=`${resumenSemanaCoppel(detalle.resumen,cerrada)}
+    <h3>Rutas de la semana</h3><table><tr><th>Fecha</th><th>Ruta</th><th>CEDIS</th><th>Base</th><th>Descuento</th><th>Bono</th><th>Pago</th><th>Estado</th></tr>${rutas||'<tr><td colspan="8">Sin rutas.</td></tr>'}</table>
+    <h3>Cancelaciones aprobadas</h3><ul>${cancelaciones||"<li>Sin cancelaciones.</li>"}</ul>
+    <h3>NO SHOW</h3><ul>${noShows||"<li>Sin NO SHOW.</li>"}</ul>
+    ${typeof COPPEL_POSTVAL_ENABLED!=="undefined"&&COPPEL_POSTVAL_ENABLED&&["ih","coordinador"].includes(ROL)?'<div id="coppel-postval"></div>':""}
+    ${cerrada?'<div class="note">Semana cerrada. Estos importes son el registro histórico revisado.</div>':
+      `<label>Decisión del bono de asistencia <select id="coppel-asistencia"><option value="">Selecciona una decisión</option><option value="si">Aplicar bono</option><option value="no">No aplicar bono</option></select></label>
+      <button class="btn" id="coppel-cerrar">Cerrar semana revisada</button><div id="coppel-cierre-result"></div>`}`;
+  if(typeof COPPEL_POSTVAL_ENABLED!=="undefined"&&COPPEL_POSTVAL_ENABLED&&["ih","coordinador"].includes(ROL))
+    void cargarPostvalCoppel($("coppel-postval"),driverId,lunes,detalle,cerrada);
+  if(cerrada){
+    const ids=[...new Set(detalle.rutas.concat(detalle.cancelaciones).map(x=>x.proveedor_id).filter(x=>x!=null).map(String))];
+    if(!ids.length||ROL!=="ih")return;
+    resultado.innerHTML+=`<h3>Retroactivo manual</h3>
+      <div class="note">Revisa la actividad posterior al cierre en tus CEDIS. El importe final se suma o resta en la semana elegida; no modifica la semana cerrada ni confirma una transferencia.</div>
+      <div id="coppel-retro-posibles">Buscando actividad posterior al cierre...</div>
+      <div id="coppel-retro-registrados">Cargando retroactivos registrados...</div>
+      <label>Proveedor de la semana <select id="coppel-ajuste-proveedor"><option value="">Selecciona proveedor</option>${ids.map(id=>`<option value="${esc(id)}">${esc(PRV.find(p=>String(p.id)===id)?.nombre||"Proveedor "+id)}</option>`).join("")}</select></label>
+      <label>Tipo <select id="coppel-ajuste-tipo"><option value="">Selecciona tipo</option><option value="descuento">Descuento</option><option value="abono">Abono</option></select></label>
+      <label>Importe final <input id="coppel-ajuste-base" type="number" min="0.01" step="0.01"></label>
+      <label>Semana destino (lunes) <input id="coppel-ajuste-semana" type="date"></label>
+      <label>Motivo <input id="coppel-ajuste-motivo" maxlength="1000"></label>
+      <button class="btn" id="coppel-ajuste-proponer">Registrar retroactivo</button><div id="coppel-ajuste-aviso"></div>`;
+    void (async()=>{
+      const box=$("coppel-retro-posibles");
+      try{
+        const r=await sb.rpc("coppel_peak_posibles_retroactivos",{p_driver_id:driverId,p_lunes:lunes});
+        if(r.error)throw r.error;
+        if(!Array.isArray(r.data))throw new Error("Respuesta inválida");
+        box.innerHTML=r.data.length?`<ul>${r.data.map(x=>`<li>${esc(x.tipo)} ${esc(x.id)} · CEDIS ${esc(x.cedis_id)}</li>`).join("")}</ul>`:
+          '<div class="note">Sin actividad posterior detectada en tus CEDIS. También puedes registrar un importe revisado manualmente.</div>';
+      }catch(error){box.innerHTML=`<div class="errbox">No se pudo revisar la actividad posterior: ${esc(error.message||error)}</div>`}
+    })();
+    void (async()=>{
+      const box=$("coppel-retro-registrados");
+      try{
+        const r=await sb.rpc("coppel_peak_listar_ajustes_manuales",{p_driver_id:driverId,p_lunes:lunes});
+        if(r.error)throw r.error;
+        if(!Array.isArray(r.data))throw new Error("Respuesta inválida");
+        box.innerHTML=r.data.length?`<h4>Retroactivos registrados</h4><ul>${r.data.map(x=>`<li>Semana ${esc(x.lunes_destino)} · ${esc(fm(x.monto))} · ${esc(x.motivo)}</li>`).join("")}</ul>`:
+          '<div class="note">Sin retroactivos registrados para esta semana de origen.</div>';
+      }catch(error){box.innerHTML=`<div class="errbox">No se pudieron consultar los retroactivos registrados: ${esc(error.message||error)}</div>`}
+    })();
+    let solicitudId=null;
+    $("coppel-ajuste-proponer").onclick=async()=>{
+      const proveedor=$("coppel-ajuste-proveedor").value,tipo=$("coppel-ajuste-tipo").value;
+      const base=$("coppel-ajuste-base").value.trim(),motivo=$("coppel-ajuste-motivo").value.trim(),semana=$("coppel-ajuste-semana").value;
+      const aviso=$("coppel-ajuste-aviso"),boton=$("coppel-ajuste-proponer");
+      if(!proveedor||!["descuento","abono"].includes(tipo)||!/^\d{1,10}(\.\d{1,2})?$/.test(base)||Number(base)<=0||motivo.length<5||!/^\d{4}-\d{2}-\d{2}$/.test(semana)){
+        aviso.innerHTML='<div class="errbox">Selecciona proveedor, tipo y semana, e indica importe y motivo válidos.</div>';return}
+      if(!globalThis.crypto?.randomUUID){aviso.innerHTML='<div class="errbox">Este dispositivo no puede generar una solicitud segura.</div>';return}
+      if(!confirm("¿Registrar este importe final en la semana seleccionada? No confirma una transferencia de dinero."))return;
+      solicitudId||=globalThis.crypto.randomUUID();boton.disabled=true;
+      let registro;
+      try{registro=await sb.rpc("coppel_peak_registrar_ajuste_manual",{p_id:solicitudId,p_driver_id:driverId,p_lunes_origen:lunes,
+        p_proveedor_id:proveedor,p_lunes_destino:semana,p_monto:tipo==="descuento"?"-"+base:base,p_motivo:motivo})}
+      catch(error){boton.disabled=false;aviso.innerHTML=`<div class="errbox">No se pudo registrar: ${esc(error.message||error)}. Puedes reintentar.</div>`;return}
+      if(registro.error){boton.disabled=false;aviso.innerHTML=`<div class="errbox">No se pudo registrar: ${esc(registro.error.message)}</div>`;return}
+      aviso.textContent="Retroactivo registrado en la semana seleccionada. No confirma una transferencia.";
+    };
+    return;
+  }
+  detalle.cancelaciones.forEach((c,i)=>{
+    if(c.base!=null)return;
+    $(`coppel-cancel-guardar-${i}`).onclick=async()=>{
+      const base=$(`coppel-cancel-base-${i}`).value.trim(),proveedor=$(`coppel-cancel-proveedor-${i}`).value;
+      const aviso=$(`coppel-cancel-aviso-${i}`),boton=$(`coppel-cancel-guardar-${i}`);
+      if(!/^\d{1,10}(\.\d{1,2})?$/.test(base)||!proveedor){
+        aviso.innerHTML='<div class="errbox">Indica un importe base válido y confirma el proveedor.</div>';return}
+      if(!confirm("¿Registrar esta cancelación con el importe y proveedor seleccionados? Se aplicarán los PNR pendientes del driver antes de crear el pago."))return;
+      boton.disabled=true;
+      const registro=await sb.rpc("coppel_peak_registrar_cancelacion",{p_cancelacion_id:c.cancelacion_id,p_base:base,p_proveedor_confirmado:proveedor});
+      if(registro.error){boton.disabled=false;aviso.innerHTML=`<div class="errbox">No se pudo registrar: ${esc(registro.error.message)}</div>`;return}
+      const actual=await sb.rpc("coppel_peak_consultar_precierre",{p_driver_id:driverId,p_lunes:lunes});
+      if(actual.error){aviso.innerHTML=`<div class="errbox">Cancelación registrada, pero no se pudo actualizar el precierre: ${esc(actual.error.message)}</div>`;return}
+      mostrarPrecierreCoppel(resultado,driverId,lunes,actual.data);
+    };
+  });
+  $("coppel-cerrar").onclick=async()=>{
+    const seleccion=$("coppel-asistencia").value,aviso=$("coppel-cierre-result"),boton=$("coppel-cerrar");
+    if(!["si","no"].includes(seleccion)){aviso.innerHTML='<div class="errbox">Selecciona la decisión de asistencia antes de cerrar.</div>';return}
+    if(!confirm("¿Cerrar esta semana COPPEL con la decisión seleccionada? El cierre conservará los importes revisados."))return;
+    boton.disabled=true;
+    const cerrado=await sb.rpc("coppel_peak_cerrar_semana",{p_driver_id:driverId,p_lunes:lunes,p_aplicar_asistencia:seleccion==="si",p_precierre_esperado:detalle});
+    if(cerrado.error){boton.disabled=false;aviso.innerHTML=`<div class="errbox">No se pudo cerrar la semana: ${esc(cerrado.error.message)}</div>`;return}
+    const actual=await sb.rpc("coppel_peak_consultar_precierre",{p_driver_id:driverId,p_lunes:lunes});
+    if(actual.error){aviso.innerHTML=`<div class="errbox">Semana cerrada, pero no se pudo volver a consultar: ${esc(actual.error.message)}</div>`;return}
+    mostrarPrecierreCoppel(resultado,driverId,lunes,actual.data);
+  };
 }
 function vistaValidadas(){const l=Object.values(LIQ);
   return `<table><tr><th>Fecha</th><th>Driver</th><th>Proveedor</th><th>Cuenta · esquema</th><th>Efectiv.</th><th>Costo</th><th>Retención</th><th>IVA</th><th>Pago al proveedor</th><th>Venta</th><th>Utilidad</th><th>Registro</th><th></th></tr>`+
@@ -672,7 +1069,9 @@ function estPill(x){const k=estK(x),e=ESTC[k]||ESTC.por_validar;let h=`<span cla
   if((x.estatus==="aclaracion"||x.estatus==="rechazada")&&k!=="vencida")h+=`<br><small>⏱ Driver: ${cuentaR(x.plazo_vence)}</small>`;
   if(x.estatus==="respondida"||x.estatus==="apelada")h+=`<br><small><b>💬 Nueva respuesta</b></small>`;return h}
 function estCan(x){const h=estPill(x);
-  if(!["master","ops","coordinador","ih"].includes(ROL)||x.estatus==="aprobada")return h;
+  if(x.estatus==="aprobada")return h+(WALMART_VALIDACION_ENABLED&&ROL==="ih"&&String(x.cedis?.clientes?.nombre||"").trim().toUpperCase()==="WALMART"
+    ?`<br><button class="btn ghost sm" data-wm-cancelacion="${esc(x.id)}">Revisar pago Walmart</button>`:"");
+  if(!["master","ops","coordinador","ih"].includes(ROL))return h;
   const approvals=x.ubicacion_validada==="dentro"?`<br><small>Supervisor ${x.aprob_supervisor?"✓":"pendiente"} · Coordinador ${x.aprob_coord?"✓":"pendiente"}</small>`:"";
   return h+approvals+`<br><button class="btn sm" data-rev="${esc(x.id)}">Revisar</button>`}
 async function cargaEventos(){CEV={};EVP={};if(!C.length)return;const ids=C.map(x=>x.id);const r=await sb.from("cancelacion_eventos").select("*").in("cancelacion_id",ids).order("creado_en");
@@ -699,6 +1098,61 @@ function revisarCan(id){const x=C.find(y=>y.id===id);if(!x)return;const m=$("mod
     if(error){$("rv-e").innerHTML=`<div class="errbox">${esc(error.message)}</div>`;m.querySelectorAll("[data-rva]").forEach(z=>z.disabled=false);return}
     m.classList.add("hide");await load();
     toast(data==="pendiente_coordinador"?"Aprobación registrada; falta el coordinador asignado":data==="pendiente_supervisor"?"Aprobación registrada; falta el supervisor asignado":a==="aprobar"?"Cancelación aprobada":a==="rechazar"?"Rechazada · el driver tiene 12 h para apelar":"Aclaración solicitada · el driver tiene 12 h")})}
+async function abrirPagoCancelacionWalmart(id){
+  const c=C.find(x=>String(x.id)===String(id));
+  if(!c||ROL!=="ih"){toast("Cancelación Walmart asignada requerida.");return}
+  const m=$("modal"),salida=photos[c.foto_path],bitacora=photos[c.foto_bitacora_path];
+  let calculo=null,revision=0;
+  m.classList.remove("hide");
+  m.innerHTML=`<div class="box" style="max-height:90vh;overflow:auto"><h2>Pago de cancelación Walmart</h2>
+    <div>${esc(c.drivers.nombre)} · ${esc(c.cedis.nombre)} · ${esc(dd(c.capturado_at))}</div>
+    ${salida?`<h3>Foto de salida</h3><img src="${esc(salida)}" alt="Foto de salida" style="max-width:100%;max-height:200px">`:'<div class="errbox">No se pudo revisar la foto de salida.</div>'}
+    ${bitacora?`<h3>Bitácora</h3><img src="${esc(bitacora)}" alt="Bitácora de cancelación" style="max-width:100%;max-height:200px">`:'<div class="errbox">No se pudo revisar la foto de bitácora.</div>'}
+    <label>Confirma el proveedor</label><select id="wm-can-proveedor"><option value="">Selecciona proveedor</option>${PRV.filter(p=>p.activo!==false).map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)}</option>`).join("")}</select>
+    <label>Confirma la unidad</label><select id="wm-can-unidad"><option value="">Selecciona unidad</option><option value="3.5T">3.5T</option><option value="Large">Large / 1.5 TN</option></select>
+    <fieldset><legend>Retención Walmart (selecciona una)</legend>
+      ${[0,10,15,25].map(n=>`<label><input id="wm-can-ret-${n}" type="radio" name="wm-can-ret" ${n===0?"checked":""}> ${n===0?"Sin retención":n+"%"}</label>`).join("")}</fieldset>
+    <div id="wm-can-pago-aviso"></div>
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button class="btn ghost" id="wm-can-calcular">Calcular 40%</button><button class="btn" id="wm-can-confirmar" disabled>Generar pago</button><button class="btn ghost" id="wm-can-cerrar">Cerrar</button></div></div>`;
+  const inputs=()=>({p_cancelacion_id:c.id,p_proveedor_id:$("wm-can-proveedor").value,
+    p_unidad:$("wm-can-unidad").value,p_porcentaje_retencion:[0,10,15,25].find(n=>$(`wm-can-ret-${n}`).checked)??null});
+  const invalidar=()=>{revision++;calculo=null;$("wm-can-confirmar").disabled=true;$("wm-can-pago-aviso").innerHTML=""};
+  ["wm-can-proveedor","wm-can-unidad",...[0,10,15,25].map(n=>`wm-can-ret-${n}`)].forEach(x=>$(x).addEventListener("change",invalidar));
+  $("wm-can-cerrar").onclick=()=>{invalidar();m.classList.add("hide")};
+  $("wm-can-calcular").onclick=async()=>{
+    invalidar();
+    const args=inputs(),version=revision,boton=$("wm-can-calcular"),aviso=$("wm-can-pago-aviso");
+    if(!salida||!bitacora){aviso.innerHTML='<div class="errbox">Revisa ambas fotos antes de calcular el pago.</div>';return}
+    if(!args.p_proveedor_id||!args.p_unidad||args.p_porcentaje_retencion==null){aviso.innerHTML='<div class="errbox">Confirma proveedor, unidad y retención.</div>';return}
+    boton.disabled=true;
+    let r;
+    try{r=await sb.rpc("walmart_previsualizar_cancelacion_porcentaje",args)}
+    catch(error){boton.disabled=false;if(version===revision)aviso.innerHTML=`<div class="errbox">No se pudo calcular: ${esc(error.message||error)}</div>`;return}
+    boton.disabled=false;
+    if(version!==revision)return;
+    if(r.error){aviso.innerHTML=`<div class="errbox">No se pudo calcular: ${esc(r.error.message)}</div>`;return}
+    if(!r.data||Number(r.data.porcentaje_retencion)!==args.p_porcentaje_retencion
+      ||["base_servicio","pago_base","total","pago_semanal","saldo_retenido"].some(k=>r.data[k]==null||!Number.isFinite(Number(r.data[k])))){
+      aviso.innerHTML='<div class="errbox">El cálculo devolvió una respuesta inválida.</div>';return;
+    }
+    calculo=r.data;
+    aviso.innerHTML=`<div class="note">Base de servicio ${esc(fm(calculo.base_servicio))} · cancelación 40% ${esc(fm(calculo.pago_base))} · total fiscalizado ${esc(fm(calculo.total))} · semanal antes de PNR y NO SHOW ${esc(fm(calculo.pago_semanal))} · retenido ${esc(fm(calculo.saldo_retenido))}.</div>`;
+    $("wm-can-confirmar").disabled=false;
+  };
+  $("wm-can-confirmar").onclick=async()=>{
+    if(!calculo)return;
+    const args=inputs(),boton=$("wm-can-confirmar"),aviso=$("wm-can-pago-aviso");
+    const controls=["wm-can-proveedor","wm-can-unidad",...[0,10,15,25].map(n=>`wm-can-ret-${n}`),"wm-can-calcular","wm-can-cerrar"].map($);
+    boton.disabled=true;controls.forEach(control=>control.disabled=true);
+    let r;
+    try{r=await sb.rpc("walmart_validar_cancelacion",{p_cancelacion_id:args.p_cancelacion_id,
+      p_proveedor_id:args.p_proveedor_id,p_unidad:args.p_unidad,
+      p_aplicar_retencion:args.p_porcentaje_retencion>0,p_calculo_esperado:calculo})}
+    catch(error){boton.disabled=false;controls.forEach(control=>control.disabled=false);aviso.innerHTML=`<div class="errbox">No se pudo confirmar el pago: ${esc(error.message||error)}. Puedes reintentar.</div>`;return}
+    if(r.error){boton.disabled=false;controls.forEach(control=>control.disabled=false);aviso.innerHTML=`<div class="errbox">No se pudo generar el pago: ${esc(r.error.message)}</div>`;return}
+    m.classList.add("hide");await cargaExtra();render();toast("Pago de cancelación Walmart registrado");
+  };
+}
 let NOT=[];
 async function loadNotifs(){
   if(!NOTIF_UID)return;
@@ -711,7 +1165,7 @@ function abrirAvisos(){const m=$("modal");m.classList.remove("hide");const f=x=>
   const perm=("Notification" in window&&Notification.permission==="default")?'<button class="btn ghost sm" id="nt-perm">Activar avisos del navegador</button>':"";
   m.innerHTML=`<div class="box" style="max-height:90vh;overflow:auto"><h2 style="margin:0 0 8px">🔔 Avisos</h2>${perm}${NOT.length?NOT.map(n=>`<div class="item" data-nt="${esc(n.id)}" style="display:block;padding:10px;border-bottom:1px solid var(--line);cursor:pointer;${n.leida_en?"opacity:.6":"background:#f3f0ff"}"><b>${esc(n.titulo)}</b>${n.cuerpo?`<br><small>${esc(n.cuerpo)}</small>`:""}<br><small style="color:var(--mut)">${f(n.creada_en)}</small></div>`).join(""):"<small>Sin avisos.</small>"}<div style="margin-top:12px"><button class="btn ghost" id="nt-x">Cerrar</button></div></div>`;
   $("nt-x").onclick=()=>m.classList.add("hide");const pr=$("nt-perm");if(pr)pr.onclick=async()=>{await Notification.requestPermission();abrirAvisos()};
-  const ir={cancelacion:"c",cancelacion_nueva:"c",cambio_perfil:"k",baja:"b",validacion:"a",ruta_registrada:"r",configuracion_operativa:"h"};
+  const ir={cancelacion:"c",cancelacion_nueva:"c",cambio_perfil:"k",baja:"b",validacion:"a",ruta_registrada:"r",configuracion_operativa:"h",coppel_peak_revision:"a"};
   m.querySelectorAll("[data-nt]").forEach(el=>el.onclick=()=>{const n=NOT.find(x=>x.id==el.dataset.nt);m.classList.add("hide");const t=n&&ir[n.tipo]||n&&ir[n.ref_tipo];const b=t&&document.querySelector(`.role-nav button[data-t="${t}"]`);if(b)b.click()});
   sb.rpc("marcar_notificaciones_leidas",{p_ids:null}).then(()=>{NOT.forEach(n=>n.leida_en=n.leida_en||new Date().toISOString());drawBell()})}
 $("bell").onclick=abrirAvisos;
@@ -732,25 +1186,25 @@ async function verManif(id){const ru=R.find(x=>x.id===id);const paths=ru.ruta_ma
   const s=await sb.storage.from("manifiestos").createSignedUrls(paths,3600);const m=$("modal");m.classList.remove("hide");
   m.innerHTML=`<div class="box"><h2 style="margin:0 0 8px">Manifiestos · Ruta ${esc(ru.id_ruta)}</h2><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${(s.data||[]).map(x=>`<a href="${esc(x.signedUrl)}" target="_blank" rel="noopener"><img src="${esc(x.signedUrl)}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px"></a>`).join("")}</div><div style="margin-top:12px"><button class="btn ghost" id="mf-x">Cerrar</button></div></div>`;$("mf-x").onclick=()=>m.classList.add("hide")}
 let TF=null,TFERR="",TFL={cuenta:"",q:"",veh:"",esq:"",act:true};
-async function cargaTF(){
+async function cargaTF(renderizar=true){
   TFERR="";
   const [t,g]=await Promise.all([
     sb.from("tarifas").select("*").order("cuenta").order("ubicacion").order("tipo_unidad").limit(2000),
     sb.from("reglas_penalizacion").select("*").order("cuenta").order("aplica_a").order("prioridad")
   ]);
   if(t.error||g.error){TFERR=(t.error||g.error).message;toast("No se pudo cargar el tarifario: "+TFERR);return}
-  TFERR="";TF=t.data||[];RGL=g.data||[];render()
+  TFERR="";TF=t.data||[];RGL=g.data||[];if(renderizar)render()
 }
-async function cargarCambiosTarifario(){
+async function cargarCambiosTarifario(renderizar=true){
   CAMBIOS_TARIFARIO=[];CAMBIOS_TARIFARIO_ERR="";
-  if(ROL!=="master"){CAMBIOS_TARIFARIO_ERR="Solo la cuenta maestra puede consultar esta sección.";render();return}
+  if(ROL!=="master"){CAMBIOS_TARIFARIO_ERR="Solo la cuenta maestra puede consultar esta sección.";if(renderizar)render();return}
   const [pending,recent]=await Promise.all([
     sb.from("cambios_tarifario_solicitudes").select("*").eq("estado","pendiente").order("solicitada_en",{ascending:true}),
     sb.from("cambios_tarifario_solicitudes").select("*").neq("estado","pendiente").order("solicitada_en",{ascending:false}).limit(50)
   ]);
   if(pending.error||recent.error)CAMBIOS_TARIFARIO_ERR=(pending.error||recent.error).message;
   else CAMBIOS_TARIFARIO=[...(pending.data||[]),...(recent.data||[])];
-  render()
+  if(renderizar)render()
 }
 function parseCsvTable(text){
   const sample=text.slice(0,8192);let quoted=false,commas=0,semicolons=0;
@@ -817,14 +1271,14 @@ function formAsignacion(){
   const clientes=Object.entries(CLIENTES_NOMBRE).sort((a,b)=>a[1].localeCompare(b[1]));
   const cedis=Object.values(EQ_CEDIS).filter(c=>String(c.cliente_id)===String(f.cliente_id)).sort((a,b)=>a.nombre.localeCompare(b.nombre));
   const personas=rol=>EQ_PERSONAS.filter(d=>d.rol===rol).sort((a,b)=>a.nombre.localeCompare(b.nombre));
-  const st='style="padding:9px;border:1px solid var(--line);border-radius:10px;min-width:180px"';
-  return `<div class="note" style="margin-top:12px"><b>Ajuste manual de responsables</b>${f.origen?`<br><small>${esc(f.origen)}</small>`:""}
-   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-    <select id="asg-cli" ${st}><option value="">Cliente…</option>${clientes.map(([id,n])=>`<option value="${esc(id)}" ${sel(f.cliente_id,id)}>${esc(n)}</option>`).join("")}</select>
-    <select id="asg-ced" ${st}><option value="">CEDIS…</option>${cedis.map(c=>`<option value="${esc(c.id)}" ${sel(f.cedis_id,c.id)}>${esc(c.nombre)}</option>`).join("")}</select>
-    <select id="asg-sup" ${st}><option value="">Supervisor…</option>${personas("ih").map(d=>`<option value="${esc(d.id)}" ${sel(f.supervisor_id,d.id)}>${esc(d.nombre)} — ${esc(d.email)}</option>`).join("")}</select>
-    <select id="asg-coo" ${st}><option value="">Coordinador…</option>${personas("coordinador").map(d=>`<option value="${esc(d.id)}" ${sel(f.coordinador_id,d.id)}>${esc(d.nombre)} — ${esc(d.email)}</option>`).join("")}</select>
-    <button class="btn" id="asg-save">Guardar asignación</button><button class="btn ghost" id="asg-cancel">Cancelar</button></div><div id="asg-msg"></div></div>`
+  const field=(label,id,options)=>`<label class="doc-import-field">${label}<select id="${id}">${options}</select></label>`;
+  return `<div class="team-manual-assignment"><div class="doc-section-title"><div><h3>Ajuste manual de responsables</h3><p>${f.origen?esc(f.origen):"Define la pareja de responsables para un cliente y CEDIS."}</p></div></div>
+   <div class="team-manual-grid">
+    ${field("Cliente","asg-cli",`<option value="">Selecciona un cliente…</option>${clientes.map(([id,n])=>`<option value="${esc(id)}" ${sel(f.cliente_id,id)}>${esc(n)}</option>`).join("")}`)}
+    ${field("CEDIS","asg-ced",`<option value="">Selecciona un CEDIS…</option>${cedis.map(c=>`<option value="${esc(c.id)}" ${sel(f.cedis_id,c.id)}>${esc(c.nombre)}</option>`).join("")}`)}
+    ${field("Supervisor","asg-sup",`<option value="">Selecciona un supervisor…</option>${personas("ih").map(d=>`<option value="${esc(d.id)}" ${sel(f.supervisor_id,d.id)}>${esc(d.nombre)} — ${esc(d.email)}</option>`).join("")}`)}
+    ${field("Coordinador","asg-coo",`<option value="">Selecciona un coordinador…</option>${personas("coordinador").map(d=>`<option value="${esc(d.id)}" ${sel(f.coordinador_id,d.id)}>${esc(d.nombre)} — ${esc(d.email)}</option>`).join("")}`)}
+   </div><div class="team-detail-actions"><button class="btn" id="asg-save">Guardar asignación</button><button class="btn ghost" id="asg-cancel">Cancelar</button></div><div id="asg-msg"></div></div>`
 }
 function tablaAsignaciones(){
   const q=normTxt(ASG_FILTRO),nombre=id=>personaTxt(id);
@@ -832,8 +1286,10 @@ function tablaAsignaciones(){
     .filter(a=>!q||normTxt([a.cliente,a.cedis,a.sup,a.coo].join(" ")).includes(q))
     .sort((a,b)=>a.cliente.localeCompare(b.cliente)||a.cedis.localeCompare(b.cedis));
   const rows=filas.slice(0,200).map(a=>`<tr><td>${esc(a.cliente)}</td><td>${esc(a.cedis)}</td><td>${esc(a.sup)}</td><td>${esc(a.coo)}</td><td><button class="btn ghost sm" data-asg-edit="${esc(a.cliente_id)}|${esc(a.cedis_id)}">Editar</button> <button class="btn ghost sm" data-asg-del="${esc(a.cliente_id)}|${esc(a.cedis_id)}">Quitar</button></td></tr>`).join("");
-  return `<h3 style="margin-top:20px">Asignaciones actuales (${EQ_ASIG.length})</h3><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px"><input id="asg-q" placeholder="Buscar cliente, CEDIS o responsable" value="${esc(ASG_FILTRO)}" style="padding:9px;border:1px solid var(--line);border-radius:10px;min-width:260px"><button class="btn" id="asg-new">Agregar asignación</button></div>
-   <div style="overflow:auto;max-height:420px"><table><tr><th>Cliente</th><th>CEDIS</th><th>Supervisor</th><th>Coordinador</th><th></th></tr>${rows||'<tr><td colspan="5">Sin asignaciones.</td></tr>'}</table></div>${filas.length>200?`<small>Se muestran 200 de ${filas.length}. Usa el buscador para acotar.</small>`:""}`
+  return `<section class="doc-section team-assignments"><div class="doc-section-title"><div><h3>Asignaciones actuales</h3><p>Responsables por cliente y CEDIS.</p></div><span class="doc-count">${EQ_ASIG.length} ${EQ_ASIG.length===1?"asignación":"asignaciones"}</span></div>
+   ${EQ_ERR?`<div class="errbox" role="alert">No se pudieron cargar las asignaciones operativas: ${esc(EQ_ERR)}</div>`:""}
+   <div class="team-assignment-actions"><label class="doc-import-field team-search">Buscar asignación<input id="asg-q" placeholder="Cliente, CEDIS o responsable" value="${esc(ASG_FILTRO)}"></label><button class="btn" id="asg-new">Agregar asignación</button></div>
+   <div class="doc-table-wrap team-table-wrap team-assign-table" tabindex="0" role="region" aria-label="Asignaciones de responsables"><table><thead><tr><th>Cliente</th><th>CEDIS</th><th>Supervisor</th><th>Coordinador</th><th>Acciones</th></tr></thead><tbody>${rows||'<tr><td colspan="5">Sin asignaciones.</td></tr>'}</tbody></table></div>${filas.length>200?`<p class="note">Se muestran 200 de ${filas.length}. Usa el buscador para acotar.</p>`:""}</section>`
 }
 async function guardarAsignacionManual(){
   leerFormAsignacion();const f=ASG_FORM,box=$("asg-msg");
@@ -855,9 +1311,14 @@ async function quitarAsignacion(clave){
 function vistaImportarResponsables(){
   const result=CSV_ASIGNACIONES_RESULT;
   const errorRows=result?.errores||[];
-  const errorTable=errorRows.length?`<div style="overflow:auto;max-height:260px"><table><tr><th>Cliente</th><th>CEDIS</th><th>Correo supervisor</th><th>Correo coordinador</th><th>Resolución</th><th></th></tr>${errorRows.slice(0,100).map((row,i)=>`<tr><td>${esc(row.cliente)}</td><td>${esc(row.cedis)}</td><td>${esc(row.supervisor)}</td><td>${esc(row.coordinador)}</td><td>Cliente ${row.cliente_resuelto?"✓":"×"} · CEDIS ${row.cedis_resuelto?"✓":"×"} · Supervisor ${row.supervisor_resuelto?"✓":"×"} · Coordinador ${row.coordinador_resuelto?"✓":"×"}</td><td><button class="btn sm" data-asg-fix="${i}">Corregir</button></td></tr>`).join("")}</table></div>${errorRows.length>100?`<small>Se muestran 100 de ${errorRows.length} filas con problemas.</small>`:""}`:"";
-  const resultHtml=result?`<div class="note">Asignaciones aplicadas: <b>${esc(result.importadas||0)}</b> · Filas para corregir: <b>${esc(errorRows.length)}</b></div>${errorTable}`:"";
-  return `<section style="padding:12px"><h3>Importar responsables por cliente y CEDIS</h3><p>Solo se usan Cliente, CEDIS, <b>CORREO SUPERVISOR</b> y <b>CORREO COORDINADOR</b> (un correo @chazki.com por columna). La columna general de correos y nombres no se usa. Las filas sin coincidencia exacta se informan para que las corrijas manualmente.</p><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input id="asignaciones-csv" type="file" accept=".csv,text/csv"><button class="btn" id="asignaciones-import">Importar CSV</button></div><div id="asignaciones-error"></div>${resultHtml}${formAsignacion()}${tablaAsignaciones()}</section>`
+  const errorTable=errorRows.length?`<div class="doc-table-wrap team-table-wrap team-error-table" tabindex="0" role="region" aria-label="Filas de importación que requieren corrección"><table><thead><tr><th>Fila CSV</th><th>Cliente</th><th>CEDIS</th><th>Correo supervisor</th><th>Correo coordinador</th><th>Resolución</th><th>Acción</th></tr></thead><tbody>${errorRows.slice(0,100).map((row,i)=>`<tr><td>${esc(row.fila??"—")}</td><td>${esc(row.cliente)}</td><td>${esc(row.cedis)}</td><td>${esc(row.supervisor)}</td><td>${esc(row.coordinador)}</td><td>Cliente ${row.cliente_resuelto?"✓":"×"} · CEDIS ${row.cedis_resuelto?"✓":"×"} · Supervisor ${row.supervisor_resuelto?"✓":"×"} · Coordinador ${row.coordinador_resuelto?"✓":"×"}${row.motivo?`<br><small>${esc(row.motivo)}</small>`:""}</td><td><button class="btn sm" data-asg-fix="${i}">Corregir</button></td></tr>`).join("")}</tbody></table></div>${errorRows.length>100?`<p class="note">Se muestran 100 de ${errorRows.length} filas con problemas.</p>`:""}`:"";
+  const resultHtml=result?`<div class="team-import-result"><p class="note">Asignaciones aplicadas: <b>${esc(result.importadas||0)}</b> · Filas para corregir: <b>${esc(errorRows.length)}</b></p>${errorTable}</div>`:"";
+  return `<section class="doc-import team-import">
+    <div class="doc-import-head"><span class="doc-eyebrow">Carga masiva</span><h3>Importar responsables por cliente y CEDIS</h3><p>El CSV usa Cliente, CEDIS, <b>CORREO SUPERVISOR</b> y <b>CORREO COORDINADOR</b> (un correo @chazki.com por columna). Cada fila se procesa por separado; los errores se muestran para corregirlos sin bloquear las demás asignaciones.</p></div>
+    <div class="team-import-controls"><label class="doc-import-field">Archivo CSV<input id="asignaciones-csv" type="file" accept=".csv,text/csv"></label><button class="btn" id="asignaciones-import">Importar CSV</button></div>
+    <div id="asignaciones-error"></div>${resultHtml}
+    ${formAsignacion()}${tablaAsignaciones()}
+  </section>`
 }
 function vistaCambiosTarifario(){
   if(ROL!=="master")return '<div class="errbox">Solo la cuenta maestra puede acceder.</div>';
@@ -873,8 +1334,9 @@ async function importarAsignaciones(){
   try{
     const filas=parseCsvTable(await file.text());
     if(filas.length>5000)throw new Error("El archivo supera el límite de 5,000 filas.");
-    const {data,error}=await sb.rpc("importar_asignaciones_operativas",{p_filas:filas});
-    if(error)throw error;
+    const {data,error}=await sb.rpc("importar_asignaciones_por_correo",{p_filas:filas});
+    if(error)throw new Error(error.message+(/PGRST202|42883/.test(error.code||"")?" — Ejecuta operational-assignments-by-email.sql en Supabase para activar la importación independiente por correo.":""));
+    if(!data||!Number.isInteger(data.importadas)||!Array.isArray(data.errores))throw new Error("La importación devolvió una respuesta inválida.");
     CSV_ASIGNACIONES_RESULT=data;await cargarAsignacionesEquipo();render();toast("Importación terminada. Revisa las filas que no tuvieron coincidencia única.")
   }catch(error){box.innerHTML=`<div class="errbox">${esc(error.message||"No se pudo importar el archivo.")}</div>`}
   finally{button.disabled=false}
@@ -1043,9 +1505,73 @@ function vistaBajas(){
   return `<h3 style="margin:12px 8px 0">Solicitudes de desactivación de drivers</h3><small style="padding:0 8px">Al completar las autorizaciones, el driver se desactiva sin eliminar su perfil, historial ni relación con el flotillero.</small><table><tr><th>Driver</th><th>Flotillero</th><th>Motivo</th><th>Autorizaciones</th><th>Estatus</th><th></th></tr>${f||'<tr><td colspan="6">Sin solicitudes.</td></tr>'}</table>`}
 async function resolverBaja(id,ok){const {data,error}=await sb.rpc("resolver_desactivacion_asignada",{p_id:id,p_aprobar:ok,p_nota:null});
   if(error){toast(error.message);return}await cargaExtra();render();toast(ok?"Autorización registrada ("+data+")":"Solicitud rechazada")}
+async function cargarRevisionesCoppel(){
+  COPPEL_REVISIONES=[];COPPEL_REVISIONES_ERR="";
+  const {data,error}=await sb.rpc("coppel_peak_listar_solicitudes");
+  if(error){COPPEL_REVISIONES_ERR=error.message;return}
+  if(!Array.isArray(data)){COPPEL_REVISIONES_ERR="La respuesta de solicitudes no es válida";return}
+  COPPEL_REVISIONES=data;
+}
+async function cargarAjustesCoppel(){
+  COPPEL_AJUSTES=[];COPPEL_AJUSTES_ERR="";COPPEL_DESTINOS=[];COPPEL_DESTINOS_ERR="";
+  const {data,error}=await sb.rpc("coppel_peak_listar_ajustes");
+  if(error)COPPEL_AJUSTES_ERR=error.message;
+  else if(!Array.isArray(data))COPPEL_AJUSTES_ERR="La respuesta de ajustes no es válida";
+  else COPPEL_AJUSTES=data;
+  try{
+    COPPEL_DESTINOS=await fetchPaged(()=>sb.from("cedis").select("id,nombre,cliente_id,activo").eq("activo",true).order("nombre"));
+  }catch(error){COPPEL_DESTINOS_ERR=error.message||"No se pudieron cargar los CEDIS de destino"}
+}
+async function autorizarAjusteCoppel(id,boton){
+  const ajuste=COPPEL_AJUSTES.find(x=>String(x.id)===String(id)),selector=$(`coppel-otras-${id}`);
+  if(!ajuste||!selector||!["si","no"].includes(selector.value)){toast("Selecciona si se permiten otras cuentas");return}
+  if(!confirm("¿Autorizar este ajuste? La autorización no aplica todavía el descuento o abono."))return;
+  boton.disabled=true;
+  const {error}=await sb.rpc("coppel_peak_autorizar_ajuste",{p_id:id,p_permitir_otras_cuentas:selector.value==="si"});
+  if(error){boton.disabled=false;toast("No se pudo autorizar: "+error.message);return}
+  await cargarAjustesCoppel();if(tab==="a")render();toast("Autorización registrada; el ajuste aún no se ha aplicado.");
+}
+async function autorizarDestinoCoppel(id,boton){
+  const ajuste=COPPEL_AJUSTES.find(x=>String(x.id)===String(id)),selector=$(`coppel-destino-${id}`);
+  if(!ajuste||!selector?.value){toast("Selecciona un CEDIS de destino");return}
+  if(!confirm("¿Autorizar este CEDIS como destino del ajuste? Esto no realiza ningún pago."))return;
+  boton.disabled=true;
+  const {error}=await sb.rpc("coppel_peak_autorizar_destino_ajuste",{p_ajuste_id:id,p_cedis_id:selector.value});
+  if(error){boton.disabled=false;toast("No se pudo autorizar el destino: "+error.message);return}
+  await cargarAjustesCoppel();if(tab==="a")render();toast("Destino autorizado; el ajuste aún no se ha aplicado.");
+}
+function vistaAjustesCoppel(){
+  if(COPPEL_AJUSTES_ERR)return `<div class="errbox">No se pudieron cargar los ajustes: ${esc(COPPEL_AJUSTES_ERR)}</div>`;
+  const destinos=COPPEL_DESTINOS.filter(c=>cuentaDe(CLIENTES_NOMBRE[String(c.cliente_id)])!=="COPPEL")
+    .map(c=>`<option value="${esc(c.id)}">${esc(CLIENTES_NOMBRE[String(c.cliente_id)]||"Cliente "+c.cliente_id)} · ${esc(c.nombre)}</option>`).join("");
+  const filas=COPPEL_AJUSTES.map(a=>{
+    const driver=DRV.find(d=>d.id===a.driver_id),proveedor=PRV.find(p=>String(p.id)===String(a.proveedor_id));
+    const autorizados=(a.destinos||[]).map(d=>COPPEL_DESTINOS.find(c=>String(c.id)===String(d.cedis_id))?.nombre||"CEDIS "+d.cedis_id).join(", ");
+    const decision=a.estado==="pendiente_revision"&&ROL==="coordinador"?`<select id="coppel-otras-${esc(a.id)}"><option value="">¿Permitir otras cuentas?</option><option value="no">Solo COPPEL</option><option value="si">Permitir otras cuentas</option></select> <button class="btn sm" data-coppel-autorizar="${esc(a.id)}">Autorizar ajuste</button>`:"";
+    const destino=a.estado==="autorizado"&&a.permitir_otras_cuentas?`${COPPEL_DESTINOS_ERR?`<div class="errbox">${esc(COPPEL_DESTINOS_ERR)}</div>`:`<select id="coppel-destino-${esc(a.id)}"><option value="">Selecciona CEDIS de otra cuenta</option>${destinos}</select> <button class="btn ghost sm" data-coppel-destino="${esc(a.id)}">Autorizar destino</button>`}`:"";
+    return `<tr><td>${esc(driver?.nombre||a.driver_id)}</td><td>${esc(proveedor?.nombre||"Proveedor "+a.proveedor_id)}</td><td>${esc(a.lunes_origen)}</td><td>${esc(a.tipo)} · ${esc(fm(a.monto_base))}<br><small>${esc(a.motivo)}</small></td><td>${a.estado==="autorizado"?"Autorizado; sin aplicar":"Pendiente de autorización"}${autorizados?`<br><small>Destinos: ${esc(autorizados)}</small>`:""}</td><td>${decision}${destino}</td></tr>`;
+  }).join("");
+  return `<div class="note">Las autorizaciones son de revisión: el descuento o abono todavía no se aplica automáticamente.</div><table><tr><th>Driver</th><th>Proveedor original</th><th>Semana</th><th>Ajuste base</th><th>Estado</th><th>Acción</th></tr>${filas||'<tr><td colspan="6">Sin ajustes accesibles.</td></tr>'}</table>`;
+}
+async function abrirRevisionCoppel(id){
+  const solicitud=COPPEL_REVISIONES.find(x=>String(x.id)===String(id));
+  if(!solicitud){toast("La solicitud ya no está disponible");return}
+  const m=$("modal");m.classList.remove("hide");
+  m.innerHTML=`<div class="box"><h2>Solicitud de precierre COPPEL</h2><div>${esc(solicitud.driver_nombre)} · semana ${esc(solicitud.lunes)}</div><div id="coppel-revision-result">Cargando...</div><div style="margin-top:14px"><button class="btn ghost" id="coppel-revision-close">Cerrar</button></div></div>`;
+  $("coppel-revision-close").onclick=()=>m.classList.add("hide");
+  const {data,error}=await sb.rpc("coppel_peak_consultar_precierre",{p_driver_id:solicitud.driver_id,p_lunes:solicitud.lunes});
+  const resultado=$("coppel-revision-result");if(!resultado)return;
+  if(error){resultado.innerHTML=`<div class="errbox">No se pudo consultar la semana: ${esc(error.message)}</div>`;return}
+  if(!["completo","cerrada"].includes(data?.estado)){
+    resultado.innerHTML='<div class="errbox">La semana cambió o ya no está dentro de tu alcance. Solicita revisión a Operaciones.</div>';return;
+  }
+  mostrarPrecierreCoppel(resultado,solicitud.driver_id,solicitud.lunes,data);
+}
 function vistaAprobar(){
+  if(ROL==="finanzas")return "";
   const f=PEND.map(q=>{const r=q.rutas||{};return `<tr><td>${esc(r.id_ruta||q.ruta_id)}</td><td>${esc(r.drivers?r.drivers.nombre:"")}</td><td>${esc(r.cedis?r.cedis.clientes.nombre+" · "+r.cedis.nombre:"")}</td><td>${esc(r.entregados)}/${esc(r.paquetes_asignados)}</td><td>No aplicar penalización al pago<br><small>${esc(q.motivo)}</small></td><td><button class="btn ghost sm" data-det="${esc(q.ruta_id)}">Detalle</button> ${esCoord()?`<button class="btn sm" data-ap="${esc(q.id)}">Aprobar</button> <button class="btn ghost sm" data-rc="${esc(q.id)}">Rechazar</button>`:'<span class="pill w">En espera</span>'}</td></tr>`}).join("");
-  return `<h3 style="margin:12px 8px 0">Excepciones por aprobar</h3><table><tr><th>Ruta</th><th>Driver</th><th>Cliente · CEDIS</th><th>Entreg.</th><th>Solicitud</th><th></th></tr>${f||'<tr><td colspan="6">Nada pendiente.</td></tr>'}</table>`}
+  const revisiones=COPPEL_PEAK_ENABLED&&esCoord()?`<h3 style="margin:16px 8px 0">Revisiones de precierre COPPEL</h3>${COPPEL_REVISIONES_ERR?`<div class="errbox">No se pudieron cargar las solicitudes: ${esc(COPPEL_REVISIONES_ERR)}</div>`:`<table><tr><th>Driver</th><th>Semana</th><th>Solicitada</th><th></th></tr>${COPPEL_REVISIONES.map(s=>`<tr><td>${esc(s.driver_nombre)}</td><td>${esc(s.lunes)}</td><td>${esc(dd(s.solicitado_en))}</td><td><button class="btn ghost sm" data-coppel-revision="${esc(s.id)}">Consultar</button></td></tr>`).join("")||'<tr><td colspan="4">No hay solicitudes accesibles pendientes.</td></tr>'}</table>`}`:"";
+  return `<h3 style="margin:12px 8px 0">Excepciones por aprobar</h3><table><tr><th>Ruta</th><th>Driver</th><th>Cliente · CEDIS</th><th>Entreg.</th><th>Solicitud</th><th></th></tr>${f||'<tr><td colspan="6">Nada pendiente.</td></tr>'}</table>${revisiones}`}
 async function registrarAuditoriaValidacion(rutaId){
   return sb.rpc("registrar_validacion_liquidacion",{p_ruta_id:Number(rutaId)});
 }
@@ -1084,7 +1610,7 @@ function detalleEquipo(d){
     const mias=EQ_ASIG.filter(a=>a.supervisor_id===d.id);
     if(!mias.length)return "<small>Sin CEDIS asignados.</small>";
     const coord=a=>personaTxt(a.coordinador_id);
-    return `<b>CEDIS a su cargo (${mias.length})</b><table><tr><th>Cliente</th><th>CEDIS</th><th>Coordinador</th></tr>${mias.map(a=>`<tr><td>${esc(nombreCliente(a.cliente_id))}</td><td>${esc(nombreCedis(a.cedis_id))}</td><td>${esc(coord(a))}</td></tr>`).join("")}</table>`
+    return `<b>CEDIS a su cargo (${mias.length})</b><div class="doc-table-wrap team-nested-table" tabindex="0" role="region" aria-label="CEDIS y coordinadores asignados"><table><tr><th>Cliente</th><th>CEDIS</th><th>Coordinador</th></tr>${mias.map(a=>`<tr><td>${esc(nombreCliente(a.cliente_id))}</td><td>${esc(nombreCedis(a.cedis_id))}</td><td>${esc(coord(a))}</td></tr>`).join("")}</table></div>`
   }
   if(d.rol==="coordinador"){
     const mias=EQ_ASIG.filter(a=>a.coordinador_id===d.id);
@@ -1098,23 +1624,43 @@ function detalleEquipo(d){
     const sup=new Set(mias.map(a=>a.supervisor_id));
     const supNombre=personaTxt;
     const filas=[...cuentas].map(([k,c])=>`<tr><td>${esc(nombreCliente(k))}</td><td>${c.cedis.map(esc).join(", ")}</td><td>${[...c.supervisores].map(id=>esc(supNombre(id))).join(", ")}</td></tr>`).join("");
-    return `<b>Cuentas a su cargo (${cuentas.size})</b><table><tr><th>Cliente</th><th>CEDIS</th><th>Supervisores</th></tr>${filas}</table><p><b>Supervisores que le responden (${sup.size}):</b> ${[...sup].map(id=>esc(supNombre(id))).join(", ")}</p>`
+    return `<b>Cuentas a su cargo (${cuentas.size})</b><div class="doc-table-wrap team-nested-table" tabindex="0" role="region" aria-label="Cuentas y supervisores asignados"><table><tr><th>Cliente</th><th>CEDIS</th><th>Supervisores</th></tr>${filas}</table></div><p><b>Supervisores que le responden (${sup.size}):</b> ${[...sup].map(id=>esc(supNombre(id))).join(", ")}</p>`
   }
   return "<small>Este rol no tiene cuentas ni CEDIS asignados.</small>"
 }
 function vistaEquipo(){
-  const st='style="padding:9px;border:1px solid var(--line);border-radius:10px"';
-  const eq=DRV.filter(d=>["master","ops","coordinador","ih","finanzas"].includes(d.rol)).map(d=>{
+  const accesos=DRV.filter(d=>["master","ops","coordinador","ih","finanzas"].includes(d.rol));
+  const invitaciones=window.INV||[];
+  const st='class="doc-import-field"';
+  const eq=accesos.map(d=>{
     const expandible=["ih","coordinador"].includes(d.rol),abierto=EQ_ABIERTO===d.id;
-    return `<tr><td>${expandible?`<button class="btn ghost sm" data-eq-d="${esc(d.id)}">${abierto?"▾":"▸"} ${esc(d.nombre)}</button>`:esc(d.nombre)}</td><td>${ROLES_TXT[d.rol]}</td><td>${esc(d.estatus)}</td></tr>${abierto?`<tr><td colspan="3">${detalleEquipo(d)}</td></tr>`:""}`}).join("");
-  const inv=(window.INV||[]).map(i=>`<tr><td>${esc(i.email)}</td><td>${ROLES_TXT[i.rol]}</td></tr>`).join("");
-  return `<h3 style="margin:12px 8px 0">Dar acceso al personal</h3><div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px">
-   <input id="eq-m" type="email" placeholder="correo@chazki.com" ${st}>
-   <select id="eq-r" ${st}>${["coordinador","ih","finanzas","ops","master"].map(r=>`<option value="${r}">${ROLES_TXT[r]}</option>`).join("")}</select>
-   <button class="btn" id="eq-ok">Asignar</button></div>
-   <small style="padding:0 8px">Entra con Google; el rol se activa en su primer ingreso (o al instante si ya entró).</small>
-   <h3 style="margin:12px 8px 0">Equipo con acceso</h3><table><tr><th>Nombre</th><th>Rol</th><th>Estatus</th></tr>${eq}</table>
-   <h3 style="margin:12px 8px 0">Invitaciones</h3><table><tr><th>Correo</th><th>Rol</th></tr>${inv||'<tr><td colspan="2">Sin invitaciones.</td></tr>'}</table>${vistaImportarResponsables()}`}
+    return `<tr><td>${expandible?`<button class="btn ghost sm" data-eq-d="${esc(d.id)}" aria-expanded="${abierto}">${abierto?"▾":"▸"} ${esc(d.nombre)}</button>`:esc(d.nombre)}</td><td>${esc(ROLES_TXT[d.rol]||d.rol)}</td><td>${esc(d.estatus||"—")}</td></tr>${abierto?`<tr><td class="team-details-cell" colspan="3">${detalleEquipo(d)}</td></tr>`:""}`}).join("");
+  const inv=invitaciones.map(i=>`<tr><td>${esc(i.email)}</td><td>${esc(ROLES_TXT[i.rol]||i.rol||"—")}</td></tr>`).join("");
+  return `<div class="doc-page team-page">
+    <div class="doc-intro"><span class="doc-eyebrow">Administración de accesos</span><h3>Equipo administrativo</h3><p>Asigna roles, consulta el acceso del personal y organiza las responsabilidades por cliente y CEDIS.</p></div>
+    <div class="doc-summary" aria-label="Resumen del equipo administrativo">
+      <div class="doc-metric"><span>Personal con acceso</span><strong>${accesos.length}</strong><small>Roles administrativos activos o asignados</small></div>
+      <div class="doc-metric"><span>Invitaciones registradas</span><strong>${invitaciones.length}</strong><small>Correos en la lista de invitaciones</small></div>
+      <div class="doc-metric"><span>Asignaciones operativas</span><strong>${EQ_ERR?"—":EQ_ASIG.length}</strong><small>Relaciones de cliente y CEDIS</small></div>
+    </div>
+    <section class="doc-import">
+      <div class="doc-import-head"><span class="doc-eyebrow">Nuevo acceso</span><h3>Dar acceso al personal</h3><p>El personal inicia sesión con Google Workspace. El rol se activa en su primer ingreso o al instante si ya tiene cuenta.</p></div>
+      <div class="doc-import-grid team-form-grid">
+        <label ${st}>Correo de Chazki<input id="eq-m" type="email" placeholder="nombre@chazki.com" autocomplete="email"></label>
+        <label ${st}>Rol administrativo<select id="eq-r">${["coordinador","ih","finanzas","ops","master"].map(r=>`<option value="${r}">${ROLES_TXT[r]}</option>`).join("")}</select></label>
+      </div>
+      <div class="doc-import-footer team-form-footer"><p class="note">Verifica el correo y el nivel de acceso antes de asignar el rol.</p><button class="btn" id="eq-ok">Asignar acceso</button></div>
+    </section>
+    <section class="doc-section">
+      <div class="doc-section-title"><div><h3>Equipo con acceso</h3><p>Personal administrativo y estado de su cuenta.</p></div><span class="doc-count">${accesos.length} ${accesos.length===1?"persona":"personas"}</span></div>
+      <div class="doc-table-wrap team-table-wrap" tabindex="0" role="region" aria-label="Personal administrativo con acceso"><table><thead><tr><th>Nombre</th><th>Rol</th><th>Estatus</th></tr></thead><tbody>${eq||'<tr><td colspan="3">No hay personal administrativo registrado.</td></tr>'}</tbody></table></div><p class="doc-scroll-hint">Desliza horizontalmente para consultar todas las columnas.</p>
+    </section>
+    <section class="doc-section team-invites">
+      <div class="doc-section-title"><div><h3>Invitaciones al equipo</h3><p>Correos con un rol asignado para acceder al panel.</p></div><span class="doc-count">${invitaciones.length} ${invitaciones.length===1?"invitación":"invitaciones"}</span></div>
+      <div class="doc-table-wrap team-table-wrap" tabindex="0" role="region" aria-label="Invitaciones de acceso administrativo"><table><thead><tr><th>Correo</th><th>Rol asignado</th></tr></thead><tbody>${inv||'<tr><td colspan="2">Sin invitaciones.</td></tr>'}</tbody></table></div><p class="doc-scroll-hint">Desliza horizontalmente para consultar todas las columnas.</p>
+    </section>
+    ${vistaImportarResponsables()}
+  </div>`}
 async function asignarRol(){const m=$("eq-m").value.trim().toLowerCase();
   if(!/^[^@\s]+@chazki\.com$/.test(m)){toast("Solo correos @chazki.com");return}
   const {data,error}=await sb.rpc("asignar_rol",{p_email:m,p_rol:$("eq-r").value});
@@ -1221,7 +1767,7 @@ const INV_EST={pendiente_aprobacion:["Por aprobar","w"],enviada:["Registrada · 
 async function cargarInvitaciones(){
   INVR_ERR="";
   try{
-  const [i,c,p]=await Promise.all([sb.from("invitaciones_red").select("*").order("creado_en",{ascending:false}).limit(300),sb.from("cedis").select("id,nombre,cliente_id").order("nombre"),fetchPaged(()=>sb.rpc("listar_flotilleros_invitacion")).then(data=>({data,error:null}),error=>({data:null,error}))]);
+  const [i,c,p]=await Promise.all([listarInvitacionesRed(sb).then(data=>({data,error:null}),error=>({data:null,error})),sb.from("cedis").select("id,nombre,cliente_id").order("nombre"),fetchPaged(()=>sb.rpc("listar_flotilleros_invitacion")).then(data=>({data,error:null}),error=>({data:null,error}))]);
   if(i.error)INVR_ERR="No se pudieron cargar las invitaciones. Un administrador debe ejecutar network-invitations.sql en el editor SQL de Supabase y verificar los permisos: "+i.error.message;
   if(c.error)INVR_ERR+=(INVR_ERR?" ":"")+"No se pudieron cargar los CEDIS: "+c.error.message;
   if(p.error)INVR_ERR+=(INVR_ERR?" ":"")+"No se pudieron cargar los flotilleros. Verifica invitaciones-flotillero-pendiente.sql en Supabase: "+p.error.message;
@@ -1232,9 +1778,12 @@ async function cargarInvitaciones(){
   }
   INVR_AUD=[];
   if(INVR.length){
-    const {data,error}=await sb.from("invitaciones_red_auditoria").select("invitacion_id,evento,actor_id,registrado_en,estado").in("invitacion_id",INVR.map(x=>x.id)).order("registrado_en",{ascending:false});
-    if(error)INVR_ERR+=(INVR_ERR?" ":"")+"No se pudo cargar el registro de avisos. Verifica invitation-status-audit.sql en Supabase: "+error.message;
-    else INVR_AUD=data||[];
+    for(let desde=0;desde<INVR.length;desde+=100){
+      try{
+        const data=await fetchPaged(()=>sb.from("invitaciones_red_auditoria").select("invitacion_id,evento,actor_id,registrado_en,estado").in("invitacion_id",INVR.slice(desde,desde+100).map(x=>x.id)).order("registrado_en",{ascending:false}).order("id",{ascending:false}));
+        INVR_AUD.push(...data);
+      }catch(error){INVR_ERR+=(INVR_ERR?" ":"")+"No se pudo cargar el registro de avisos. Verifica invitation-status-audit.sql en Supabase: "+error.message;break}
+    }
   }
   }catch(error){INVR=[];INVR_CEDIS=[];INVR_FLOTAS=[];INVR_AUD=[];INVR_ERR="No se pudieron cargar las invitaciones y flotilleros: "+(error.message||error)}
   finally{INVR_LOADING=false}
@@ -1272,33 +1821,50 @@ function vistaInvitaciones(){
   const fila=x=>{const e=INV_EST[x.estatus]||[x.estatus,"w"];
     const acc=x.estatus==="pendiente_aprobacion"&&x.invitado_por_rol==="flotillero"?`<button class="btn sm" data-inv-ok="${esc(x.id)}">Aprobar</button> <button class="btn ghost sm" data-inv-no="${esc(x.id)}">Rechazar</button>`
       :["enviada","aceptada"].includes(x.estatus)?`<a class="btn ghost sm" data-inv-compartir="${esc(x.id)}" data-canal="whatsapp" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(mensajeInvitacion(x))}">WhatsApp</a> <a class="btn ghost sm" data-inv-compartir="${esc(x.id)}" data-canal="correo" target="_blank" rel="noopener" href="${esc(gmailInvitacion(x))}">Preparar / reenviar correo</a>${x.estatus==="enviada"?` <button class="btn ghost sm" data-inv-editar="${esc(x.id)}">Editar invitación</button> <button class="btn ghost sm" data-inv-x="${esc(x.id)}">Cancelar</button>`:""}`
-      :x.estatus==="pendiente_aprobacion"?`<button class="btn ghost sm" data-inv-x="${esc(x.id)}">Cancelar</button>`:"";
+      :x.estatus==="pendiente_aprobacion"?`<button class="btn ghost sm" data-inv-x="${esc(x.id)}">Cancelar</button>`
+      :x.estatus==="cancelada"?`<button class="btn ghost sm" data-inv-eliminar="${esc(x.id)}">Eliminar de la lista</button>`:"";
     const prov=x.proveedor_id?(PRV.find(p=>p.id===x.proveedor_id)||INVR_FLOTAS.find(p=>p.tipo==="proveedor"&&String(p.id)===String(x.proveedor_id))):INVR_FLOTAS.find(p=>p.tipo==="invitacion"&&String(p.id)===String(x.invitacion_flotillero_id));
     const auditoria=INVR_AUD.filter(a=>a.invitacion_id===x.id).map(a=>{
       const avisos=avisosEstadoInvitacion(a.estado,new Date(a.registrado_en));
       const evento={solicitud:"Solicitud registrada",invitacion:"Invitación registrada",correo:"Correo preparado",whatsapp:"WhatsApp preparado"}[a.evento]||"Actividad registrada";
-      return avisos.length?`<br><small>${esc(evento)} ${esc(new Date(a.registrado_en).toLocaleString("es-MX"))} por ${esc(a.actor_id)}: ${esc(avisos.join(" "))}</small>`:"";
+      return avisos.length||["correo","whatsapp"].includes(a.evento)?`<br><small>${esc(evento)} ${esc(new Date(a.registrado_en).toLocaleString("es-MX"))} por ${esc(a.actor_id)}${avisos.length?": "+esc(avisos.join(" ")):" (no confirma envío)"}</small>`:"";
     }).join("");
-    return `<tr><td>${esc(x.nombre||"—")}<br><small>${esc(x.email)}</small></td><td>${esc(INV_TIPO[x.tipo]||x.tipo)}${x.esquema?`<br><small>${esc(x.esquema)}</small>`:""}${prov?`<br><small>Flotilla: ${esc(prov.nombre)}</small>`:""}</td><td>${x.cedis_id?esc(cedisTxt(x.cedis_id)):"—"}</td><td>${x.invitado_por_rol==="flotillero"?"Flotillero":"Chazki"}</td><td><span class="pill ${e[1]}">${esc(e[0])}</span>${x.tipo==="driver"&&x.invitacion_flotillero_id&&!x.proveedor_id&&x.estatus==="enviada"?`<br><small>Espera el registro del flotillero. Si ya se registró, contacta al administrador.</small>`:""}${x.motivo?`<br><small>${esc(x.motivo)}</small>`:""}${auditoria}</td><td>${acc}</td></tr>`};
-  const st='style="padding:9px;border:1px solid var(--line);border-radius:10px"';
+    const clase=x.estatus==="cancelada"?"missing":e[1]==="ok"?"approved":e[1]==="bad"?"rejected":"pending";
+    return `<tr><td>${esc(x.nombre||"—")}<br><small>${esc(x.email)}</small></td><td>${esc(INV_TIPO[x.tipo]||x.tipo)}${x.esquema?`<br><small>${esc(x.esquema)}</small>`:""}${prov?`<br><small>Flotilla: ${esc(prov.nombre)}</small>`:""}</td><td>${x.cedis_id?esc(cedisTxt(x.cedis_id)):"—"}</td><td>${x.invitado_por_rol==="flotillero"?"Flotillero":"Chazki"}</td><td><span class="doc-status doc-status-${clase}">${esc(e[0])}</span>${x.tipo==="driver"&&x.invitacion_flotillero_id&&!x.proveedor_id&&x.estatus==="enviada"?`<br><small>Espera el registro del flotillero. Si ya se registró, contacta al administrador.</small>`:""}${x.motivo?`<br><small>${esc(x.motivo)}</small>`:""}${auditoria}</td><td>${correoInvitacionHtml(x)}</td><td><div class="inv-actions">${acc}</div></td></tr>`};
+  const tabla=(filas,nombre)=>`<div class="doc-table-wrap" tabindex="0" role="region" aria-label="${nombre}"><table><thead><tr><th>Invitado</th><th>Categoría</th><th>CEDIS</th><th>Origen</th><th>Estatus</th><th>Correo de validación</th><th>Acciones</th></tr></thead><tbody>${filas.map(fila).join("")||`<tr><td colspan="7">${INVR_ERR?"Consulta con incidencias; no se puede confirmar la lista.":"Sin invitaciones."}</td></tr>`}</tbody></table></div><p class="doc-scroll-hint">Desliza horizontalmente para ver toda la tabla.</p>`;
+  const vigentes=INVR.filter(x=>x.estatus!=="cancelada"),canceladas=INVR.filter(x=>x.estatus==="cancelada");
   const cedOpts=`<option value="">CEDIS (opcional)…</option>`+INVR_CEDIS.map(c=>`<option value="${esc(c.id)}">${esc((CLIENTES_NOMBRE[String(c.cliente_id)]||"")+" · "+c.nombre)}</option>`).join("");
   const flotOpts=`<option value="">${INVR_LOADING?"Cargando flotilleros…":INVR_FLOTAS.length?"Selecciona un flotillero…":"No hay flotilleros activos o invitados disponibles"}</option>`+INVR_FLOTAS.map(p=>`<option value="${esc(p.tipo)}:${esc(p.id)}">${esc(p.nombre)} · ${p.tipo==="invitacion"?"invitado, pendiente de registro":"activo"}</option>`).join("");
-  return `${INVR_ERR?`<div class="errbox">${esc(INVR_ERR)}</div>`:""}
-    <h3 style="margin:12px 8px 0">Invitar flotillero o driver</h3>
-    ${INVR_LOADING?'<p style="padding:0 8px" role="status">Cargando invitaciones y flotilleros…</p>':""}
-    <fieldset ${INVR_LOADING?"disabled":""} style="display:flex;gap:8px;flex-wrap:wrap;padding:8px;border:0;margin:0">
-      <input id="iv-n" placeholder="Nombre o razón social" ${st} style="flex:2;min-width:180px">
-      <input id="iv-m" type="email" placeholder="Correo" ${st} style="flex:2;min-width:200px">
-      <select id="iv-t" ${st}><option value="flotillero">Flotillero</option><option value="independiente">Driver independiente</option><option value="driver"${INV_PRESELECCION?" selected":""}>Driver de flotillero</option></select>
-      <select id="iv-r" ${st}><option value="">Esquema…</option><option value="FACTURA">Con factura</option><option value="SIN FACTURA">Libre (sin factura)</option></select>
-      <select id="iv-c" ${st}>${cedOpts}</select>
-      <select id="iv-p" ${st} class="hide" disabled>${flotOpts}</select>
-      <button class="btn" id="iv-ok">Invitar</button></fieldset>
-    <small style="padding:0 8px">Para vincular desde el inicio, selecciona «Driver de flotillero» y después el flotillero activo o invitado. Si el flotillero aún no se registra, el driver debe esperar a que complete su registro. El correo se abre preparado en Gmail y se envía manualmente. Para flotilleros e independientes, supervisores y coordinadores deben elegir un CEDIS asignado.</small>
-    <h3 style="margin:14px 8px 0">Invitaciones y solicitudes (${esc(pend.length)} por aprobar; hasta 300 recientes)</h3>
-    <table><tr><th>Invitado</th><th>Categoría</th><th>CEDIS</th><th>Origen</th><th>Estatus</th><th></th></tr>${INVR.map(fila).join("")||'<tr><td colspan="6">Sin invitaciones.</td></tr>'}</table>`}
+  const sinResumen=INVR_LOADING||INVR_ERR;
+  return `<div class="doc-page inv-page">
+    <div class="doc-intro"><span class="doc-eyebrow">Gestión de incorporaciones</span><h3>Invitaciones y seguimiento</h3><p>Administra el acceso de flotilleros y drivers, las aprobaciones y la validación del correo.</p></div>
+    ${INVR_ERR?`<div class="errbox" role="alert">${esc(INVR_ERR)}</div>`:""}
+    <div class="doc-summary" aria-label="Resumen de invitaciones">
+      <div class="doc-metric"><span>No canceladas</span><strong>${sinResumen?"—":vigentes.length}</strong><small>Invitaciones y solicitudes</small></div>
+      <div class="doc-metric"><span>Por aprobar</span><strong>${sinResumen?"—":pend.length}</strong><small>Solicitudes de flotilleros</small></div>
+      <div class="doc-metric"><span>Correo validado</span><strong>${sinResumen?"—":vigentes.filter(x=>x.correo_validado_en).length}</strong><small>Entre las no canceladas</small></div>
+    </div>
+    <section class="doc-import">
+    <div class="doc-import-head"><span class="doc-eyebrow">Nueva incorporación</span><h3>Invitar flotillero o driver</h3><p>Define la categoría y la relación operativa del invitado.</p></div>
+    ${INVR_LOADING?'<p role="status">Cargando invitaciones y flotilleros…</p>':""}
+    <fieldset ${INVR_LOADING?"disabled":""} class="inv-form">
+      <legend class="inv-sr-only">Datos de la invitación</legend>
+      <div class="doc-import-grid">
+      <label class="doc-import-field">Nombre o razón social<input id="iv-n" placeholder="Nombre del invitado"></label>
+      <label class="doc-import-field">Correo electrónico<input id="iv-m" type="email" placeholder="correo@ejemplo.com"></label>
+      <label class="doc-import-field">Categoría<select id="iv-t"><option value="flotillero">Flotillero</option><option value="independiente">Driver independiente</option><option value="driver"${INV_PRESELECCION?" selected":""}>Driver de flotillero</option></select></label>
+      <label class="doc-import-field">Esquema<select id="iv-r"><option value="">Selecciona un esquema…</option><option value="FACTURA">Con factura</option><option value="SIN FACTURA">Libre (sin factura)</option></select></label>
+      <label class="doc-import-field">CEDIS<select id="iv-c">${cedOpts}</select></label>
+      <label class="doc-import-field">Flotillero<select id="iv-p" class="hide" disabled>${flotOpts}</select></label>
+      </div>
+      <div class="doc-import-footer"><p class="inv-note">Para vincular desde el inicio, elige «Driver de flotillero» y su flotillero activo o invitado. Si aún no se registra, el driver deberá esperar. Para flotilleros e independientes, supervisores y coordinadores deben elegir un CEDIS asignado.</p><button class="btn" id="iv-ok">Invitar</button></div>
+    </fieldset></section>
+    <section class="doc-section"><div class="doc-section-title"><div><h3>Invitaciones y solicitudes</h3><p>Seguimiento de incorporaciones y solicitudes por aprobar.</p></div><button class="btn ghost sm" id="iv-actualizar" ${INVR_LOADING?"disabled":""}>Actualizar estados</button></div>
+    <div class="inv-notice"><b>Regla de validación de correo</b><p>Si una cuenta de driver o flotillero sigue sin validar 48 horas después del alta, el sistema reenvía una vez el correo desde Supabase Auth. Si el reenvío falla, el supervisor asignado recibe una alerta para enviarlo manualmente desde Supabase Auth. El proceso corre cada 30 minutos y está sujeto a los límites del proveedor; la fecha de envío no garantiza entrega.</p></div>
+    ${tabla(vigentes,"Invitaciones y solicitudes")}</section>
+    <section class="doc-section inv-cancelled"><div class="doc-section-title"><div><h3>Canceladas (${esc(canceladas.length)})</h3><p>Eliminar de la lista conserva el historial y no elimina cuentas.</p></div></div>${tabla(canceladas,"Invitaciones canceladas")}</section></div>`}
 function enlazarInvitaciones(){
-  const run=async(b,fn)=>{b.disabled=true;const {data,error}=await fn();if(error){toast(error.message);b.disabled=false;return}toast(data||"Listo");await cargarInvitaciones();render()};
+  const run=async(b,fn)=>{b.disabled=true;try{const {data,error}=await fn();if(error)throw error;toast(data||"Listo");await cargarInvitaciones();render()}catch(error){toast(error.message);b.disabled=false}};
   const confirmarYEnviar=async(b,email,fn)=>{
     b.disabled=true;
     try{if(!await confirmarEstadoInvitacion(email)){b.disabled=false;return}await run(b,fn)}
@@ -1352,6 +1918,10 @@ function enlazarInvitaciones(){
   });
   document.querySelectorAll("[data-inv-no]").forEach(b=>b.onclick=()=>{const m=prompt("Motivo del rechazo");if(m===null)return;run(b,()=>sb.rpc("resolver_invitacion_red",{p_id:+b.dataset.invNo,p_aprobar:false,p_motivo:m}))});
   document.querySelectorAll("[data-inv-x]").forEach(b=>b.onclick=()=>run(b,()=>sb.rpc("cancelar_invitacion_red",{p_id:+b.dataset.invX})));
+  document.querySelectorAll("[data-inv-eliminar]").forEach(b=>b.onclick=()=>{
+    if(confirm("¿Eliminar esta invitación cancelada de la lista? Se conservará su historial; no se eliminará ninguna cuenta."))return run(b,()=>sb.rpc("eliminar_invitacion_red",{p_id:+b.dataset.invEliminar}));
+  });
+  const actualizar=$("iv-actualizar");if(actualizar)actualizar.onclick=async()=>{actualizar.disabled=true;await cargarInvitaciones();render()};
 }
 function editarInvitacion(id){
   const inv=INVR.find(x=>x.id===id&&x.estatus==="enviada");
@@ -1416,13 +1986,19 @@ function enlazar(){
   document.querySelectorAll("[data-tar-no]").forEach(b=>b.onclick=()=>resolverCambioTarifario(+b.dataset.tarNo,false));
   const pnrSave=$("pnr-new-save");if(pnrSave)pnrSave.onclick=crearPnROps;
   document.querySelectorAll("[data-pnr-action]").forEach(b=>b.onclick=()=>resolverPnROps(b.dataset.pnrId,b.dataset.pnrAction));
-  const nsClient=$("ns-client");if(nsClient)nsClient.onchange=()=>actualizarCedisNoShow(nsClient.value);
+  const nsClient=$("ns-client");if(nsClient)nsClient.onchange=()=>{actualizarCedisNoShow(nsClient.value);actualizarCamposWalmartNoShow()};
   const nsDriver=$("ns-driver");if(nsDriver)nsDriver.onchange=()=>actualizarProveedorNoShow(nsDriver.value);
   const nsSave=$("ns-report-save");if(nsSave)nsSave.onclick=crearReporteNoShow;
+  const wmRet=$("wm-retencion-abrir");if(wmRet)wmRet.onclick=abrirRetencionWalmart;
+  document.querySelectorAll("[data-wm-ns-precierre]").forEach(b=>b.onclick=()=>abrirPrecierreNoShowWalmart(b.dataset.wmNsPrecierre));
   document.querySelectorAll("[data-ns-resolve]").forEach(b=>b.onclick=()=>resolverApelacionNoShowOps(b.dataset.nsId,b.dataset.nsResolve));
   document.querySelectorAll("[data-doc-approve]").forEach(b=>b.onclick=()=>resolverDocumento(b.dataset.docApprove,true));
   document.querySelectorAll("[data-doc-reject]").forEach(b=>b.onclick=()=>resolverDocumento(b.dataset.docReject,false));
   document.querySelectorAll("[data-det]").forEach(b=>b.onclick=()=>verDetalleRuta(b.dataset.det));
+  document.querySelectorAll("[data-coppel-revision]").forEach(b=>b.onclick=()=>abrirRevisionCoppel(b.dataset.coppelRevision));
+  document.querySelectorAll("[data-coppel-cancelacion]").forEach(b=>b.onclick=()=>abrirSemanaCancelacionCoppel(b.dataset.coppelCancelacion));
+  document.querySelectorAll("[data-coppel-autorizar]").forEach(b=>b.onclick=()=>autorizarAjusteCoppel(b.dataset.coppelAutorizar,b));
+  document.querySelectorAll("[data-coppel-destino]").forEach(b=>b.onclick=()=>autorizarDestinoCoppel(b.dataset.coppelDestino,b));
   document.querySelectorAll("[data-val]").forEach(b=>b.onclick=()=>abrirValidar(+b.dataset.val));
   document.querySelectorAll("[data-anu]").forEach(b=>b.onclick=()=>anular(+b.dataset.anu));
   document.querySelectorAll("[data-af-ver]").forEach(b=>b.onclick=()=>{AFILIADO_ABIERTO=AFILIADO_ABIERTO===b.dataset.afVer?null:b.dataset.afVer;AFILIADO_EDITAR=null;AFILIADO_PROVEEDOR_EDITAR=null;render()});
@@ -1437,6 +2013,7 @@ function enlazar(){
   document.querySelectorAll("[data-af-cancelar-solicitud]").forEach(b=>b.onclick=async()=>{if(!confirm("¿Cancelar esta solicitud de vinculación?"))return;b.disabled=true;const {error}=await sb.rpc("cancelar_solicitud_vinculacion_flota",{p_id:+b.dataset.afCancelarSolicitud});if(error){toast(error.message);b.disabled=false;return}await cargarAfiliados();render();toast("Solicitud cancelada")});
   document.querySelectorAll("[data-af-invitar]").forEach(b=>b.onclick=()=>{INV_PRESELECCION=`proveedor:${b.dataset.afInvitar}`;INVR_FLOTAS=[];document.querySelector('.role-nav button[data-t="w"]').click()});
   document.querySelectorAll("[data-cpa]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpa,true));document.querySelectorAll("[data-cpr]").forEach(b=>b.onclick=()=>resolverCambio(+b.dataset.cpr,false));document.querySelectorAll("[data-bja]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bja,true));document.querySelectorAll("[data-bjr]").forEach(b=>b.onclick=()=>resolverBaja(+b.dataset.bjr,false));document.querySelectorAll("[data-ap]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.ap,true));document.querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>resolverVal(+b.dataset.rc,false));document.querySelectorAll("[data-rev]").forEach(b=>b.onclick=()=>revisarCan(+b.dataset.rev));
+  document.querySelectorAll("[data-wm-cancelacion]").forEach(b=>b.onclick=()=>abrirPagoCancelacionWalmart(+b.dataset.wmCancelacion));
   document.querySelectorAll("[data-tfv]").forEach(b=>b.onclick=()=>{TFV=b.dataset.tfv;render()});
   document.querySelectorAll("[data-re]").forEach(b=>b.onclick=()=>formRegla(+b.dataset.re));
   const rgn=$("rg-n");if(rgn)rgn.onclick=()=>formRegla(null);const rfc=$("rg-fc");if(rfc){rfc.onchange=()=>{RGF.cuenta=rfc.value;render()};$("rg-ft").onchange=e=>{RGF.tipo=e.target.value;render()}}
@@ -1481,6 +2058,12 @@ function actualizarCedisNoShow(clientId){
   select.innerHTML='<option value="">Selecciona un CEDIS…</option>'+cedis.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join("");
   select.disabled=!cedis.length;
 }
+function actualizarCamposWalmartNoShow(){
+  WM_NO_SHOW_REVIEW=null;
+  const fields=$("ns-wm-fields");if(!fields)return;
+  const client=NO_SHOW_CLIENTS.find(c=>String(c.id)===String($("ns-client").value));
+  fields.classList.toggle("hide",String(client?.nombre||"").trim().toUpperCase()!=="WALMART");
+}
 function actualizarProveedorNoShow(driverId){
   const element=$("ns-provider");if(!element)return;
   const provider=provDe(driverId);
@@ -1490,17 +2073,120 @@ function textoInapropiadoNoShow(value){
   const normalized=String(value||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g," ");
   return /(^| )(puta|puto|putas|putos|mierda|chingar|chingado|chingada|chingados|chingadas|chingue|chingues|verga|vergas|pendejo|pendeja|pendejos|pendejas|culero|culera|culeros|culeras|cabron|cabrona|cabrones|cabronas|pinche|pinches|jodido|jodida|joder|maricon|maricona|maricones|fuck|fucking|shit|bitch|asshole|bastard)( |$)/.test(normalized);
 }
+function abrirPrecierreNoShowWalmart(driverId){
+  if(!WALMART_VALIDACION_ENABLED||ROL!=="ih"){toast("El precierre requiere un supervisor autorizado.");return}
+  const m=$("modal"),driver=DRV.find(d=>String(d.id)===String(driverId));
+  let casos=[],revision=0,solicitud=null;
+  m.classList.remove("hide");
+  m.innerHTML=`<div class="box" style="max-height:90vh;overflow:auto"><h2>NO SHOW Walmart · precierre</h2>
+    <div>${esc(driver?.nombre||"Driver")}</div>
+    <label>Semana de pago (lunes) <input id="wm-ns-semana" type="date" value="${esc(lunesCoppel(new Date()))}"></label>
+    <div class="note">Se muestran los registros de sábado a viernes. Los reportados desde el viernes a las 12:00 p. m. y los casos con apelación pendiente pasan al siguiente periodo. Selecciona solo los descuentos que deseas aplicar.</div>
+    <div id="wm-ns-resultado"></div><div id="wm-ns-error"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost" id="wm-ns-consultar">Consultar</button>
+    <button class="btn" id="wm-ns-aplicar" disabled>Aplicar seleccionados</button><button class="btn ghost" id="wm-ns-cerrar">Cerrar</button></div></div>`;
+  const semana=$("wm-ns-semana"),resultado=$("wm-ns-resultado"),error=$("wm-ns-error"),consultar=$("wm-ns-consultar"),aplicar=$("wm-ns-aplicar"),cerrar=$("wm-ns-cerrar");
+  const invalidar=()=>{revision++;casos=[];solicitud=null;resultado.innerHTML="";error.innerHTML="";aplicar.disabled=true};
+  semana.onchange=invalidar;
+  cerrar.onclick=()=>{invalidar();m.classList.add("hide")};
+  consultar.onclick=async()=>{
+    invalidar();
+    const fecha=semana.value,version=revision;
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(fecha)||new Date(`${fecha}T00:00:00Z`).getUTCDay()!==1){
+      error.innerHTML='<div class="errbox">Selecciona el lunes de la semana.</div>';return;
+    }
+    consultar.disabled=true;semana.disabled=true;
+    let response;
+    try{response=await sb.rpc("walmart_consultar_no_show_precierre",{p_driver_id:driverId,p_lunes:fecha})}
+    catch(e){if(version===revision)error.innerHTML=`<div class="errbox">No se pudo consultar: ${esc(e.message||e)}</div>`;consultar.disabled=false;semana.disabled=false;return}
+    consultar.disabled=false;semana.disabled=false;
+    if(version!==revision)return;
+    if(response.error){error.innerHTML=`<div class="errbox">No se pudo consultar: ${esc(response.error.message)}</div>`;return}
+    const data=response.data;
+    if(!data||data.driver_id!==driverId||data.lunes!==fecha||!Array.isArray(data.casos)||data.cantidad!==data.casos.length
+      ||data.casos.some(c=>!c.caso_id||typeof c.seleccionable!=="boolean"||typeof c.aplicado!=="boolean"
+        ||c.monto==null||!Number.isFinite(Number(c.monto)))){
+      error.innerHTML='<div class="errbox">El precierre devolvió una respuesta inválida.</div>';return;
+    }
+    casos=data.casos;
+    resultado.innerHTML=`<h3>${esc(data.cantidad)} NO SHOW para revisión</h3>${casos.map(c=>`<div class="item"><label>
+      <input type="checkbox" data-wm-ns-caso="${esc(c.caso_id)}" ${c.seleccionable?"":"disabled"}>
+      ${esc(noShowFmtDate(c.fecha_servicio))} · ${esc(c.cedis||"CEDIS")} · 60 %: ${esc(fm(c.monto))}</label>
+      <small>${esc(c.aplicado?"Aplicado en esta semana":c.seleccionable?"Disponible para seleccionar":c.estado==="apelacion_aceptada"?"Apelación aceptada":c.estado==="apelado"?"Apelación pendiente; revisar en otra semana":"No disponible; revisar estado y plazo")}</small></div>`).join("")||'<div class="note">Sin registros para esta semana.</div>'}`;
+    m.querySelectorAll("[data-wm-ns-caso]").forEach(box=>box.onchange=()=>{solicitud=null;aplicar.disabled=!m.querySelector("[data-wm-ns-caso]:checked")});
+  };
+  aplicar.onclick=async()=>{
+    const seleccion=[...m.querySelectorAll("[data-wm-ns-caso]:checked")].map(box=>casos.find(c=>c.caso_id===box.dataset.wmNsCaso));
+    if(!seleccion.length||seleccion.some(c=>!c?.seleccionable)){error.innerHTML='<div class="errbox">Selecciona los descuentos disponibles.</div>';return}
+    if(!globalThis.crypto?.randomUUID){error.innerHTML='<div class="errbox">Este dispositivo no permite identificar la solicitud de forma segura.</div>';return}
+    solicitud||=seleccion.map(c=>({caso_id:c.caso_id,solicitud_id:globalThis.crypto.randomUUID(),monto:c.monto}));
+    aplicar.disabled=true;consultar.disabled=true;semana.disabled=true;cerrar.disabled=true;
+    m.querySelectorAll("[data-wm-ns-caso]").forEach(box=>box.disabled=true);
+    let response;
+    try{response=await sb.rpc("walmart_aplicar_no_shows_precierre",{p_driver_id:driverId,p_lunes:semana.value,p_seleccion:solicitud})}
+    catch(e){error.innerHTML=`<div class="errbox">No se confirmó la operación: ${esc(e.message||e)}. Puedes reintentar sin cambiar la selección.</div>`;response=null}
+    if(response?.error)error.innerHTML=`<div class="errbox">No se pudieron aplicar: ${esc(response.error.message)}</div>`;
+    if(response&&!response.error){
+      if(!Array.isArray(response.data)||response.data.length!==solicitud.length){
+        error.innerHTML='<div class="errbox">Respuesta inválida. Consulta de nuevo antes de continuar.</div>';
+      }else{
+        solicitud=null;consultar.disabled=false;semana.disabled=false;cerrar.disabled=false;
+        await consultar.onclick();toast("Descuentos NO SHOW registrados en la semana seleccionada");return;
+      }
+    }
+    consultar.disabled=false;semana.disabled=false;aplicar.disabled=false;cerrar.disabled=false;
+    m.querySelectorAll("[data-wm-ns-caso]").forEach(box=>{const c=casos.find(x=>x.caso_id===box.dataset.wmNsCaso);box.disabled=!c?.seleccionable});
+  };
+  void consultar.onclick();
+}
 async function crearReporteNoShow(){
   const button=$("ns-report-save"),errorBox=$("ns-form-error");
   const driverId=$("ns-driver").value,cedisId=$("ns-cedis").value,fecha=$("ns-date").value;
   const observaciones=$("ns-observations").value.trim();
   const packagesText=$("ns-packages").value.trim(),amountText=$("ns-amount").value.trim();
   const packages=packagesText?Number(packagesText):null,amount=amountText?Number(amountText):null;
+  const client=NO_SHOW_CLIENTS.find(c=>String(c.id)===String($("ns-client").value));
+  const isWalmart=String(client?.nombre||"").trim().toUpperCase()==="WALMART";
   errorBox.innerHTML="";
   if(!driverId||!cedisId||!fecha||!observaciones){errorBox.innerHTML='<div class="errbox">Completa Driver, cliente, CEDIS, fecha y observaciones.</div>';return}
   if(observaciones.length>200||textoInapropiadoNoShow(observaciones)){errorBox.innerHTML='<div class="errbox">Las observaciones deben tener hasta 200 caracteres y no incluir groserías.</div>';return}
   if(packages!==null&&(!Number.isInteger(packages)||packages<1||packages>10000)){errorBox.innerHTML='<div class="errbox">La cantidad contratada debe ser un entero entre 1 y 10,000.</div>';return}
   if(amount!==null&&(!Number.isFinite(amount)||amount<=0)){errorBox.innerHTML='<div class="errbox">El importe manual debe ser mayor que cero.</div>';return}
+  if(isWalmart&&WALMART_VALIDACION_ENABLED){
+    if(packages!==null||amount!==null){errorBox.innerHTML='<div class="errbox">Walmart usa la tarifa y el 60 % configurados; deja vacíos los importes manuales y entregas contratadas.</div>';return}
+    const proveedor=$("ns-wm-provider").value,unidad=$("ns-wm-unit").value,opcion=$("ns-wm-option").value;
+    if(!proveedor||!unidad||!opcion){errorBox.innerHTML='<div class="errbox">Confirma el proveedor, la unidad y el modelo Walmart.</div>';return}
+    const inputs={driverId,cedisId,fecha,observaciones,proveedor,unidad,opcion},fingerprint=JSON.stringify(inputs);
+    button.disabled=true;
+    let creado=false;
+    try{
+      if(!WM_NO_SHOW_REVIEW||WM_NO_SHOW_REVIEW.fingerprint!==fingerprint){
+        const result=await sb.rpc("walmart_previsualizar_no_show",{
+          p_cedis_id:Number(cedisId),p_fecha:fecha,p_unidad:unidad,p_proveedor_id:Number(proveedor),p_opcion:Number(opcion)
+        });
+        if(result.error)throw result.error;
+        if(!result.data||result.data.base_servicio==null||result.data.monto_penalizacion==null
+          ||!Number.isFinite(Number(result.data.base_servicio))||!Number.isFinite(Number(result.data.monto_penalizacion)))
+          throw new Error("El cálculo Walmart devolvió una respuesta inválida");
+        if(!globalThis.crypto?.randomUUID)throw new Error("Este dispositivo no permite identificar de forma segura la solicitud");
+        WM_NO_SHOW_REVIEW={fingerprint,calculo:result.data,solicitud:globalThis.crypto.randomUUID()};
+        errorBox.innerHTML=`<div class="note">Base ${esc(fm(result.data.base_servicio))} · NO SHOW 60 %: ${esc(fm(result.data.monto_penalizacion))}. Revisa y pulsa nuevamente para confirmar.</div>`;
+        button.textContent="Confirmar NO SHOW Walmart";button.disabled=false;return;
+      }
+      const {error}=await sb.rpc("walmart_crear_no_show",{
+        p_solicitud_id:WM_NO_SHOW_REVIEW.solicitud,p_driver_id:driverId,p_cedis_id:Number(cedisId),
+        p_fecha:fecha,p_unidad:unidad,p_proveedor_id:Number(proveedor),p_opcion:Number(opcion),
+        p_observaciones:observaciones,p_calculo_esperado:WM_NO_SHOW_REVIEW.calculo
+      });
+      if(error)throw error;
+      creado=true;
+      WM_NO_SHOW_REVIEW=null;
+      await cargarNoShowsOps();render();
+      if(NO_SHOW_ERR){toast("Reporte creado, pero no se pudo actualizar la lista: "+NO_SHOW_ERR);return}
+      toast("NO SHOW Walmart registrado; el driver puede apelar durante 6 horas");
+    }catch(error){errorBox.innerHTML=`<div class="errbox">${creado?"El reporte quedó creado, pero no se pudo actualizar la vista: ":""}${esc(error.message||error)}</div>`;button.disabled=creado}
+    return;
+  }
   button.disabled=true;
   try{
     const {error}=await sb.rpc("crear_reporte_no_show",{
@@ -1517,15 +2203,18 @@ async function crearReporteNoShow(){
   }
 }
 async function resolverApelacionNoShowOps(id,accion){
-  const promptText=accion==="aceptar"?"Nota de resolución (opcional). Al aceptar, se revertirá el descuento:":"Motivo de rechazo (opcional):";
+  const caso=NO_SHOW_OPS.find(c=>String(c.id)===String(id));
+  const walmart=caso?.metodo_calculo==="walmart_60_saldo";
+  if(walmart&&!WALMART_VALIDACION_ENABLED){toast("La resolución Walmart todavía no está habilitada");return}
+  const promptText=accion==="aceptar"?(walmart?"Nota de resolución (opcional). Al aceptar, no se aplicará el descuento:":"Nota de resolución (opcional). Al aceptar, se revertirá el descuento:"):"Motivo de rechazo (opcional):";
   const mensaje=prompt(promptText);
   if(mensaje===null)return;
   const texto=mensaje.trim();
   if(texto.length>500||textoInapropiadoNoShow(texto)){toast("La nota debe tener hasta 500 caracteres y no incluir groserías");return}
-  const {error}=await sb.rpc("resolver_apelacion_no_show",{p_caso_id:id,p_accion:accion,p_mensaje:texto||null});
+  const {error}=await sb.rpc(walmart?"walmart_resolver_apelacion_no_show":"resolver_apelacion_no_show",{p_caso_id:id,p_accion:accion,p_mensaje:texto||null});
   if(error){toast(error.message);return}
   await load();
-  toast(accion==="aceptar"?"Apelación aceptada; penalización revertida":"Apelación rechazada; penalización vigente");
+  toast(accion==="aceptar"?(walmart?"Apelación aceptada; no se aplicará el descuento":"Apelación aceptada; penalización revertida"):"Apelación rechazada; penalización vigente");
 }
 async function resolverPnROps(id,accion){
   const promptText=accion==="solicitar_soporte"?"Indica qué evidencia adicional necesita el driver:":accion==="rechazar"?"Describe por qué la segunda evidencia es insuficiente:":"Nota de resolución (opcional):";
@@ -1639,29 +2328,99 @@ function tablaRes(j){
    filaRes("Cobro al cliente","","h")+filaRes("Cobro base",fm(j.cobro_base))+(Number(j.entregas_extra)?filaRes("Cobro extra por "+j.entregas_extra+" entregas adicionales",fm(j.cobro_entrega_extra)):"")+(j.regla_cobro?filaRes("Regla aplicada: "+j.regla_cobro,fm(j.dcto_cobro)):"")+(Number(j.ajuste_cobro)?filaRes("Ajuste",fm(j.ajuste_cobro)):"")+filaRes("Venta total",fm(j.venta_total),"t")+
    filaRes("Utilidad (venta menos costo total)",fm(j.utilidad)+" · "+pc(j.margen),"t")+`</table>`+((j.avisos||[]).length?`<div class="errbox">${esc(j.avisos.join(". "))}</div>`:"");
 }
+async function abrirValidarWalmart(id,ru){
+  if(ROL!=="ih"){toast("La validación Walmart requiere al supervisor asignado.");return}
+  const m=$("modal");
+  let calculo=null,revision=0;
+  m.classList.remove("hide");
+  m.innerHTML=`<div class="box"><h2>Validar ruta Walmart ${esc(ru.id_ruta)}</h2>
+    <div>${esc(ru.drivers.nombre)} · ${esc(ru.cedis.nombre)}</div>
+    <label>Confirma el proveedor de esta ruta</label><select id="wm-val-proveedor"><option value="">Selecciona proveedor</option>${PRV.filter(p=>p.activo!==false).map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)}</option>`).join("")}</select>
+    <fieldset><legend>Retención Walmart (selecciona una)</legend>
+      ${[0,10,15,25].map(n=>`<label><input id="wm-val-ret-${n}" type="radio" name="wm-val-ret" ${n===0?"checked":""}> ${n===0?"Sin retención":n+"%"}</label>`).join("")}</fieldset>
+    <div id="wm-val-aviso"></div>
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button class="btn ghost" id="wm-val-calcular">Calcular</button><button class="btn" id="wm-val-confirmar" disabled>Validar y generar pago</button><button class="btn ghost" id="wm-val-cerrar">Cancelar</button></div></div>`;
+  const inputs=()=>({p_ruta_id:id,p_proveedor_id:$("wm-val-proveedor").value,
+    p_porcentaje_retencion:[0,10,15,25].find(n=>$(`wm-val-ret-${n}`).checked)??null,
+    p_aplicar_visitas:false,p_aplicar_fallida:false});
+  const invalidar=()=>{revision++;calculo=null;$("wm-val-confirmar").disabled=true;$("wm-val-aviso").innerHTML=""};
+  ["wm-val-proveedor",...[0,10,15,25].map(n=>`wm-val-ret-${n}`)].forEach(x=>$(x).addEventListener("change",invalidar));
+  $("wm-val-cerrar").onclick=()=>{invalidar();m.classList.add("hide")};
+  $("wm-val-calcular").onclick=async()=>{
+    invalidar();
+    const args=inputs(),version=revision,boton=$("wm-val-calcular"),aviso=$("wm-val-aviso");
+    if(!args.p_proveedor_id||args.p_porcentaje_retencion==null){aviso.innerHTML='<div class="errbox">Confirma el proveedor y la retención de la ruta.</div>';return}
+    boton.disabled=true;
+    let r;
+    try{r=await sb.rpc("walmart_previsualizar_ruta_porcentaje",args)}
+    catch(error){boton.disabled=false;if(version===revision)aviso.innerHTML=`<div class="errbox">No se pudo calcular: ${esc(error.message||error)}</div>`;return}
+    boton.disabled=false;
+    if(version!==revision)return;
+    if(r.error){aviso.innerHTML=`<div class="errbox">No se pudo calcular: ${esc(r.error.message)}</div>`;return}
+    if(!r.data||Number(r.data.porcentaje_retencion)!==args.p_porcentaje_retencion
+      ||["pago_base","total","pago_semanal","saldo_retenido"].some(k=>r.data[k]==null||!Number.isFinite(Number(r.data[k])))){
+      aviso.innerHTML='<div class="errbox">El cálculo Walmart devolvió una respuesta inválida.</div>';return;
+    }
+    calculo=r.data;
+    aviso.innerHTML=`<div class="note">Base ${esc(fm(calculo.pago_base))} · total fiscalizado ${esc(fm(calculo.total))} · semanal antes de PNR ${esc(fm(calculo.pago_semanal))} · saldo retenido ${esc(fm(calculo.saldo_retenido))}.</div>`;
+    $("wm-val-confirmar").disabled=false;
+  };
+  $("wm-val-confirmar").onclick=async()=>{
+    if(!calculo)return;
+    const args=inputs(),boton=$("wm-val-confirmar"),aviso=$("wm-val-aviso");
+    const controls=["wm-val-proveedor",...[0,10,15,25].map(n=>`wm-val-ret-${n}`),"wm-val-calcular","wm-val-cerrar"].map($);
+    boton.disabled=true;
+    controls.forEach(control=>control.disabled=true);
+    let r;
+    try{r=await sb.rpc("walmart_validar_ruta",{p_ruta_id:id,p_aplicar_visitas:args.p_aplicar_visitas,
+      p_aplicar_fallida:args.p_aplicar_fallida,p_calculo_esperado:calculo})}
+    catch(error){boton.disabled=false;controls.forEach(control=>control.disabled=false);aviso.innerHTML=`<div class="errbox">No se pudo confirmar la validación: ${esc(error.message||error)}. Puedes reintentar.</div>`;return}
+    if(r.error){boton.disabled=false;controls.forEach(control=>control.disabled=false);aviso.innerHTML=`<div class="errbox">No se pudo validar: ${esc(r.error.message)}</div>`;return}
+    let auditError=null;
+    try{const audit=await registrarAuditoriaValidacion(id);auditError=audit.error}
+    catch(error){auditError=error}
+    m.classList.add("hide");await cargaExtra();render();
+    toast(auditError?"Ruta validada, pero no se registró la auditoría: "+(auditError.message||auditError):"Ruta Walmart validada y pago semanal generado");
+  };
+}
 async function abrirValidar(id){
   const ru=R.find(x=>x.id===id);
+  if(WALMART_VALIDACION_ENABLED&&String(ru.cedis.clientes.nombre||"").trim().toUpperCase()==="WALMART")
+    return abrirValidarWalmart(id,ru);
   try{await cargarTarifas()}catch(error){toast("No se pudieron cargar las tarifas: "+error.message);return}
   const p=provDe(ru.driver_id),cuenta=cuentaDe(ru.cedis.clientes.nombre),m=$("modal");
-  let peakTarifaId=null;
+  let peakTarifaId=null,peakDescuento=false;
   if(COPPEL_PEAK_ENABLED&&cuenta==="COPPEL"){
     const result=await sb.rpc("coppel_peak_tarifa_para_ruta",{p_ruta_id:id});
     if(result.error){toast("No se pudo identificar la tarifa COPPEL: "+result.error.message);return}
     peakTarifaId=result.data;
+    if(peakTarifaId!=null&&ROL==="ih"){
+      const decision=await sb.rpc("coppel_peak_consultar_descuento",{p_ruta_id:id});
+      if(decision.error){toast("No se pudo consultar el descuento COPPEL: "+decision.error.message);return}
+      peakDescuento=decision.data;
+    }
   }
   m.classList.remove("hide");
   const pintar=()=>{let {l,nota}=sugeridasConPeak(ru,$("m-todas").checked,peakTarifaId);
     const z=$("m-zona").value;if(z)l=l.filter(t=>{const u=(t.zona||"").toUpperCase();return z==="LOCAL"?u.startsWith("LOCAL"):new RegExp("FORANE[AO] "+z+"( |$)").test(u)});
     if(z&&!l.length)nota=(nota?nota+" · ":"")+"No hay tarifa cargada para ese tipo de ruta";
     $("m-tar").innerHTML=(tiposSinEquivalencia.includes(ru.tipo_unidad)?'<option value="">Selecciona una tarifa</option>':"")+l.map(t=>`<option value="${esc(t.id)}">${esc([t.ubicacion,t.tipo_unidad,t.esquema,t.zona,t.variable].filter(Boolean).join(" · "))} — ${peakTarifaId!=null&&String(t.id)===String(peakTarifaId)?"pago Peak calculado":`pago ${fm(t.pago_base)}`} / cobro ${fm(t.tarifa_cliente)}</option>`).join("");
-    $("m-nota-t").textContent=nota;reset()};
+    $("m-nota-t").textContent=nota;syncPeak();reset()};
   const reset=()=>{$("m-prev").innerHTML="";$("m-ok").disabled=true};
+  const esPeakSeleccionada=()=>peakTarifaId!=null&&String($("m-tar").value)===String(peakTarifaId);
+  const syncPeak=()=>{
+    const peak=esPeakSeleccionada();
+    $("m-peak-desc-wrap").classList.toggle("hide",!(peak&&ROL==="ih"));
+    $("m-ex-wrap").classList.toggle("hide",peak);
+    if(peak)$("m-ex").checked=false;
+  };
   m.innerHTML=`<div class="box"><h2 style="margin:0 0 4px">Validar ruta ${esc(ru.id_ruta)}</h2>
     <div style="color:var(--mut);font-size:13px">${esc(ru.drivers.nombre)} · ${esc(ru.cedis.clientes.nombre)} · ${esc(ru.cedis.nombre)} · ${esc(ru.entregados)} entregados de ${esc(ru.paquetes_asignados)}</div>
     <label>Tipo de ruta</label><select id="m-zona"><option value="">Todas</option><option value="LOCAL">Local</option><option value="1">Foránea 1</option><option value="2">Foránea 2</option><option value="3">Foránea 3</option><option value="4">Foránea 4</option></select>
     <label>Tarifa aplicable</label><select id="m-tar"></select>
     <div style="font-size:12px;color:var(--mut);margin-top:4px"><label style="display:inline;margin:0"><input type="checkbox" id="m-todas"> Ver todas las tarifas de la cuenta</label> <span id="m-nota-t" style="color:#946200"></span></div>
-    <label style="display:flex;gap:8px;align-items:flex-start;color:var(--ink)"><input type="checkbox" id="m-ex" style="margin-top:2px"> No aplicar la penalización al pago del driver${esCoord()?"":" (requiere aprobación del coordinador; escribe el motivo en la nota)"}</label>
+    <label id="m-peak-desc-wrap" class="hide" style="gap:8px;align-items:flex-start;color:var(--ink)"><input type="checkbox" id="m-peak-desc" ${peakDescuento?"checked":""}> Aplicar descuento del 5% sobre el pago base COPPEL</label>
+    <label id="m-ex-wrap" style="display:flex;gap:8px;align-items:flex-start;color:var(--ink)"><input type="checkbox" id="m-ex" style="margin-top:2px"> No aplicar la penalización al pago del driver${esCoord()?"":" (requiere aprobación del coordinador; escribe el motivo en la nota)"}</label>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label>Ajuste al pago (+ o −)</label><input type="number" id="m-ap" value="0" step="0.01"></div><div><label>Ajuste al cobro (+ o −)</label><input type="number" id="m-ac" value="0" step="0.01"></div></div>
     <label>Nota (opcional)</label><textarea id="m-nota" rows="2"></textarea>
     <div id="m-prev" style="margin-top:12px"></div>
@@ -1669,24 +2428,33 @@ async function abrirValidar(id){
   pintar();
   $("m-todas").onchange=pintar;
   $("m-zona").onchange=pintar;
-  ["m-tar","m-ex","m-ap","m-ac"].forEach(i=>$(i).addEventListener("input",reset));
+  ["m-tar","m-ex","m-ap","m-ac","m-peak-desc"].forEach(i=>$(i).addEventListener("input",()=>{syncPeak();reset()}));
   $("m-x").onclick=()=>m.classList.add("hide");
   const args=()=>({p_ruta_id:id,p_tarifa_id:+$("m-tar").value,p_registro:p?.tipo_registro||"",p_excepcion:$("m-ex").checked,p_ajuste_pago:+$("m-ap").value||0,p_ajuste_cobro:+$("m-ac").value||0});
   const extra=()=>({p_proveedor_id:p?.id||null,p_actualizar_driver:false});
   $("m-calc").onclick=async()=>{
     if(!p||!p.tipo_registro){$("m-prev").innerHTML='<div class="errbox">Falta asignar flotillero y registro fiscal en la base de flota. No se puede validar hasta corregir esos datos.</div>';return}
     if(!$("m-tar").value){$("m-prev").innerHTML='<div class="errbox">Elige una tarifa.</div>';return}
+    if(esPeakSeleccionada()&&ROL==="ih"){
+      const decision=await sb.rpc("coppel_peak_elegir_descuento",{p_ruta_id:id,p_aplicar:$("m-peak-desc").checked});
+      if(decision.error){$("m-prev").innerHTML=`<div class="errbox">${esc(decision.error.message)}</div>`;return}
+    }
     const r=await sb.rpc("calcular_liquidacion",args());
     if(r.error){$("m-prev").innerHTML=`<div class="errbox">${esc(r.error.message)}</div>`;$("m-ok").disabled=true;return}
     $("m-prev").innerHTML=tablaRes(r.data);$("m-ok").disabled=false};
   $("m-ok").onclick=async()=>{
     if(!p||!p.tipo_registro){$("m-prev").innerHTML='<div class="errbox">Falta asignar flotillero y registro fiscal en la base de flota. No se puede validar hasta corregir esos datos.</div>';return}
     $("m-ok").disabled=true;
-    const r=await sb.rpc("validar_ruta",{...args(),...extra(),p_nota:$("m-nota").value.trim()||null});
+    const peakIH=esPeakSeleccionada()&&ROL==="ih";
+    const r=await sb.rpc(peakIH?"coppel_peak_validar_ruta":"validar_ruta",{
+      ...args(),...extra(),p_nota:$("m-nota").value.trim()||null,
+      ...(peakIH?{p_aplicar:$("m-peak-desc").checked}:{})
+    });
     if(r.error){$("m-prev").innerHTML+=`<div class="errbox">${esc(r.error.message)}</div>`;return}
     let auditError=null;
     if(r.data!==0){const audit=await registrarAuditoriaValidacion(id);auditError=audit.error}
     m.classList.add("hide");await cargaExtra();render();
     toast(r.data===0?"Enviada al coordinador para aprobación":auditError?"Ruta validada, pero no se registró el supervisor que la validó: "+auditError.message:"Ruta validada y pago generado")};
 }
+$("loading-phrase").textContent=siguienteFraseCarga();
 boot();

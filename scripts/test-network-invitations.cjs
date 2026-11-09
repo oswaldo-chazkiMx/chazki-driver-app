@@ -8,12 +8,13 @@ const root = path.resolve(__dirname, "..");
 const ops = fs.readFileSync(path.join(root, "ops.js"), "utf8");
 const driver = fs.readFileSync(path.join(root, "app.js"), "utf8");
 const sql = fs.readFileSync(path.join(root, "network-invitations.sql"), "utf8");
+const shared = fs.readFileSync(path.join(root, "invitaciones.js"), "utf8");
 const escapeFunction = ops.slice(0, ops.indexOf("\n"));
 
 function opsContext() {
   const context = vm.createContext({ location: { origin: "https://example.test" }, encodeURIComponent });
   context.INV_PRESELECCION = null;
-  vm.runInContext(escapeFunction + "\n" + ops.slice(ops.indexOf("let PADRON="), ops.indexOf("function enlazarInvitaciones()")), context);
+  vm.runInContext(escapeFunction + "\n" + shared + "\n" + ops.slice(ops.indexOf("let PADRON="), ops.indexOf("function enlazarInvitaciones()")), context);
   return context;
 }
 
@@ -44,7 +45,7 @@ test("invitations render manual resend and approval actions according to status"
   assert.match(html, /data-inv-editar="1"/);
   assert.doesNotMatch(html, /data-inv-editar="[23]"/);
   assert.match(html, /https:\/\/mail\.google\.com\/mail\/\?view=cm&amp;fs=1&amp;to=z%40example\.test/);
-  assert.match(html, /se envía manualmente/);
+  assert.match(html, /enviarlo manualmente desde Supabase Auth/);
 });
 
 test("Gmail compose includes the exact recipient, subject and message", () => {
@@ -74,7 +75,7 @@ test("padrón paginates without hiding RPC errors", async () => {
 
 test("fleet owner can resend only pending requests and email approved invitations", () => {
   const context = vm.createContext({ location: { protocol: "capacitor:", origin: "capacitor://localhost" }, encodeURIComponent });
-  vm.runInContext(escapeFunction + "\n" + driver.slice(driver.indexOf("function invitarHtml()"), driver.indexOf("function drawDrivers()")), context);
+  vm.runInContext(escapeFunction + "\n" + shared + "\n" + driver.slice(driver.indexOf("function invitarHtml()"), driver.indexOf("function drawDrivers()")), context);
   vm.runInContext(`CLI=[]; DRVS=[{id:"activo",estatus:"activo"},{id:"inactivo",estatus:"inactivo"}]; INVS_ERR=""; INVS=[
     {id:1,email:"one@example.test",estatus:"pendiente_aprobacion",creado_en:"2026-01-01"},
     {id:2,email:"two@example.test",estatus:"enviada",creado_en:"2026-01-01"},
@@ -274,9 +275,10 @@ test("the invitation form stays disabled until invited fleet data has loaded", a
   const builder = {
     select() { return this; }, order() { return this; },
     limit() { return Promise.resolve({data:[],error:null}); },
-    then(resolve) { return Promise.resolve({data:[],error:null}).then(resolve); }
+    then(resolve) { return Promise.resolve({data:[],error:null}).then(resolve); },
+    range() { return Promise.resolve({data:[],error:null}); }
   };
-  context.sb = {from:()=>builder,rpc:()=>({})};
+  context.sb = {from:()=>builder,rpc:()=>builder};
   vm.runInContext("PRV=[];CLIENTES_NOMBRE={};INVR_LOADING=true",context);
   const loading=vm.runInContext("cargarInvitaciones()",context);
   const before=vm.runInContext("vistaInvitaciones()",context);
@@ -292,8 +294,8 @@ test("the invitation form stays disabled until invited fleet data has loaded", a
 test("a failed fleet lookup is visible rather than an empty success", async () => {
   const context=opsContext();
   context.fetchPaged=async()=>{throw new Error("permission denied")};
-  const builder={select(){return this},order(){return this},limit(){return Promise.resolve({data:[],error:null})},then(resolve){return Promise.resolve({data:[],error:null}).then(resolve)}};
-  context.sb={from:()=>builder,rpc:()=>({})};
+  const builder={select(){return this},order(){return this},limit(){return Promise.resolve({data:[],error:null})},then(resolve){return Promise.resolve({data:[],error:null}).then(resolve)},range(){return Promise.resolve({data:[],error:null})}};
+  context.sb={from:()=>builder,rpc:()=>builder};
   vm.runInContext("PRV=[];CLIENTES_NOMBRE={};INVR_LOADING=true",context);
   await vm.runInContext("cargarInvitaciones()",context);
   assert.match(vm.runInContext("vistaInvitaciones()",context),/No se pudieron cargar los flotilleros.*permission denied/);

@@ -11,6 +11,9 @@
 -- registro-por-invitacion.sql. Re-running this file replaces functions customized by
 -- registro-por-invitacion.sql, so reapply that migration before using invitations.
 -- For pending fleet-owner invitations, apply invitaciones-flotillero-pendiente.sql last.
+-- After the invitation editing migrations, apply invitaciones-estado.sql for the current
+-- invitation lists, Auth email timestamps and soft deletion of cancelled invitations.
+-- Reapply it if this file is rerun, since this file replaces the invitation SELECT policy.
 begin;
 
 create table if not exists public.invitaciones_red (

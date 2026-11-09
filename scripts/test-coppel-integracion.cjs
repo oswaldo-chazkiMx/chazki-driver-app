@@ -91,6 +91,15 @@ async function database(){
     create function private.es_coord() returns boolean language sql stable as $$
       select current_setting('test.coord',true)='true'
     $$;
+    create function public.mi_acceso_administrativo() returns boolean language sql stable as $$
+      select current_setting('test.valida',true)='true'
+    $$;
+    create function public.operativo_rol_actual() returns text language sql stable as $$
+      select current_setting('test.rol',true)
+    $$;
+    create function public.operativo_asignado_a(bigint,bigint,text) returns boolean language sql stable as $$
+      select $2::text=current_setting('test.cedis',true) and $3='ih'
+    $$;
     insert into public.clientes values (1,'COPPEL');
     insert into public.cedis select unnest(array[24,23,22,21,20,19,18,17,15,14,13,12,11,10,9,8,7,6]),1;
     insert into private.coppel_peak_plazas
@@ -269,6 +278,53 @@ test("the existing calculator applies Peak rates, fiscal rules, exceptions and C
   }finally{await db.close()}
 });
 
+test("assigned IH selects the route discount and validation pays the selected amount once",async()=>{
+  const db=await database();
+  const driver="00000000-0000-0000-0000-000000000001";
+  const ih="00000000-0000-0000-0000-000000000002";
+  try{
+    await db.exec(migration);
+    await db.query("insert into public.proveedores values (10)");
+    await db.query("insert into public.drivers values ($1,10),($2,null)",[driver,ih]);
+    await db.query(`insert into public.rutas(id,cedis_id,tipo_unidad,estado,entregados,paquetes_asignados,checkin_at,driver_id)
+      values (1,22,'Sedan','cerrada',95,100,'2026-11-09 16:00+00',$1)`,[driver]);
+    await db.query("select set_config('test.user_id',$1,false),set_config('test.valida','true',false),set_config('test.rol','ih',false),set_config('test.cedis','22',false)",[ih]);
+    assert.equal((await db.query("select public.coppel_peak_consultar_descuento(1) as value")).rows[0].value,false);
+    await db.query("select public.coppel_peak_elegir_descuento(1,true)");
+    const preview=(await db.query("select private.calc_liquidacion(1,428,'SIN FACTURA',false,0,0) as value")).rows[0].value;
+    assert.equal(preview.dcto_pago,-142.5);
+    assert.equal(preview.bono_pago,475);
+    assert.equal(preview.pago_driver,3023.37);
+    const payment=(await db.query("select public.coppel_peak_validar_ruta(1,428,'SIN FACTURA',true,false,0,0,null,10,false) as value")).rows[0].value;
+    assert.ok(payment);
+    assert.equal(Number((await db.query("select monto from public.pagos where ruta_id=1")).rows[0].monto),3023.37);
+    await assert.rejects(db.query("select public.coppel_peak_elegir_descuento(1,false)"),/ruta validada/);
+    await assert.rejects(db.query("select public.coppel_peak_validar_ruta(1,428,'SIN FACTURA',true)"),/ruta validada/);
+    assert.equal((await db.query("select count(*)::int as n from public.pagos")).rows[0].n,1);
+  }finally{await db.close()}
+});
+
+test("COPPEL discount is limited to the assigned IH and stale liquidations are rejected",async()=>{
+  const db=await database();
+  const ih="00000000-0000-0000-0000-000000000002";
+  try{
+    await db.exec(migration);
+    await db.query("insert into public.drivers values ($1,null)",[ih]);
+    await db.exec("insert into public.rutas(id,cedis_id,tipo_unidad,estado,entregados,paquetes_asignados,checkin_at) values (1,22,'Sedan','cerrada',95,100,'2026-11-09 16:00+00')");
+    await db.query("select set_config('test.user_id',$1,false),set_config('test.valida','true',false),set_config('test.rol','ih',false),set_config('test.cedis','23',false)",[ih]);
+    await assert.rejects(db.query("select public.coppel_peak_elegir_descuento(1,true)"),/asignada requerida/);
+    await db.exec("select set_config('test.cedis','22',false),set_config('test.rol','coordinador',false)");
+    await assert.rejects(db.query("select public.coppel_peak_elegir_descuento(1,true)"),/Solo el supervisor/);
+    await db.exec("select set_config('test.rol','ih',false)");
+    await db.query("select public.coppel_peak_elegir_descuento(1,true)");
+    await assert.rejects(db.query(`insert into public.liquidaciones(ruta_id,tarifa_id,cuenta,esquema,pago_base,dcto_pago)
+      values (1,428,'COPPEL','PAQUETE',2850,0)`),/decisión de descuento COPPEL cambió/);
+    assert.equal((await db.query("select count(*)::int as n from public.liquidaciones")).rows[0].n,0);
+    await db.exec("insert into public.validaciones_pendientes(ruta_id,motivo,params) values(1,'revision','{}')");
+    await assert.rejects(db.query("select public.coppel_peak_elegir_descuento(1,false)"),/pendiente de aprobación/);
+  }finally{await db.close()}
+});
+
 test("installation aborts without altering an unexpected calculator",async()=>{
   const db=await database();
   try{
@@ -385,4 +441,202 @@ test("Peak validation suggests only the mapped tariff unless all tariffs are req
   assert.equal(vm.runInContext("sugeridasConPeak({},true,428).l[0].id",context),451);
   assert.equal(vm.runInContext("sugeridasConPeak({},false,null).l[0].id",context),451);
   assert.match(vm.runInContext("sugeridasConPeak({},false,999).nota",context),/No se encontró/);
+});
+
+test("IH selects the Peak discount for preview and atomic validation",async()=>{
+  const calls=[],els={};
+  const element=id=>els[id]||(els[id]={
+    value:id==="m-tar"?"428":id==="m-ap"||id==="m-ac"?"0":"",
+    checked:false,disabled:false,innerHTML:"",textContent:"",
+    classList:{toggle(){},remove(){},add(){}},addEventListener(){}
+  });
+  const context=vm.createContext({
+    R:[{id:1,id_ruta:"R1",driver_id:"driver",drivers:{nombre:"Driver"},cedis:{clientes:{nombre:"COPPEL"},nombre:"CEDIS"},entregados:95,paquetes_asignados:100}],
+    ROL:"ih",COPPEL_PEAK_ENABLED:true,WALMART_VALIDACION_ENABLED:false,TAR:[{id:428}],$:element,
+    cargarTarifas:async()=>{},provDe:()=>({id:10,tipo_registro:"FACTURA"}),
+    cuentaDe:()=>"COPPEL",sugeridasConPeak:()=>({l:[{id:428}],nota:""}),
+    tiposSinEquivalencia:[],esc:String,fm:String,esCoord:()=>false,tablaRes:()=>"<table></table>",
+    registrarAuditoriaValidacion:async()=>({}),cargaExtra:async()=>{},render(){},toast(){},
+    sb:{rpc:async(name,args)=>{
+      calls.push({name,args});
+      if(name==="coppel_peak_tarifa_para_ruta")return {data:428,error:null};
+      if(name==="coppel_peak_consultar_descuento")return {data:false,error:null};
+      if(name==="calcular_liquidacion")return {data:{},error:null};
+      return {data:1,error:null};
+    }}
+  });
+  const start=ops.indexOf("async function abrirValidar(");
+  const end=ops.indexOf("\n}\n",start);
+  assert.ok(start>=0&&end>start,"No se encontró la función de validación");
+  vm.runInContext(ops.slice(start,end+2),context);
+  await context.abrirValidar(1);
+  assert.match(element("modal").innerHTML,/Aplicar descuento del 5% sobre el pago base COPPEL/);
+  element("m-peak-desc").checked=true;
+  await element("m-calc").onclick();
+  assert.equal(calls.find(x=>x.name==="coppel_peak_elegir_descuento").args.p_aplicar,true);
+  await element("m-ok").onclick();
+  const validation=calls.find(x=>x.name==="coppel_peak_validar_ruta");
+  assert.equal(validation.args.p_aplicar,true);
+  assert.equal(validation.args.p_tarifa_id,428);
+});
+
+test("weekly route review uses Mexico City dates and never displays partial totals",async()=>{
+  const elements={"route-peak-week":{disabled:false},"route-peak-result":{innerHTML:""},
+    "route-peak-request":{disabled:false},"route-peak-request-result":{textContent:"",innerHTML:""},
+    "coppel-asistencia":{value:""},"coppel-cerrar":{disabled:false},"coppel-cierre-result":{innerHTML:""}};
+  let response={data:{estado:"requiere_revision",mensaje:"Revisión necesaria"},error:null},params,requests=0,closeParams;
+  let closeResult={data:{estado:"cerrada"},error:null};
+  const context=vm.createContext({
+    Intl,Date,Number,ROL:"ih",PRV:[],$:id=>elements[id],esc:s=>String(s??"").replace(/</g,"&lt;"),fm:n=>"$"+n,
+    confirm:()=>true,
+    sb:{rpc:async(name,args)=>{
+      if(name==="coppel_peak_solicitar_revision"){requests++;assert.equal(args.p_lunes,"2026-11-09");return {data:1,error:null}}
+      if(name==="coppel_peak_cerrar_semana"){closeParams=args;return closeResult}
+      assert.equal(name,"coppel_peak_consultar_precierre");params=args;return response
+    }}
+  });
+  vm.runInContext(ops.slice(ops.indexOf("function lunesCoppel("),ops.indexOf("\nfunction vistaValidadas(",ops.indexOf("function lunesCoppel("))),context);
+  assert.equal(context.lunesCoppel("2026-11-09T05:30:00Z"),"2026-11-02");
+  assert.equal(context.lunesCoppel("2026-11-09T06:00:00Z"),"2026-11-09");
+  const route={driver_id:"driver",checkin_at:"2026-11-09T06:00:00Z"};
+  await context.consultarSemanaCoppel(route);
+  assert.equal(params.p_lunes,"2026-11-09");
+  assert.match(elements["route-peak-result"].innerHTML,/Solicitar revisión/);
+  assert.doesNotMatch(elements["route-peak-result"].innerHTML,/Bono de asistencia/);
+  assert.equal(requests,0);
+  await elements["route-peak-request"].onclick();
+  assert.equal(requests,1);
+  assert.match(elements["route-peak-request-result"].textContent,/Solicitud registrada/);
+  const precierre={estado:"completo",resumen:{lunes:"2026-11-09",dias_asistencia:["2026-11-09"],dias_faltantes:["2026-11-10"],hubo_no_show:true,rutas_validadas:[{}],bono_asistencia_potencial:200,bono_domingo_base:300},rutas:[],cancelaciones:[],no_shows:[]};
+  response={data:precierre,error:null};
+  await context.consultarSemanaCoppel(route);
+  assert.match(elements["route-peak-result"].innerHTML,/NO SHOW activo: Sí/);
+  assert.match(elements["route-peak-result"].innerHTML,/Bono de asistencia potencial: \$200/);
+  assert.match(elements["route-peak-result"].innerHTML,/pagos pendientes/);
+  await elements["coppel-cerrar"].onclick();
+  assert.equal(closeParams,undefined);
+  assert.match(elements["coppel-cierre-result"].innerHTML,/Selecciona la decisión/);
+  elements["coppel-asistencia"].value="no";
+  closeResult={data:null,error:{message:"El precierre cambió"}};
+  await elements["coppel-cerrar"].onclick();
+  assert.equal(closeParams.p_aplicar_asistencia,false);
+  assert.equal(elements["coppel-cerrar"].disabled,false);
+  assert.match(elements["coppel-cierre-result"].innerHTML,/El precierre cambió/);
+  closeResult={data:{estado:"cerrada"},error:null};
+  elements["coppel-asistencia"].value="si";
+  response={data:{estado:"cerrada",precierre},error:null};
+  await elements["coppel-cerrar"].onclick();
+  assert.equal(closeParams.p_aplicar_asistencia,true);
+  assert.equal(closeParams.p_precierre_esperado,precierre);
+  assert.match(elements["route-peak-result"].innerHTML,/Semana cerrada/);
+  assert.doesNotMatch(elements["route-peak-result"].innerHTML,/Cerrar semana revisada/);
+  response={data:{estado:"completo",resumen:precierre.resumen},error:null};
+  await context.consultarSemanaCoppel(route);
+  assert.match(elements["route-peak-result"].innerHTML,/respuesta de precierre inválida/);
+  response={data:null,error:{message:"Error de permisos"}};
+  await context.consultarSemanaCoppel(route);
+  assert.match(elements["route-peak-result"].innerHTML,/Error de permisos/);
+  assert.equal(elements["route-peak-week"].disabled,false);
+});
+
+test("review inbox reloads the authorized weekly summary before showing it",async()=>{
+  const elements={
+    modal:{innerHTML:"",classList:{remove(){},add(){}}},
+    "coppel-revision-close":{},
+    "coppel-revision-result":{innerHTML:""}
+  };
+  let response={data:[{id:7,driver_id:"driver",driver_nombre:"Driver",lunes:"2026-11-09"}],error:null};
+  const context=vm.createContext({
+    COPPEL_REVISIONES:[],COPPEL_REVISIONES_ERR:"",$:id=>elements[id],
+    esc:s=>String(s??""),toast:()=>{},mostrarPrecierreCoppel:(el,id,lunes)=>{el.innerHTML=`Resumen ${lunes}`},
+    sb:{rpc:async()=>response}
+  });
+  vm.runInContext(ops.slice(ops.indexOf("async function cargarRevisionesCoppel("),ops.indexOf("\nfunction vistaAprobar(",ops.indexOf("async function cargarRevisionesCoppel("))),context);
+  await context.cargarRevisionesCoppel();
+  response={data:{estado:"completo",resumen:{lunes:"2026-11-09"}},error:null};
+  await context.abrirRevisionCoppel(7);
+  assert.equal(elements["coppel-revision-result"].innerHTML,"Resumen 2026-11-09");
+  response={data:{estado:"requiere_revision"},error:null};
+  await context.abrirRevisionCoppel(7);
+  assert.match(elements["coppel-revision-result"].innerHTML,/ya no está dentro de tu alcance/);
+  response={data:null,error:{message:"Sin permiso"}};
+  await context.cargarRevisionesCoppel();
+  assert.equal(context.COPPEL_REVISIONES.length,0);
+  assert.equal(context.COPPEL_REVISIONES_ERR,"Sin permiso");
+});
+
+test("weekly review captures a cancellation and registers a manual retroactive adjustment",async()=>{
+  const elements={
+    "coppel-cancel-base-0":{value:""},"coppel-cancel-proveedor-0":{value:""},
+    "coppel-cancel-guardar-0":{disabled:false},"coppel-cancel-aviso-0":{innerHTML:""},
+    "coppel-asistencia":{value:""},"coppel-cerrar":{},"coppel-cierre-result":{},
+    "coppel-ajuste-proveedor":{value:"10"},"coppel-ajuste-tipo":{value:"descuento"},
+    "coppel-ajuste-base":{value:"100"},"coppel-ajuste-motivo":{value:"Ajuste revisado"},
+    "coppel-ajuste-semana":{value:"2026-11-16"},"coppel-retro-posibles":{innerHTML:""},"coppel-retro-registrados":{innerHTML:""},
+    "coppel-ajuste-proponer":{disabled:false},"coppel-ajuste-aviso":{innerHTML:"",textContent:""}
+  };
+  const resultado={innerHTML:""},calls=[];
+  const summary={lunes:"2026-11-09",dias_asistencia:[],dias_faltantes:[],rutas_validadas:[]};
+  const pending={estado:"completo",resumen:summary,rutas:[],cancelaciones:[{cancelacion_id:20,fecha:"2026-11-10",cedis_id:22,base:null}],no_shows:[]};
+  const registered={...pending,cancelaciones:[{...pending.cancelaciones[0],base:100,pnr_aplicado:70,pago:46,proveedor_id:10}]};
+  const context=vm.createContext({
+    Intl,Date,Number,PRV:[{id:10,nombre:"Proveedor"}],ROL:"ih",
+    $:id=>elements[id],esc:s=>String(s??""),fm:n=>n==null?"—":"$"+n,
+    confirm:()=>true,crypto:{randomUUID:()=>"10000000-0000-0000-0000-000000000001"},
+    sb:{rpc:async(name,args)=>{
+      calls.push({name,args});
+      if(name==="coppel_peak_registrar_cancelacion"||name==="coppel_peak_registrar_ajuste_manual")return {data:{},error:null};
+      if(name==="coppel_peak_posibles_retroactivos")return {data:[{tipo:"ruta",id:12,cedis_id:22}],error:null};
+      if(name==="coppel_peak_listar_ajustes_manuales")return {data:[{lunes_destino:"2026-11-16",monto:-20,motivo:"Servicio revisado"}],error:null};
+      if(name==="coppel_peak_consultar_precierre")return {data:registered,error:null};
+      throw new Error("RPC inesperado: "+name);
+    }}
+  });
+  vm.runInContext(ops.slice(ops.indexOf("function lunesCoppel("),ops.indexOf("\nfunction vistaValidadas(",ops.indexOf("function lunesCoppel("))),context);
+  context.mostrarPrecierreCoppel(resultado,"driver","2026-11-09",pending);
+  assert.match(resultado.innerHTML,/Registrar cancelación/);
+  await elements["coppel-cancel-guardar-0"].onclick();
+  assert.match(elements["coppel-cancel-aviso-0"].innerHTML,/importe base válido/);
+  assert.equal(calls.length,0);
+  elements["coppel-cancel-base-0"].value="100";
+  elements["coppel-cancel-proveedor-0"].value="10";
+  await elements["coppel-cancel-guardar-0"].onclick();
+  assert.equal(calls[0].args.p_proveedor_confirmado,"10");
+  assert.equal(calls[0].args.p_base,"100");
+  assert.doesNotMatch(resultado.innerHTML,/Registrar cancelación/);
+  assert.match(resultado.innerHTML,/PNR aplicado \$70 · pago \$46/);
+  context.mostrarPrecierreCoppel(resultado,"driver","2026-11-09",{estado:"cerrada",precierre:registered});
+  assert.match(resultado.innerHTML,/Retroactivo manual/);
+  await elements["coppel-ajuste-proponer"].onclick();
+  const proposed=calls.find(c=>c.name==="coppel_peak_registrar_ajuste_manual");
+  assert.equal(proposed.args.p_proveedor_id,"10");
+  assert.equal(proposed.args.p_monto,"-100");
+  assert.equal(proposed.args.p_lunes_destino,"2026-11-16");
+  assert.match(elements["coppel-ajuste-aviso"].textContent,/No confirma una transferencia/);
+  assert.match(elements["coppel-retro-posibles"].innerHTML,/ruta 12/);
+  assert.match(elements["coppel-retro-registrados"].innerHTML,/Servicio revisado/);
+});
+
+test("adjustment inbox explicitly authorizes the adjustment and its destination",async()=>{
+  const id="10000000-0000-0000-0000-000000000001",calls=[],messages=[];
+  const elements={[`coppel-otras-${id}`]:{value:"si"},[`coppel-destino-${id}`]:{value:"31"}};
+  const proposal={id,driver_id:"driver",proveedor_id:10,lunes_origen:"2026-11-09",tipo:"descuento",monto_base:100,motivo:"Diferencia",estado:"pendiente_revision",destinos:[]};
+  const context=vm.createContext({
+    COPPEL_AJUSTES:[proposal],COPPEL_AJUSTES_ERR:"",COPPEL_DESTINOS:[{id:31,nombre:"Destino",cliente_id:2}],COPPEL_DESTINOS_ERR:"",
+    CLIENTES_NOMBRE:{"2":"Otro"},DRV:[{id:"driver",nombre:"Driver"}],PRV:[{id:10,nombre:"Proveedor"}],ROL:"coordinador",tab:"a",
+    $:key=>elements[key],esc:s=>String(s??""),fm:n=>"$"+n,cuentaDe:c=>c,
+    confirm:()=>true,toast:m=>messages.push(m),render:()=>{},
+    fetchPaged:async()=>[{id:31,nombre:"Destino",cliente_id:2}],
+    sb:{rpc:async(name,args)=>{calls.push({name,args});return name==="coppel_peak_listar_ajustes"?{data:[proposal],error:null}:{data:{},error:null}}}
+  });
+  vm.runInContext(ops.slice(ops.indexOf("async function cargarAjustesCoppel("),ops.indexOf("\nasync function abrirRevisionCoppel(",ops.indexOf("async function cargarAjustesCoppel("))),context);
+  assert.match(context.vistaAjustesCoppel(),/Autorizar ajuste/);
+  await context.autorizarAjusteCoppel(id,{disabled:false});
+  assert.equal(calls[0].name,"coppel_peak_autorizar_ajuste");
+  assert.equal(calls[0].args.p_permitir_otras_cuentas,true);
+  assert.match(messages[0],/aún no se ha aplicado/);
+  proposal.estado="autorizado";proposal.permitir_otras_cuentas=true;
+  assert.match(context.vistaAjustesCoppel(),/Autorizar destino/);
+  await context.autorizarDestinoCoppel(id,{disabled:false});
+  assert.equal(calls.find(c=>c.name==="coppel_peak_autorizar_destino_ajuste").args.p_cedis_id,"31");
 });

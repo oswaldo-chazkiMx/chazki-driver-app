@@ -10,6 +10,14 @@ create table if not exists private.coppel_peak_tarifas (
 );
 revoke all on private.coppel_peak_tarifas from public, anon, authenticated;
 
+create table if not exists private.coppel_peak_decisiones (
+  ruta_id bigint primary key references public.rutas(id),
+  aplicar_descuento boolean not null,
+  seleccionado_por uuid not null references public.drivers(id),
+  seleccionado_en timestamptz not null default now()
+);
+revoke all on private.coppel_peak_decisiones from public, anon, authenticated;
+
 do $$
 declare
   r record;
@@ -118,6 +126,7 @@ declare
   v_k_com numeric;
   v_k_iva numeric;
   v_registro text;
+  v_aplicar_descuento boolean;
 begin
   if jsonb_typeof(p_calculo) is distinct from 'object' then
     raise exception 'El cálculo original de la ruta no es válido';
@@ -160,9 +169,11 @@ begin
         and v_ruta.fecha>=t.vigencia_desde
         and (t.vigencia_hasta is null or v_ruta.fecha<=t.vigencia_hasta)
     ) then raise exception 'La tarifa no corresponde al CEDIS COPPEL Peak de esta ruta'; end if;
+  select d.aplicar_descuento into v_aplicar_descuento
+  from private.coppel_peak_decisiones d where d.ruta_id=p_ruta_id;
   v_peak := private.coppel_peak_calcular_ruta_configurada(
     v_ruta.cedis_id,v_ruta.fecha,v_ruta.tipo_unidad,v_ruta.esquema,v_ruta.zona,
-    v_ruta.paquetes_asignados,v_ruta.entregados
+    v_ruta.paquetes_asignados,v_ruta.entregados,coalesce(v_aplicar_descuento,false)
   );
   v_registro := p_calculo->>'registro_fiscal';
   if v_registro not in ('FACTURA','SIN FACTURA') or v_registro is null
@@ -183,8 +194,7 @@ begin
     raise exception 'Parámetros fiscales inválidos para COPPEL Peak';
   end if;
   v_base := (v_peak->>'pago_base')::numeric;
-  v_descuento := case when coalesce(p_excepcion,false) then 0
-    else -(v_peak->>'descuento_efectividad')::numeric end;
+  v_descuento := -(v_peak->>'descuento_efectividad')::numeric;
   v_bono := (v_peak->>'bono_efectividad')::numeric;
   v_costo := v_base+v_descuento+v_bono+(p_calculo->>'ajuste_pago')::numeric;
   v_venta := (p_calculo->>'venta_total')::numeric;
@@ -195,7 +205,7 @@ begin
   v_pago := v_neto+v_iva;
   return p_calculo || jsonb_build_object(
     'pago_base',v_base,'dcto_pago',v_descuento,
-    'regla_pago',case when v_descuento<0 then 'COPPEL Peak: efectividad menor a 90%' end,
+    'regla_pago',case when v_descuento<0 then 'COPPEL Peak: descuento 5% seleccionado por IH' end,
     'bono_pago',v_bono,
     'regla_bono',case when v_bono>0 then 'COPPEL Peak: efectividad desde 95%' end,
     'costo_total',v_costo,'retencion',v_retencion,'neto',v_neto,
@@ -240,6 +250,104 @@ end;
 $$;
 revoke all on function public.coppel_peak_tarifa_para_ruta(bigint) from public, anon;
 grant execute on function public.coppel_peak_tarifa_para_ruta(bigint) to authenticated;
+
+create or replace function public.coppel_peak_elegir_descuento(
+  p_ruta_id bigint, p_aplicar boolean
+) returns boolean
+language plpgsql security definer set search_path = ''
+as $$
+declare v_ruta record;
+begin
+  if auth.uid() is null or public.mi_acceso_administrativo() is not true
+    or public.operativo_rol_actual() is distinct from 'ih'
+    or private.es_valida() is not true then
+    raise exception 'Solo el supervisor autorizado puede elegir el descuento COPPEL';
+  end if;
+  if p_aplicar is null then raise exception 'Selecciona si aplica el descuento COPPEL'; end if;
+  select r.id,r.estado,r.cedis_id,ce.cliente_id
+    into v_ruta from public.rutas r join public.cedis ce on ce.id=r.cedis_id
+    where r.id=p_ruta_id for update of r;
+  if not found or v_ruta.estado is distinct from 'cerrada'
+    or public.operativo_asignado_a(v_ruta.cliente_id,v_ruta.cedis_id,'ih') is not true
+    or public.coppel_peak_tarifa_para_ruta(p_ruta_id) is null then
+    raise exception 'Ruta COPPEL Peak cerrada y asignada requerida';
+  end if;
+  if exists (select 1 from public.liquidaciones l where l.ruta_id=p_ruta_id)
+    or exists (select 1 from public.validaciones_pendientes v
+      where v.ruta_id=p_ruta_id and v.estatus='pendiente') then
+    raise exception 'No se puede cambiar el descuento de una ruta validada o pendiente de aprobación';
+  end if;
+  insert into private.coppel_peak_decisiones(ruta_id,aplicar_descuento,seleccionado_por)
+    values(p_ruta_id,p_aplicar,auth.uid())
+  on conflict (ruta_id) do update set aplicar_descuento=excluded.aplicar_descuento,
+    seleccionado_por=excluded.seleccionado_por,seleccionado_en=now();
+  return p_aplicar;
+end;
+$$;
+revoke all on function public.coppel_peak_elegir_descuento(bigint,boolean) from public, anon;
+grant execute on function public.coppel_peak_elegir_descuento(bigint,boolean) to authenticated;
+
+create or replace function public.coppel_peak_consultar_descuento(p_ruta_id bigint)
+returns boolean language plpgsql stable security definer set search_path = ''
+as $$
+declare v_aplicar boolean;
+begin
+  if auth.uid() is null or public.mi_acceso_administrativo() is not true
+    or public.operativo_rol_actual() is distinct from 'ih'
+    or not exists (
+      select 1 from public.rutas r join public.cedis ce on ce.id=r.cedis_id
+      where r.id=p_ruta_id and public.operativo_asignado_a(ce.cliente_id,r.cedis_id,'ih')
+    ) then raise exception 'Solo el supervisor asignado puede consultar el descuento COPPEL'; end if;
+  select d.aplicar_descuento into v_aplicar from private.coppel_peak_decisiones d where d.ruta_id=p_ruta_id;
+  return coalesce(v_aplicar,false);
+end;
+$$;
+revoke all on function public.coppel_peak_consultar_descuento(bigint) from public, anon;
+grant execute on function public.coppel_peak_consultar_descuento(bigint) to authenticated;
+
+create or replace function private.coppel_peak_proteger_decision()
+returns trigger language plpgsql security definer set search_path = ''
+as $$
+declare v_aplicar boolean;
+begin
+  if not exists (
+    select 1 from private.coppel_peak_tarifas m
+    join public.rutas r on r.id=new.ruta_id and r.cedis_id=m.cedis_id
+    join private.coppel_peak_plazas p on p.cedis_id=r.cedis_id
+    where m.tarifa_id=new.tarifa_id and new.cuenta='COPPEL'
+      and public.operativo_normalizar(r.tipo_unidad)='sedan'
+      and public.operativo_normalizar(new.esquema)='paquete'
+      and (r.checkin_at at time zone 'America/Mexico_City')::date between p.inicio and p.fin
+  ) then return new; end if;
+  perform 1 from public.rutas where id=new.ruta_id for update;
+  select d.aplicar_descuento into v_aplicar from private.coppel_peak_decisiones d where d.ruta_id=new.ruta_id;
+  if new.dcto_pago is distinct from (case when coalesce(v_aplicar,false)
+    then -round(new.pago_base*0.05,2) else 0::numeric end) then
+    raise exception 'La decisión de descuento COPPEL cambió; vuelve a calcular la ruta';
+  end if;
+  return new;
+end;
+$$;
+revoke all on function private.coppel_peak_proteger_decision() from public, anon, authenticated;
+drop trigger if exists coppel_peak_proteger_decision on public.liquidaciones;
+create trigger coppel_peak_proteger_decision before insert on public.liquidaciones
+for each row execute function private.coppel_peak_proteger_decision();
+
+create or replace function public.coppel_peak_validar_ruta(
+  p_ruta_id bigint,p_tarifa_id bigint,p_registro text,p_aplicar boolean,
+  p_excepcion boolean default false,p_ajuste_pago numeric default 0,
+  p_ajuste_cobro numeric default 0,p_nota text default null,
+  p_proveedor_id bigint default null,p_actualizar_driver boolean default false
+) returns bigint language plpgsql security definer set search_path = ''
+as $$
+begin
+  perform public.coppel_peak_elegir_descuento(p_ruta_id,p_aplicar);
+  return public.validar_ruta(p_ruta_id,p_tarifa_id,p_registro,p_excepcion,
+    p_ajuste_pago,p_ajuste_cobro,p_nota,p_proveedor_id,p_actualizar_driver);
+end;
+$$;
+revoke all on function public.coppel_peak_validar_ruta(bigint,bigint,text,boolean,boolean,numeric,numeric,text,bigint,boolean) from public, anon;
+grant execute on function public.coppel_peak_validar_ruta(bigint,bigint,text,boolean,boolean,numeric,numeric,text,bigint,boolean) to authenticated;
 
 -- Se reemplaza solo la definición diagnosticada; ante cualquier cambio, aborta.
 do $$
