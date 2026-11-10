@@ -128,25 +128,38 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
 <section class="tab on" id="t-dia">
   <div class="stepper" id="stepper"></div>
   <div class="card" id="s1">
-    <h2>1 · Check-in · ¿Dónde cargas hoy?</h2>
+    <h2 id="in-title">1 · Check-in · ¿Dónde cargas hoy?</h2>
     <label>Cliente</label><select id="cli"></select><div class="note" id="cli-hint" style="margin-top:4px"></div>
     <label>CEDIS</label><select id="cedis"></select>
     <button class="btn ghost" type="button" id="det1" style="margin-top:8px">📍 Detectar mi ubicación</button><div id="detbox1"></div>
-    <div class="grid2">
-      <div><label>Paquetes asignados</label><input id="pk" type="number" inputmode="numeric" min="1" placeholder="0"></div>
+    <div class="grid2" id="route-fields">
+      <div><label id="pk-label">Paquetes asignados</label><input id="pk" type="number" inputmode="numeric" min="1" step="1" placeholder="0"></div>
       <div><label>ID de ruta</label><input id="rid" placeholder="Ej. R-48213"></div>
     </div>
-    <div id="unidad-w" class="hide"><label>Tipo de unidad de la ruta</label><select id="unidad"><option value="">Selecciona…</option><option value="3.5T">3.5 T (BT)</option><option value="OTRA">Otra unidad</option></select></div>
+    <div id="unidad-w" class="hide"><label>Tipo de unidad de la ruta</label><select id="unidad"><option value="">Selecciona…</option><option value="3.5T">3.5 T</option><option value="OTRA">Otra unidad</option></select></div>
+    <div id="hv-mode-wrap" class="hide"><label>Modalidad del servicio</label><select id="hv-mode"><option value="">Selecciona BT o Circuito…</option><option value="bt">BT · Artículos de alto valor</option><option value="circuito">Circuito · Flujo habitual</option></select><div class="note">La evidencia de dos fotos por artículo aplica únicamente a BT.</div></div>
     <div id="aux-checkin" class="hide">
       <label>¿Harás esta ruta solo o con auxiliar?</label>
       <select id="aux-mode"><option value="">Selecciona…</option><option value="solo">La hago solo</option><option value="auxiliar">Viajo con auxiliar</option></select>
-      <div id="aux-checkin-proof" class="hide"><label>Foto donde aparezcas con tu auxiliar antes de salir</label><div class="note">Toma la foto desde la cámara. Se guardará con marca de agua de fecha, hora, driver, cliente, CEDIS y ruta.</div><video id="aux-in-camera" class="hide" autoplay playsinline style="width:100%;max-height:320px;object-fit:cover;border-radius:12px;margin-top:8px"></video><button class="btn ghost" type="button" id="aux-in-open">📷 Abrir cámara</button><button class="btn" type="button" id="aux-in-capture" disabled>Tomar foto</button><img id="aux-in-preview" class="hide" alt="Foto capturada del driver con auxiliar" style="width:100%;max-height:260px;object-fit:contain;border-radius:12px;margin-top:8px"><canvas id="aux-in-canvas" class="hide"></canvas><div id="aux-in-error"></div></div>
+      <div id="aux-checkin-proof" class="hide"><label id="aux-in-label">Foto donde aparezcas con tu auxiliar antes de salir</label><div class="note" id="aux-in-note">Toma la foto desde la cámara. Se guardará con marca de agua de fecha, hora, driver, cliente, CEDIS y ruta.</div><video id="aux-in-camera" class="hide" autoplay playsinline style="width:100%;max-height:320px;object-fit:cover;border-radius:12px;margin-top:8px"></video><button class="btn ghost" type="button" id="aux-in-open">📷 Abrir cámara</button><button class="btn" type="button" id="aux-in-capture" disabled>Tomar foto</button><img id="aux-in-preview" class="hide" alt="Foto capturada del driver con auxiliar" style="width:100%;max-height:260px;object-fit:contain;border-radius:12px;margin-top:8px"><canvas id="aux-in-canvas" class="hide"></canvas><div id="aux-in-error"></div></div>
     </div>
-    <label>Zona(s) que visitarás</label>
+    <div id="route-zones"><label>Zona(s) que visitarás</label>
     <input id="zinp" placeholder="Escribe una zona y presiona Enter">
-    <div class="chips" id="zchips" style="margin-top:8px"></div>
-    <label>Hora de llegada al CEDIS</label>
+    <div class="chips" id="zchips" style="margin-top:8px"></div></div>
+    <div id="arrival-time"><label>Hora de llegada al CEDIS</label>
     <div style="display:flex;gap:8px"><input id="hora" type="time"><button class="btn ghost" id="bnow" style="margin:0;width:auto;padding:0 14px;font-size:13px">Ahora</button></div>
+    </div>
+    <div id="hv-arrival" class="hide">
+      <div class="note">Registra tu llegada al CEDIS. La hora y la distancia se obtienen automáticamente; activa tu ubicación.</div>
+      <button class="btn" id="hv-arrive" type="button" disabled>Check-in · Llegué al CEDIS</button>
+      <div id="hv-arrival-summary" role="status" aria-live="polite"></div>
+    </div>
+    <div id="hv-loading" class="hide">
+      <h3>2 · Check de salida · Registra tu carga</h3>
+      <div class="note">Cada ID corresponde a un artículo. Registra la cantidad, la ruta y la zona antes de fotografiar los artículos, todavía fuera de la unidad.</div>
+      <button class="btn" id="hv-register" type="button" disabled>Registrar carga</button>
+      <div id="hv-load-photos" class="hide"></div>
+    </div>
     <button class="btn" id="bin" disabled>Check IN · Inicia tu ruta</button>
     <div class="note" id="inhint">Completa todos los campos para habilitar el check-in.</div>
     <div id="inerr"></div>
@@ -189,7 +202,8 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
   <div class="card lock" id="s4">
     <h2>4 · Check-out · Fin de ruta</h2>
     <div class="note">Se habilita al terminar los pasos anteriores.</div>
-    <div id="aux-checkout-proof" class="hide"><label>Foto donde aparezcas con tu auxiliar al terminar la ruta</label><div class="note">Toma una foto nueva desde la cámara. Se guardará con marca de agua de fecha, hora, driver, cliente, CEDIS y ruta.</div><video id="aux-out-camera" class="hide" autoplay playsinline style="width:100%;max-height:320px;object-fit:cover;border-radius:12px;margin-top:8px"></video><button class="btn ghost" type="button" id="aux-out-open">📷 Abrir cámara</button><button class="btn" type="button" id="aux-out-capture" disabled>Tomar foto</button><img id="aux-out-preview" class="hide" alt="Foto capturada del driver con auxiliar al checkout" style="width:100%;max-height:260px;object-fit:contain;border-radius:12px;margin-top:8px"><canvas id="aux-out-canvas" class="hide"></canvas><div id="aux-out-error"></div></div>
+    <div id="hv-return-photos" class="hide"></div>
+    <div id="aux-checkout-proof" class="hide"><label>Foto donde aparezcas con tu auxiliar al terminar la ruta</label><div class="note" id="aux-out-note">Toma una foto nueva desde la cámara. Se guardará con marca de agua de fecha, hora, driver, cliente, CEDIS y ruta.</div><video id="aux-out-camera" class="hide" autoplay playsinline style="width:100%;max-height:320px;object-fit:cover;border-radius:12px;margin-top:8px"></video><button class="btn ghost" type="button" id="aux-out-open">📷 Abrir cámara</button><button class="btn" type="button" id="aux-out-capture" disabled>Tomar foto</button><img id="aux-out-preview" class="hide" alt="Foto capturada del driver con auxiliar al checkout" style="width:100%;max-height:260px;object-fit:contain;border-radius:12px;margin-top:8px"><canvas id="aux-out-canvas" class="hide"></canvas><div id="aux-out-error"></div></div>
     <div id="manif" class="hide">
       <h3>Manifiestos (obligatorio)</h3>
       <div class="note" style="margin-top:0">Sube las fotos de tus manifiestos antes del check out. Mínimo 1, máximo 10.</div>
@@ -301,6 +315,7 @@ nav button{position:relative}nav button.alerta-dot::after{content:"";position:ab
 <script src="vendor/supabase-js-2.118.0.js"></script>
 <script src="config.js"></script>
 <script src="invitaciones.js?v=estados-1"></script>
-<script src="app.js?v=invitaciones-estados-1"></script>
+<script src="high-value.js?v=1"></script>
+<script src="app.js?v=high-value-1"></script>
 </body>
 </html>

@@ -194,13 +194,14 @@ const cliName=id=>(CLI.find(x=>String(x.id)===String(id))||{}).nombre||"";
 const cedObjById=id=>CLI.flatMap(c=>c.cedis.map(e=>({...e,cliente_id:c.id,cliente_nombre:c.nombre}))).find(e=>String(e.id)===String(id));
 const cedNameById=id=>cedObjById(id)?.nombre||"";
 const cedName=(cid,eid)=>{const c=CLI.find(x=>String(x.id)===String(cid));const e=c&&c.cedis.find(y=>String(y.id)===String(eid));return e?e.nombre:""};
-$("cli").onchange=()=>{fillCedis($("cedis"),$("cli").value);checkIn()};
+$("cli").onchange=()=>{if($("hv-mode").value==="bt")clearAuxCapture("in");$("hv-mode").value="";fillCedis($("cedis"),$("cli").value);checkIn()};
 function resetFoto(){const hadEvidence=canBlob||canBitacoraBlob;canBlob=null;canMeta=null;canBitacoraBlob=null;canEvidenceGeneration++;canLocationGeneration++;$("cv").classList.add("hide");$("wm-can-status").textContent="";if(hadEvidence)$("cmeta").innerHTML='<span style="color:var(--bad)">Cambiaste el CEDIS: vuelve a tomar las fotos para validar tu ubicación.</span>'}
 $("ccli").onchange=()=>{fillCedis($("ccedis"),$("ccli").value);resetFoto();checkCan()};
 $("ccedis").onchange=()=>{resetFoto();checkCan()};
 
 // ---------- Ruta ----------
 function renderStepper(){const n=["Check-in","Fin de ruta","Incidencias","Check-out"];
+  if(highValueActive()||highValueSelected())n[0]="Llegada / Salida";
   $("stepper").innerHTML=n.map((x,i)=>`<div class="${i<S.stage?"done":i===S.stage?"cur":""}"><i></i>${x}</div>`).join("")}
 function unlock(id,on){$(id).classList.toggle("lock",!on)}
 function setStage(n){
@@ -208,7 +209,8 @@ function setStage(n){
   if(n>=1&&S.route){$("s1").classList.add("hide");$("sresume").classList.remove("hide");const r=S.route;
     $("sresume").innerHTML=`<h2>✅ Ruta en curso</h2><div class="kv"><span>Cliente</span><b>${esc(r.cli)}</b></div><div class="kv"><span>CEDIS</span><b>${esc(r.cedis)}</b></div>
     <div class="kv"><span>ID de ruta</span><b>${esc(r.rid)}</b></div><div class="kv"><span>Paquetes</span><b>${esc(r.pk)}</b></div>
-    <div class="kv"><span>Zonas</span><b>${esc(r.zonas.join(", "))}</b></div><div class="kv"><span>Modalidad</span><b>${r.auxiliarRequerido?(r.viajaConAuxiliar?"Con auxiliar":"Solo"):"No aplica"}</b></div><div class="kv"><span>Llegada a CEDIS</span><b>${esc(r.hora)}</b></div>`;
+    <div class="kv"><span>Zonas</span><b>${esc(r.zonas.join(", "))}</b></div><div class="kv"><span>Modalidad</span><b>${r.auxiliarRequerido?(r.viajaConAuxiliar?"Con auxiliar":"Solo"):"No aplica"}</b></div><div class="kv"><span>Llegada a CEDIS</span><b>${esc(r.hora)}</b></div>
+    ${r.altoValor?`<div class="kv"><span>Servicio</span><b>BT · Alto valor</b></div><div class="kv"><span>Llegada registrada</span><b>${esc(new Date(r.arrivalAt).toLocaleString("es-MX"))}</b></div><div class="kv"><span>Distancia al CEDIS al llegar</span><b>${esc(fmtDist(r.arrivalDistance))}</b></div>`:""}`;
     $("hstate").className="pill ok";$("hstate").textContent="En ruta"}
 }
 async function resumeRoute(){
@@ -218,21 +220,44 @@ async function resumeRoute(){
     if(navigator.onLine)await syncPendingRoute();
     return;
   }
-  const {data}=await sb.from("rutas").select("*,cedis(id,nombre,cliente_id)").eq("driver_id",ME.id).eq("estado","en_ruta").order("checkin_at",{ascending:false}).limit(1);
-  if(!data||!data.length)return;const r=data[0];
+  const {data,error}=await sb.from("rutas").select("*,cedis(id,nombre,cliente_id)").eq("driver_id",ME.id).eq("estado","en_ruta").order("checkin_at",{ascending:false}).limit(1);
+  if(error)throw error;
+  if(!data||!data.length){await resumeHighValueDraft();return}const r=data[0];
   S.route={unidad:r.tipo_unidad,auxiliarRequerido:r.auxiliar_requerido===true,viajaConAuxiliar:r.viaja_con_auxiliar===true,dbId:r.id,cli:cliName(r.cedis.cliente_id),cliId:r.cedis.cliente_id,cedis:r.cedis.nombre,cedisId:r.cedis.id,pk:r.paquetes_asignados,rid:r.id_ruta,zonas:r.zonas,
     hora:new Date(r.hora_llegada_cedis).toTimeString().slice(0,5),checkin:new Date(r.checkin_at)};
-  await localPut("routes",{key:routeLocalKey(),driverId:ME.id,status:"active",serverRouteId:r.id,
+  const record={key:routeLocalKey(),driverId:ME.id,status:"active",serverRouteId:r.id,
     routeInfo:{unidad:r.tipo_unidad,auxiliarRequerido:S.route.auxiliarRequerido,viajaConAuxiliar:S.route.viajaConAuxiliar,cli:S.route.cli,cliId:S.route.cliId,cedis:S.route.cedis,cedisId:S.route.cedisId,pk:S.route.pk,rid:S.route.rid,zonas:S.route.zonas,hora:S.route.hora,checkin:S.route.checkin.toISOString()},
-    routePayload:{driver_id:ME.id,cedis_id:r.cedis.id,id_ruta:r.id_ruta,paquetes_asignados:r.paquetes_asignados,zonas:r.zonas,hora_llegada_cedis:r.hora_llegada_cedis,tipo_unidad:r.tipo_unidad,auxiliar_requerido:S.route.auxiliarRequerido,viaja_con_auxiliar:S.route.viajaConAuxiliar,evidencia_auxiliar_checkin_path:r.evidencia_auxiliar_checkin_path||null,evidencia_auxiliar_checkout_path:r.evidencia_auxiliar_checkout_path||null,checkin_at:r.checkin_at},checkout:null,manifests:[],remoteManifests:[]});
+    routePayload:{driver_id:ME.id,cedis_id:r.cedis.id,id_ruta:r.id_ruta,paquetes_asignados:r.paquetes_asignados,zonas:r.zonas,hora_llegada_cedis:r.hora_llegada_cedis,tipo_unidad:r.tipo_unidad,auxiliar_requerido:S.route.auxiliarRequerido,viaja_con_auxiliar:S.route.viajaConAuxiliar,evidencia_auxiliar_checkin_path:r.evidencia_auxiliar_checkin_path||null,evidencia_auxiliar_checkout_path:r.evidencia_auxiliar_checkout_path||null,checkin_at:r.checkin_at},
+    auxiliary:{checkinPath:r.evidencia_auxiliar_checkin_path||null},checkout:null,manifests:[],remoteManifests:[]};
+  if(r.alto_valor){
+    const {data:arrival,error}=await sb.from("ruta_llegadas").select("*").eq("id",r.llegada_id).single();
+    if(error)throw error;
+    Object.assign(record.routeInfo,{altoValor:true,modalidadOperacion:"bt",arrivalAt:arrival.llegada_at,arrivalDistance:arrival.distancia_m});
+    Object.assign(record.routePayload,{alto_valor:true,modalidad_operacion:"bt",llegada_id:r.llegada_id,evidencia_carga:r.evidencia_carga});
+    record.highValueArrival={arrival};record.articleLoad=r.evidencia_carga||[];record.articleReturns=[];record.progress=r.progreso_bt;
+  }
+  await localPut("routes",record);
+  if(r.alto_valor){await restoreOfflineRoute(record);return}
   prefillCan();setStage(1);updFin();if(requiereManif())await loadManif();
 }
 async function restoreOfflineRoute(record){
-  if(!record)return;
+  if(!record)record=await localGet("routes",routeLocalKey());
+  if(!record){await resumeHighValueDraft();return}
   ROUTE_SYNC_ERROR=record.syncError||null;
   const r=record.routeInfo;
   S.route={...r,viajaConAuxiliar:r.viajaConAuxiliar===true,dbId:record.serverRouteId||null,localKey:record.key,checkin:new Date(r.checkin)};
   S.zonas=[...r.zonas];prefillCan();setStage(1);updFin();
+  if(r.altoValor){
+    HV_PHOTOS.returns=record.articleReturns||[];
+    if(record.progress){
+      const p=record.progress;S.result=p.result;S.fallos=p.fallos||{};S.inc=p.inc;
+      S.incSel=new Set(p.incSel||[]);$("inctxt").value=p.comment||"";
+      if(p.result){$("ent").value=p.result.ent;$("fal").value=p.result.fal;updFin()}
+      $("inclist").classList.toggle("hide",S.inc!==true);mark();
+      $("incchips").querySelectorAll("[data-i]").forEach(el=>el.classList.toggle("on",S.incSel.has(el.dataset.i)));
+      setStage(p.stage||1);if(S.stage>=2)enableOut();
+    }
+  }
   if(record.checkout){
     S.result={ent:record.checkout.ent, fal:record.checkout.fal};
     S.inc=record.checkout.hubo_incidencias;
@@ -271,12 +296,20 @@ async function syncPendingRoute(){
   if(syncBusy||!ME||!navigator.onLine)return false;
   const key=routeLocalKey();let record;
   try{record=await localGet("routes",key)}catch(e){setNetStatus(e.message,true);return false}
-  if(!record){ROUTE_SYNC_ERROR=null;OFFLINE_MODE=false;setNetStatus("");return true}
+  if(!record){
+    if(HV_BUSY)return false;
+    try{HV_BUSY=true;await syncHighValueDraft()}
+    catch(e){err("inerr",e);setNetStatus("Llegada pendiente de envío. Tus datos siguen guardados en este dispositivo.",true);return false}
+    finally{HV_BUSY=false;if(HV_DRAFT)syncHighValueUI()}
+    ROUTE_SYNC_ERROR=null;OFFLINE_MODE=false;setNetStatus("");return true;
+  }
+  if(HV_BUSY)return false;
   ROUTE_SYNC_ERROR=record.syncError||null;
   syncBusy=true;
   let syncStep="preparando el envío de la ruta";
   try{
     syncStep="sincronizando evidencia del check-in";
+    await syncHighValueEvidence(record,"load");
     await syncAuxiliaryEvidence(record,"checkin");
     if(!record.serverRouteId){
       syncStep="verificando si el check-in ya existe en Supabase";
@@ -318,8 +351,14 @@ async function syncPendingRoute(){
       }
     }
     if(record.manifests&&record.manifests.length){record.manifests=[];await localPut("routes",record)}
+    if(record.routeInfo.altoValor&&record.progress&&!record.checkout){
+      syncStep="guardando avance de cierre BT";
+      const {error}=await sb.from("rutas").update({progreso_bt:record.progress}).eq("id",record.serverRouteId);
+      if(error)throw error;
+    }
     if(record.checkout){
       syncStep="sincronizando evidencia del check-out";
+      await syncHighValueEvidence(record,"returns");
       await syncAuxiliaryEvidence(record,"checkout");
       if(record.checkout.fallos.length){syncStep="registrando los paquetes fallidos";const rows=record.checkout.fallos.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_fallos").upsert(rows);if(error)throw error}
       if(record.checkout.incidencias.length){syncStep="registrando las incidencias de la ruta";const rows=record.checkout.incidencias.map(x=>({...x,ruta_id:record.serverRouteId}));const {error}=await sb.from("ruta_incidencias").upsert(rows);if(error)throw error}
@@ -420,10 +459,11 @@ function tipoUnidadRuta(){
   return TIPOS_SIN_EQUIVALENCIA.includes(tipo)?tipo:esCoppel()?$("unidad").value:tipo;
 }
 function syncUnidad(){const on=esCoppel();$("unidad-w").classList.toggle("hide",!on);if(on&&!$("unidad").value&&/BT/i.test(cliName($("cli").value)))$("unidad").value="3.5T";if(!on)$("unidad").value=""}
-$("unidad").onchange=()=>checkIn();
+$("unidad").onchange=()=>{if($("hv-mode").value==="bt")clearAuxCapture("in");$("hv-mode").value="";checkIn()};
+document.querySelector("#cedis").addEventListener("change",()=>{if(highValueSelected()&&!HV_DRAFT)clearAuxCapture("in")});
 document.querySelector("#cedis").addEventListener("change",checkIn);
 const textoAux=v=>String(v||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toUpperCase();
-const AUX_CAMERA={in:{stream:null,blob:null,url:null},out:{stream:null,blob:null,url:null}};
+const AUX_CAMERA={in:{stream:null,blob:null,url:null,facing:"user"},out:{stream:null,blob:null,url:null,facing:"user"}};
 function requiereAuxiliarRuta(){
   const cliente=textoAux(cliName($("cli").value)+" "+cedName($("cli").value,$("cedis").value));
   const ruta=textoAux([cedName($("cli").value,$("cedis").value),$("rid").value,...S.zonas,$("unidad").value,VEHICULO?.tipo,VEHICULO?.marca_modelo,DRIVER?.tipo_vehiculo,DRIVER?.tipo_unidad,DRIVER?.esquema].join(" "));
@@ -450,13 +490,16 @@ function clearAuxCapture(stage){
   camera.url=null;preview.removeAttribute("src");preview.classList.add("hide");
 }
 async function abrirCamaraAuxiliar(stage){
+  if(stage==="in"?highValueSelected():highValueActive()){
+    err(`aux-${stage}-error`,null);$(`aux-${stage}-file`).click();return;
+  }
   clearAuxCapture(stage);
   if(stage==="in")checkIn();else enableOut();
   err(`aux-${stage}-error`,null);
   if(!navigator.mediaDevices?.getUserMedia){err(`aux-${stage}-error`,new Error("Este dispositivo no permite abrir la cámara desde la app. Usa la app en una conexión segura o contacta a Operaciones."));return}
   stopAuxCamera(stage);
   try{
-    const stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:"user",width:{ideal:1280},height:{ideal:960}}});
+    const stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:AUX_CAMERA[stage].facing},width:{ideal:1280},height:{ideal:960}}});
     const camera=AUX_CAMERA[stage],video=$(`aux-${stage}-camera`);
     camera.stream=stream;video.srcObject=stream;video.classList.remove("hide");
     await video.play();
@@ -469,12 +512,13 @@ function textoMarcaAgua(ctx,text,maxWidth){
   if(line)lines.push(line);
   return lines;
 }
-async function capturarFotoAuxiliar(stage){
+async function capturarFotoAuxiliar(stage,image=null){
   const camera=AUX_CAMERA[stage],video=$(`aux-${stage}-camera`),canvas=$(`aux-${stage}-canvas`);
-  if(!camera.stream||!video.videoWidth||!video.videoHeight)throw new Error("Abre la cámara y espera a que se vea la imagen antes de tomar la foto.");
-  const capturedAt=new Date(),loc=await getLoc(),scale=Math.min(1,1600/video.videoWidth);
-  canvas.width=Math.round(video.videoWidth*scale);canvas.height=Math.round(video.videoHeight*scale);
-  const ctx=canvas.getContext("2d");ctx.drawImage(video,0,0,canvas.width,canvas.height);
+  if(!image&&(!camera.stream||!video.videoWidth||!video.videoHeight))throw new Error("Abre la cámara y espera a que se vea la imagen antes de tomar la foto.");
+  const capturedAt=new Date(),loc=await getLoc(),scale=image?1:Math.min(1,1600/Math.max(video.videoWidth,video.videoHeight));
+  const size=image?evidencePhotoSize(image.width,image.height):{width:Math.round(video.videoWidth*scale),height:Math.round(video.videoHeight*scale)};
+  canvas.width=size.width;canvas.height=size.height;
+  const ctx=canvas.getContext("2d");ctx.drawImage(image||video,0,0,canvas.width,canvas.height);
   const isCheckin=stage==="in",client=isCheckin?cliName($("cli").value):S.route?.cli,cedis=isCheckin?cedName($("cli").value,$("cedis").value):S.route?.cedis;
   const routeId=isCheckin?$("rid").value.trim():S.route?.rid;
   const unit=isCheckin?tipoUnidadRuta():S.route?.unidad;
@@ -497,7 +541,7 @@ async function capturarFotoAuxiliar(stage){
   wrapped.forEach((line,index)=>{ctx.font=index===0?`bold ${fontSize}px sans-serif`:`${fontSize}px sans-serif`;ctx.fillStyle="#fff";ctx.fillText(line,padding,canvas.height-blockHeight+padding+index*lineHeight)});
   ctx.save();ctx.translate(canvas.width/2,canvas.height/2);ctx.rotate(-.38);ctx.textAlign="center";ctx.textBaseline="middle";
   ctx.font=`bold ${Math.round(canvas.width/9)}px sans-serif`;ctx.fillStyle="rgba(255,255,255,.16)";ctx.fillText("CHAZKI",0,0);ctx.restore();
-  const blob=await new Promise(resolve=>canvas.toBlob(resolve,"image/jpeg",.82));
+  const blob=image?await encodeEvidencePhoto(canvas):await new Promise(resolve=>canvas.toBlob(resolve,"image/jpeg",.82));
   if(!blob)throw new Error("No se pudo procesar la foto capturada.");
   if(blob.size>10*1024*1024)throw new Error("La foto procesada excede el límite de 10 MB.");
   camera.blob=blob;
@@ -508,6 +552,20 @@ async function capturarFotoAuxiliar(stage){
   if(stage==="in")checkIn();else enableOut();
 }
 ["in","out"].forEach(stage=>{
+  const input=document.createElement("input");input.id=`aux-${stage}-file`;input.type="file";input.accept="image/*";input.setAttribute("capture","user");input.className="hide";
+  $(`aux-${stage}-open`).after(input);
+  input.onchange=async e=>{
+    const file=e.target.files[0];e.target.value="";if(!file)return;
+    if(HV_BUSY){err(`aux-${stage}-error`,new Error("Espera a que termine de guardarse la fotografía."));return}
+    HV_BUSY=true;$(`aux-${stage}-open`).disabled=true;err(`aux-${stage}-error`,null);
+    if(stage==="in")checkIn();else enableOut();
+    try{const image=await evidencePhotoCanvas(file);await capturarFotoAuxiliar(stage,image)}
+    catch(error){err(`aux-${stage}-error`,error)}
+    finally{HV_BUSY=false;$(`aux-${stage}-open`).disabled=false;if(stage==="in")checkIn();else enableOut()}
+  };
+  const rotate=document.createElement("button");rotate.id=`aux-${stage}-rotate`;rotate.type="button";rotate.className="btn ghost";rotate.textContent="Rotar cámara";
+  $(`aux-${stage}-open`).after(rotate);
+  rotate.onclick=()=>{AUX_CAMERA[stage].facing=AUX_CAMERA[stage].facing==="user"?"environment":"user";abrirCamaraAuxiliar(stage)};
   $(`aux-${stage}-open`).onclick=()=>abrirCamaraAuxiliar(stage);
   $(`aux-${stage}-capture`).onclick=async()=>{
     $(`aux-${stage}-capture`).disabled=true;err(`aux-${stage}-error`,null);
@@ -515,17 +573,20 @@ async function capturarFotoAuxiliar(stage){
   };
 });
 document.addEventListener("visibilitychange",()=>{if(document.hidden){stopAuxCamera("in");stopAuxCamera("out")}});
-$("aux-mode").onchange=()=>{if($("aux-mode").value!=="auxiliar")clearAuxCapture("in");checkIn()};
+$("aux-mode").onchange=()=>{clearAuxCapture("in");checkIn()};
 async function procesarFotoAuxiliar(stage){
   const blob=AUX_CAMERA[stage].blob;
   if(!blob)throw new Error("Abre la cámara y toma una foto nueva con tu auxiliar.");
   return blob;
 }
 function checkIn(){syncUnidad();syncAuxiliary();const required=requiereAuxiliarRuta(),auxMode=$("aux-mode").value;
+  const high=syncHighValueUI();renderStepper();if(high)return;
   const auxiliaryOk=!required||auxMode==="solo"||(auxMode==="auxiliar"&&!!AUX_CAMERA.in.blob);
-  const ok=$("cli").value&&$("cedis").value&&(!esCoppel()||$("unidad").value)&&+$("pk").value>0&&$("rid").value.trim()&&S.zonas.length&&$("hora").value&&auxiliaryOk;
+  const modeOk=!isHighValueRoute(cliName($("cli").value),tipoUnidadRuta())||$("hv-mode").value==="circuito";
+  const ok=modeOk&&$("cli").value&&$("cedis").value&&(!esCoppel()||$("unidad").value)&&+$("pk").value>0&&$("rid").value.trim()&&S.zonas.length&&$("hora").value&&auxiliaryOk;
   $("bin").disabled=!ok;$("inhint").textContent=ok?(TIPOS_SIN_EQUIVALENCIA.includes(tipoUnidadRuta())?`Se registrará ${tipoUnidadRuta()}; requiere una tarifa propia vigente.`:"Todo listo. Presiona Check IN para iniciar tu ruta."):"Completa todos los campos para habilitar el check-in."}
 $("bin").onclick=async()=>{
+  if(highValueSelected()){await startHighValueRoute();return}
   $("bin").disabled=true;err("inerr",null);
   const hoy=new Date().toLocaleDateString("en-CA");
   const checkinAt=new Date(),llegada=new Date(`${hoy}T${$("hora").value}`).toISOString(),withAux=requiereAuxiliarRuta()&&$("aux-mode").value==="auxiliar";
@@ -534,7 +595,7 @@ $("bin").onclick=async()=>{
   catch(e){err("inerr",e);$("bin").disabled=false;return}
   const tipoUnidad=tipoUnidadRuta();
   const routeRequiresAuxiliary=requiereAuxiliarRuta();
-  const routePayload={driver_id:ME.id,cedis_id:+$("cedis").value,id_ruta:$("rid").value.trim(),paquetes_asignados:+$("pk").value,zonas:[...S.zonas],hora_llegada_cedis:llegada,tipo_unidad:tipoUnidad,auxiliar_requerido:routeRequiresAuxiliary,viaja_con_auxiliar:withAux,evidencia_auxiliar_checkin_path:null,evidencia_auxiliar_checkout_path:null,checkin_at:checkinAt.toISOString()};
+  const routePayload={driver_id:ME.id,cedis_id:+$("cedis").value,id_ruta:$("rid").value.trim(),paquetes_asignados:+$("pk").value,zonas:[...S.zonas],hora_llegada_cedis:llegada,tipo_unidad:tipoUnidad,auxiliar_requerido:routeRequiresAuxiliary,viaja_con_auxiliar:withAux,evidencia_auxiliar_checkin_path:null,evidencia_auxiliar_checkout_path:null,checkin_at:checkinAt.toISOString(),...($("hv-mode").value?{modalidad_operacion:$("hv-mode").value}:{})};
   const routeInfo={cli:cliName($("cli").value),cliId:$("cli").value,cedis:cedName($("cli").value,$("cedis").value),cedisId:$("cedis").value,pk:+$("pk").value,rid:$("rid").value.trim(),zonas:[...S.zonas],hora:$("hora").value,checkin:checkinAt.toISOString(),unidad:routePayload.tipo_unidad,auxiliarRequerido:routeRequiresAuxiliary,viajaConAuxiliar:withAux};
   const record={key:routeLocalKey(),driverId:ME.id,status:"checkin_pending",serverRouteId:null,routeInfo,routePayload,auxiliary:{checkinBlob,checkinPath:null},checkout:null,manifests:[]};
   try{await localPut("routes",record)}
@@ -568,6 +629,7 @@ function sumC(){return Object.values(S.fallos).reduce((a,b)=>a+b,0)}
 function updFin(){
   const pk=S.route?S.route.pk:0,e=+$("ent").value||0,f=+$("fal").value||0,filled=$("ent").value!==""&&$("fal").value!=="";
   let ok=filled&&e+f===pk;
+  if(highValueActive())ok=ok&&Number.isSafeInteger(e)&&Number.isSafeInteger(f)&&e>=0&&f>=0;
   $("s2note").innerHTML=filled?(e+f===pk?`<span style="color:var(--ok)">✔ Cuadra con los ${pk} paquetes asignados</span>`:`<span style="color:var(--bad)">Entregados + fallidos = ${e+f}; debes cuadrar con ${pk}</span>`):`Asignados: <b>${pk}</b>`;
   $("causes").classList.toggle("hide",!(f>0));$("ftot").textContent=f;
   if(f>0){drawCauses();const s=sumC();ok=ok&&s===f;$("csum").innerHTML=s===f?`<span style="color:var(--ok)">✔ Causas completas (${s}/${f})</span>`:`<span style="color:var(--bad)">Asignadas ${s} de ${f}</span>`}else S.fallos={};
@@ -578,12 +640,13 @@ function updFin(){
 function drawCauses(){$("clist").innerHTML=CAUSAS.map(c=>`<div class="cause"><span>${esc(c.nombre)}</span><div class="qty"><button data-c="${esc(c.id)}" data-d="-1">−</button><span>${S.fallos[c.id]||0}</span><button data-c="${esc(c.id)}" data-d="1">+</button></div></div>`).join("")}
 $("clist").onclick=e=>{const b=e.target.closest("button");if(!b)return;const i=b.dataset.c,d=+b.dataset.d,f=+$("fal").value||0;
   if(d>0&&sumC()>=f)return;S.fallos[i]=Math.max(0,(S.fallos[i]||0)+d);updFin()};
-$("b2").onclick=()=>{S.result={ent:+$("ent").value,fal:+$("fal").value};setStage(2);$("s3").scrollIntoView({behavior:"smooth"})};
+$("b2").onclick=async()=>{S.result={ent:+$("ent").value,fal:+$("fal").value};if(!await saveHighValueProgress())return;setStage(2);await saveHighValueProgress();$("s3").scrollIntoView({behavior:"smooth"})};
 
-$("inc-no").onclick=()=>{S.inc=false;$("inclist").classList.add("hide");mark();enableOut()};
-$("inc-si").onclick=()=>{S.inc=true;$("inclist").classList.remove("hide");mark();enableOut()};
+$("inc-no").onclick=async()=>{S.inc=false;S.incSel.clear();$("inclist").classList.add("hide");mark();if(await saveHighValueProgress())enableOut()};
+$("inc-si").onclick=async()=>{S.inc=true;$("inclist").classList.remove("hide");mark();if(await saveHighValueProgress())enableOut()};
 function mark(){$("inc-no").className="btn "+(S.inc===false?"ok":"ghost");$("inc-si").className="btn "+(S.inc===true?"bad":"ghost")}
-$("incchips").onclick=e=>{const i=e.target.dataset.i;if(i===undefined)return;S.incSel.has(i)?S.incSel.delete(i):S.incSel.add(i);e.target.classList.toggle("on");enableOut()};
+$("incchips").onclick=async e=>{const i=e.target.dataset.i;if(i===undefined)return;S.incSel.has(i)?S.incSel.delete(i):S.incSel.add(i);e.target.classList.toggle("on");if(await saveHighValueProgress())enableOut()};
+$("inctxt").onchange=()=>saveHighValueProgress();
 const CLI_EXTRAS=["FULLER","PRIVALIA","SODEXO","SMURFIT","TTAIO"];
 const llevaExtras=()=>S.route&&CLI_EXTRAS.includes(String(S.route.cli||"").toUpperCase().replace(/[^A-Z0-9]/g,""));
 const requiereManif=()=>S.route&&S.route.unidad==="3.5T"&&/^COPPEL/i.test(S.route.cli||"");
@@ -636,9 +699,16 @@ $("manif-file").onchange=async e=>{
   }catch(x){err("manif-err",x)}
   $("manif-add").disabled=MANIF.length>=10;
 };
-function enableOut(){const rm=!!requiereManif(),aux=!!S.route?.viajaConAuxiliar;$("manif").classList.toggle("hide",!rm);if(rm&&!manifCargado&&S.route)loadManif();$("extras").classList.toggle("hide",!llevaExtras());$("aux-checkout-proof").classList.toggle("hide",!aux);const auxOk=!aux||!!AUX_CAMERA.out.blob;const ok=(S.inc===false||(S.inc===true&&S.incSel.size>0))&&(!rm||MANIF.length>0)&&auxOk;if(S.stage>=2)setStage((S.inc===false||(S.inc===true&&S.incSel.size>0))?3:2);$("bout").disabled=!(ok&&S.stage>=3)}
+function enableOut(){const rm=!!requiereManif(),aux=!!S.route?.viajaConAuxiliar;$("manif").classList.toggle("hide",!rm);if(rm&&!manifCargado&&S.route)loadManif();$("extras").classList.toggle("hide",!llevaExtras());$("aux-checkout-proof").classList.toggle("hide",!aux);const auxOk=!aux||!!AUX_CAMERA.out.blob;const ok=(S.inc===false||(S.inc===true&&S.incSel.size>0))&&(!rm||MANIF.length>0)&&auxOk;if(S.stage>=2)setStage((S.inc===false||(S.inc===true&&S.incSel.size>0))?3:2);
+  $("aux-out-rotate").classList.toggle("hide",highValueActive());$("aux-out-capture").classList.toggle("hide",highValueActive());
+  $("aux-out-note").textContent=highValueActive()?"Se abrirá la cámara del celular. Usa sus controles para cambiar de cámara. Al aceptar, Chazki guardará la foto con marca de agua, hasta 2560 px y 2 MB.":"Toma una foto nueva desde la cámara. Se guardará con marca de agua de fecha, hora, driver, cliente, CEDIS y ruta.";
+  const returns=highValueActive()&&S.stage===3&&(S.result?.fal||0)>0;
+  $("hv-return-photos").classList.toggle("hide",!returns);if(returns)drawHighValuePhotos("returns");
+  const evidenceOk=!highValueActive()||highValuePhotosComplete(HV_PHOTOS.returns,S.result?.fal||0);
+  $("bout").disabled=!(ok&&S.stage>=3&&evidenceOk&&!HV_BUSY)}
 $("bout").onclick=async()=>{
   $("bout").disabled=true;err("outerr",null);const r=S.route,res=S.result;
+  if(highValueActive()&&!highValuePhotosComplete(HV_PHOTOS.returns,res.fal)){err("outerr",new Error("Faltan dos fotografías por cada artículo devuelto."));enableOut();return}
   let record;
   try{record=await localGet("routes",routeLocalKey());if(!record)throw new Error("No existe una copia local de esta ruta. No se cerró para evitar perder el registro.")}catch(e){err("outerr",e);$("bout").disabled=false;return}
   let auxiliaryBlob=null;
@@ -1240,6 +1310,7 @@ async function loadPerfil(){
   if(fallo){err("contact-err",new Error("No se pudo cargar el perfil: "+fallo.message));return}
   err("contact-err",null);
   DRIVER=d.data||DRIVER;  VEHICULO=v.data;LICENCIA=l.data;const V=VEHICULO,L=LICENCIA;
+  if(!S.route)checkIn();
   $("pnom").textContent=DRIVER.nombre;$("pcod").textContent=DRIVER.codigo||"—";$("pmail").textContent=ME.email;
   $("vpl").textContent=V?V.placas:"Sin registrar";$("vtp").textContent=V?(V.tipo_detalle||V.tipo):"—";$("vmm").textContent=(V&&V.marca_modelo)||"—";
   $("lnum").textContent=(L&&L.numero)||"Sin registrar";$("ltip").textContent=(L&&L.tipo)||"—";
@@ -1412,4 +1483,5 @@ setInterval(async()=>{
 },20000);
 sb.auth.onAuthStateChange(ev=>{if(ev==="SIGNED_OUT")location.reload()});
 if("serviceWorker" in navigator&&location.protocol.startsWith("http"))navigator.serviceWorker.register("sw.js").catch(()=>{});
+initHighValue();
 boot().catch(e=>{const message=e&&e.message?e.message:"No se pudo iniciar la app.";setNetStatus(message,true);$("auth").classList.remove("hide");$("amsg").innerHTML=`<div class="errbox">${esc(message)}</div>`});

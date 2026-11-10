@@ -696,6 +696,22 @@ async function verDetalleRuta(id){
     auxFotos=Object.fromEntries((data||[]).filter(x=>x.signedUrl).map(x=>[x.path,x.signedUrl]));
   }
   const fecha=x=>x?new Date(x).toLocaleString("es-MX",{dateStyle:"medium",timeStyle:"short"}):"—";
+  let altoValor="";
+  if(ru.alto_valor){
+    const {data:arrival,error}=await sb.from("ruta_llegadas").select("*").eq("id",ru.llegada_id).single();
+    if(error){toast("No se pudo consultar la llegada: "+error.message);return}
+    const evidence=[{label:"Llegada",path:arrival.foto_path},
+      ...(ru.evidencia_carga||[]).map(x=>({label:`Carga · Artículo ${x.item}`,path:x.path})),
+      ...(ru.evidencia_devoluciones||[]).map(x=>({label:`Devolución · Artículo ${x.item}`,path:x.path}))];
+    const {data:signed,error:photoError}=await sb.storage.from("ruta-articulos").createSignedUrls(evidence.map(x=>x.path),3600);
+    if(photoError||signed?.some(x=>x.error)){toast("No se pudieron consultar las evidencias: "+(photoError?.message||signed.find(x=>x.error).error));return}
+    altoValor=`<h3>BT · Evidencia de artículos de alto valor</h3><div>Llegada: <b>${esc(fecha(arrival.llegada_at))}</b><br>
+      Distancia al CEDIS: <b>${esc(arrival.distancia_m)} m</b> · Precisión GPS: ±${esc(Math.round(arrival.precision_m))} m</div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:8px">${evidence.map(x=>{
+        const url=signed.find(s=>s.path===x.path)?.signedUrl;
+        return url?`<a href="${esc(url)}" target="_blank" rel="noopener"><img src="${esc(url)}" alt="${esc(x.label)}" style="width:100%;border-radius:8px"><small>${esc(x.label)}</small></a>`:`<div>${esc(x.label)}: imagen no disponible</div>`;
+      }).join("")}</div>`;
+  }
   const fila=(label,value)=>`<div style="display:flex;justify-content:space-between;gap:14px;padding:7px 0;border-bottom:1px solid var(--line)"><span style="color:var(--mut)">${label}</span><b style="text-align:right">${value==null||value===""?"—":value}</b></div>`;
   const fallos=(ru.ruta_fallos||[]).map(x=>fila(esc(x.causas_fallo?.nombre||"Causa sin nombre"),esc(x.cantidad))).join("")||'<div style="color:var(--mut)">Sin paquetes fallidos registrados.</div>';
   const incidencias=(ru.ruta_incidencias||[]).map(x=>`<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>${esc(x.tipos_incidencia?.nombre||"Incidencia")}</b>${x.comentario?`<small style="display:block;margin-top:3px">${esc(x.comentario)}</small>`:""}</div>`).join("")||'<div style="color:var(--mut)">Sin incidencias registradas.</div>';
@@ -711,6 +727,8 @@ async function verDetalleRuta(id){
     ${fila("Hora de llegada al CEDIS",ru.hora_llegada_cedis?hh(ru.hora_llegada_cedis):"—")}
     ${fila("Zonas",esc((ru.zonas||[]).join(", ")))}
     ${fila("Tipo de unidad",esc(ru.tipo_unidad))}
+    ${ru.modalidad_operacion?fila("Servicio",ru.modalidad_operacion==="bt"?"BT":"Circuito"):""}
+    ${altoValor}
     ${fila("Modalidad de ruta",ru.auxiliar_requerido?(ru.viaja_con_auxiliar?"Con auxiliar":"La hace solo"):"No aplica")}
     ${ru.auxiliar_requerido?`<h3>Evidencia del auxiliar</h3><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px">${[
       ["Check-in",ru.evidencia_auxiliar_checkin_path],["Check-out",ru.evidencia_auxiliar_checkout_path]

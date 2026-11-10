@@ -406,7 +406,7 @@ test("driver capture validates Walmart visits independently from deliveries",()=
 
 test("offline Walmart checkout retains visits and folios when sync fails and retries",async()=>{
   const record={
-    serverRouteId:42,routePayload:{viaja_con_auxiliar:false},manifests:[],
+    serverRouteId:42,routeInfo:{},routePayload:{viaja_con_auxiliar:false},manifests:[],
     checkout:{checkoutAt:"2026-11-08T10:00:00Z",ent:8,fal:2,hubo_incidencias:false,
       fallos:[],incidencias:[],extras:{walmart_visitas_asignadas:12,walmart_visitas_realizadas:11,walmart_folios_avaya:["A123"]}}
   };
@@ -429,6 +429,7 @@ test("offline Walmart checkout retains visits and folios when sync fails and ret
     setNetStatus:()=>{},err:()=>{},networkError:()=>false,renderRouteSyncError:()=>{},
     showRouteDone:value=>{done=value}
   });
+  vm.runInContext(fs.readFileSync(path.join(__dirname,"..","high-value.js"),"utf8"),context);
   vm.runInContext(app.slice(app.indexOf("async function syncPendingRoute()"),app.indexOf("\nasync function retryPendingRouteSync()")),context);
   assert.equal(await vm.runInContext("syncPendingRoute()",context),false);
   assert.equal(deleted,false);

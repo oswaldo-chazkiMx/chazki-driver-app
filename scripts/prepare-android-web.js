@@ -6,6 +6,7 @@ const target = path.join(root, "driver-app");
 const files = [
   ["driver-app.html", "index.html"],
   ["app.js", "app.js"],
+  ["high-value.js", "high-value.js"],
   ["invitaciones.js", "invitaciones.js"],
   ["config.js", "config.js"],
   ["icon.svg", "icon.svg"],
