@@ -45,7 +45,7 @@ jobs:
         run: npm ci
 
       - name: Build debug APK
-        run: npm run android:sync && cd android && ./gradlew assembleDebug
+        run: npm run android:sync && cd android && bash ./gradlew assembleDebug
 
       - name: Publish debug APK as GitHub release asset
         uses: softprops/action-gh-release@v2
