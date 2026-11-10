@@ -1,5 +1,7 @@
 .vercel
 .env*
+*.jks
+*.keystore
 node_modules
 *.private.sql
 .vscode
