@@ -6,7 +6,7 @@ const fd=m=>m==null?"—":(m<1000?m+" m":(m/1000).toFixed(1)+" km");
 const hh=s=>s?new Date(s).toTimeString().slice(0,5):"—";
 const dd=s=>new Date(s).toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
 const dominioOk=e=>/^[^@\s]+@chazki\.com$/i.test((e||"").trim());
-let ROL=null,PEND=[],BAJ=[],CAMB=[],DSET=[],DLOG=[],NOTIF_UID=null;
+let ROL=null,PEND=[],BAJ=[],CAMB=[],DSET=[],DLOG=[],NOTIF_UID=null,RECHAZOS_RUTA=[],RECHAZOS_RUTA_ERR="";
 let COPPEL_REVISIONES=[],COPPEL_REVISIONES_ERR="";
 let COPPEL_AJUSTES=[],COPPEL_AJUSTES_ERR="",COPPEL_DESTINOS=[],COPPEL_DESTINOS_ERR="";
 let CAMBIOS_TARIFARIO=[],CAMBIOS_TARIFARIO_ERR="",CSV_ASIGNACIONES_RESULT=null;
@@ -452,18 +452,52 @@ const WALMART_VALIDACION_ENABLED=false; // Activar solo con el flujo financiero 
 const CUENTAS_TARIFARIO=["MELI","COPPEL","LIVERPOOL","CUBBO","NESPRESSO","ESTAFETA","AMPM"];
 const sumLiq=k=>Object.values(LIQ).reduce((s,x)=>s+Number(x[k]||0),0);
 const porValidar=()=>R.filter(x=>x.estado==="cerrada"&&!LIQ[x.id]&&!PEND.some(q=>q.ruta_id===x.id)
+  &&!RECHAZOS_RUTA.some(q=>String(q.ruta_id)===String(x.id))
   &&(cuentaDe(x.cedis.clientes.nombre)||(WALMART_VALIDACION_ENABLED&&ROL==="ih"&&String(x.cedis.clientes.nombre||"").trim().toUpperCase()==="WALMART")));
 function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),3200)}
+async function rechazarValidacionRuta(id,modal,button){
+  const motivo=prompt("Motivo del rechazo (obligatorio):");
+  if(motivo===null)return;
+  const nota=motivo.trim();
+  if(!nota||nota.length>2000){toast("Escribe un motivo de rechazo de hasta 2000 caracteres.");return}
+  button.disabled=true;
+  try{
+    const {data,error}=await sb.rpc("rechazar_validacion_ruta",{p_ruta_id:id,p_motivo:nota});
+    if(error)throw error;
+    if(data!==true)throw new Error("La operación devolvió una respuesta inválida");
+  }catch(error){toast("No se pudo rechazar la ruta: "+(error.message||error));button.disabled=false;return}
+  modal.classList.add("hide");
+  try{
+    await cargaExtra();render();
+    toast("Ruta rechazada y motivo registrado");
+  }catch(error){toast("Ruta rechazada, pero no se pudo actualizar la lista: "+(error.message||error))}
+}
+async function restaurarValidacionRuta(id,button){
+  if(!confirm("¿Quitar el rechazo y devolver esta ruta a Por validar?"))return;
+  button.disabled=true;
+  try{
+    const {data,error}=await sb.rpc("restaurar_validacion_ruta",{p_ruta_id:id});
+    if(error)throw error;
+    if(data!==true)throw new Error("La operación devolvió una respuesta inválida");
+  }catch(error){toast("No se pudo restaurar la ruta: "+(error.message||error));button.disabled=false;return}
+  try{
+    await cargaExtra();render();
+    toast("Ruta devuelta a Por validar");
+  }catch(error){toast("Ruta restaurada, pero no se pudo actualizar la lista: "+(error.message||error))}
+}
 async function cargaExtra(){
-  LIQ={};PEND=[];BAJ=[];CAMB=[];if(!cargaFin()){DRV=[];PRV=[];return}const ids=R.map(x=>x.id);
-  const [l,d,p,pe,bj,cm]=await Promise.all([
+  LIQ={};PEND=[];BAJ=[];CAMB=[];RECHAZOS_RUTA=[];RECHAZOS_RUTA_ERR="";
+  if(!cargaFin()){DRV=[];PRV=[];return}const ids=R.map(x=>x.id);
+  const [l,d,p,pe,bj,cm,re]=await Promise.all([
     ids.length&&veFin()?cargarLiquidaciones(ids):Promise.resolve([]),
     sb.from("drivers").select("id,nombre,codigo,rol,estatus,proveedor_id").order("nombre"),
     sb.from("proveedores").select("*").order("nombre"),
     sb.from("validaciones_pendientes").select("*,rutas(id_ruta,entregados,paquetes_asignados,drivers(nombre),cedis(nombre,cliente_id))").eq("estatus","pendiente").order("solicitado_en"),
     sb.from("bajas_solicitudes").select("*").order("solicitado_en",{ascending:false}).limit(50),
-    sb.from("cambios_perfil").select("*").order("solicitado_en",{ascending:false}).limit(50)]);
+    sb.from("cambios_perfil").select("*").order("solicitado_en",{ascending:false}).limit(50),
+    tab==="v"&&ids.length?sb.from("ruta_validacion_rechazos").select("ruta_id,motivo,rechazada_por_email,rechazada_en").is("restaurada_en",null).in("ruta_id",ids).order("rechazada_en",{ascending:false}):Promise.resolve({data:[],error:null})]);
   BAJ=bj.data||[];CAMB=cm.data||[];
+  RECHAZOS_RUTA=re.data||[];RECHAZOS_RUTA_ERR=re.error?.message||"";
   PEND=(pe.data||[]).map(request=>{
     const route=request.rutas;
     if(route?.cedis)route.cedis.clientes={nombre:CLIENTES_NOMBRE[String(route.cedis.cliente_id)]||""};
@@ -578,8 +612,10 @@ async function resolverDocumento(id,aprobar){
   await cargarDocumentosOps();render();toast(aprobar?"Documento aprobado":"Documento rechazado");
 }
 function vistaPorValidar(){const l=porValidar();
-  return `<table><tr><th>Fecha</th><th>Driver</th><th>Proveedor</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Asig.</th><th>Entreg.</th><th>Efectiv.</th><th></th></tr>`+
-  (l.map(x=>{const p=provDe(x.driver_id);return `<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${p?esc(p.nombre)+`<br><small>${esc(p.tipo_registro||"sin registro fiscal")}</small>`:'<span class="pill w">Sin proveedor</span>'}</td><td><b>${esc(x.cedis.clientes.nombre)}</b><br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta)}</td><td>${esc(x.paquetes_asignados)}</td><td>${esc(x.entregados)}</td><td>${pc(x.entregados/x.paquetes_asignados)}</td><td><button class="btn ghost sm" data-det="${esc(x.id)}">Detalle</button> <button class="btn sm" data-val="${esc(x.id)}">Validar</button></td></tr>`}).join("")||`<tr><td colspan="9">No hay rutas por validar en este periodo con clientes que tengan tarifas cargadas.</td></tr>`)+`</table>`}
+  const rechazadas=RECHAZOS_RUTA.map(q=>{const x=R.find(r=>String(r.id)===String(q.ruta_id));if(!x)return "";return `<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td><b>${esc(x.cedis.clientes.nombre)}</b><br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta)}</td><td>${esc(q.motivo)}</td><td>${dd(q.rechazada_en)} · ${esc(q.rechazada_por_email||"—")}</td><td><button class="btn ghost sm" data-rechazo-restaurar="${esc(q.ruta_id)}">Restaurar</button></td></tr>`}).join("");
+  return `${RECHAZOS_RUTA_ERR?`<div class="errbox">No se pudo consultar el historial de rechazos. Ejecuta <code>route-validation-rejection.sql</code> en Supabase y vuelve a cargar la sección. ${esc(RECHAZOS_RUTA_ERR)}</div>`:""}<table><tr><th>Fecha</th><th>Driver</th><th>Proveedor</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Asig.</th><th>Entreg.</th><th>Efectiv.</th><th></th></tr>`+
+  (l.map(x=>{const p=provDe(x.driver_id);return `<tr><td>${dd(x.checkin_at)}</td><td>${esc(x.drivers.nombre)}</td><td>${p?esc(p.nombre)+`<br><small>${esc(p.tipo_registro||"sin registro fiscal")}</small>`:'<span class="pill w">Sin proveedor</span>'}</td><td><b>${esc(x.cedis.clientes.nombre)}</b><br>${esc(x.cedis.nombre)}</td><td>${esc(x.id_ruta)}</td><td>${esc(x.paquetes_asignados)}</td><td>${esc(x.entregados)}</td><td>${pc(x.entregados/x.paquetes_asignados)}</td><td><button class="btn ghost sm" data-det="${esc(x.id)}">Detalle</button> <button class="btn sm" data-val="${esc(x.id)}">Validar</button></td></tr>`}).join("")||`<tr><td colspan="9">No hay rutas por validar en este periodo con clientes que tengan tarifas cargadas.</td></tr>`)+`</table>${rechazadas?`<h3 style="margin:16px 8px 0">Rutas rechazadas</h3><table><tr><th>Fecha</th><th>Driver</th><th>Cliente · CEDIS</th><th>Ruta</th><th>Motivo</th><th>Rechazada por</th><th></th></tr>${rechazadas}</table>`:""}`;
+}
 function abrirRetencionWalmart(){
   if(!WALMART_VALIDACION_ENABLED||ROL!=="ih"){toast("La consulta requiere un supervisor autorizado.");return}
   const m=$("modal");let revision=0;
@@ -2000,6 +2036,7 @@ function enlazar(){
   document.querySelectorAll("[data-coppel-autorizar]").forEach(b=>b.onclick=()=>autorizarAjusteCoppel(b.dataset.coppelAutorizar,b));
   document.querySelectorAll("[data-coppel-destino]").forEach(b=>b.onclick=()=>autorizarDestinoCoppel(b.dataset.coppelDestino,b));
   document.querySelectorAll("[data-val]").forEach(b=>b.onclick=()=>abrirValidar(+b.dataset.val));
+  document.querySelectorAll("[data-rechazo-restaurar]").forEach(b=>b.onclick=()=>restaurarValidacionRuta(+b.dataset.rechazoRestaurar,b));
   document.querySelectorAll("[data-anu]").forEach(b=>b.onclick=()=>anular(+b.dataset.anu));
   document.querySelectorAll("[data-af-ver]").forEach(b=>b.onclick=()=>{AFILIADO_ABIERTO=AFILIADO_ABIERTO===b.dataset.afVer?null:b.dataset.afVer;AFILIADO_EDITAR=null;AFILIADO_PROVEEDOR_EDITAR=null;render()});
   document.querySelectorAll("[data-af-editar]").forEach(b=>b.onclick=()=>{AFILIADO_EDITAR=b.dataset.afEditar;AFILIADO_PROVEEDOR_EDITAR=null;render()});
@@ -2339,12 +2376,13 @@ async function abrirValidarWalmart(id,ru){
     <fieldset><legend>Retención Walmart (selecciona una)</legend>
       ${[0,10,15,25].map(n=>`<label><input id="wm-val-ret-${n}" type="radio" name="wm-val-ret" ${n===0?"checked":""}> ${n===0?"Sin retención":n+"%"}</label>`).join("")}</fieldset>
     <div id="wm-val-aviso"></div>
-    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button class="btn ghost" id="wm-val-calcular">Calcular</button><button class="btn" id="wm-val-confirmar" disabled>Validar y generar pago</button><button class="btn ghost" id="wm-val-cerrar">Cancelar</button></div></div>`;
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button class="btn ghost" id="wm-val-calcular">Calcular</button><button class="btn" id="wm-val-confirmar" disabled>Validar y generar pago</button><button class="btn ghost" id="wm-val-rechazar">Rechazar</button><button class="btn ghost" id="wm-val-cerrar">Cancelar</button></div></div>`;
   const inputs=()=>({p_ruta_id:id,p_proveedor_id:$("wm-val-proveedor").value,
     p_porcentaje_retencion:[0,10,15,25].find(n=>$(`wm-val-ret-${n}`).checked)??null,
     p_aplicar_visitas:false,p_aplicar_fallida:false});
   const invalidar=()=>{revision++;calculo=null;$("wm-val-confirmar").disabled=true;$("wm-val-aviso").innerHTML=""};
   ["wm-val-proveedor",...[0,10,15,25].map(n=>`wm-val-ret-${n}`)].forEach(x=>$(x).addEventListener("change",invalidar));
+  $("wm-val-rechazar").onclick=()=>rechazarValidacionRuta(id,m,$("wm-val-rechazar"));
   $("wm-val-cerrar").onclick=()=>{invalidar();m.classList.add("hide")};
   $("wm-val-calcular").onclick=async()=>{
     invalidar();
@@ -2424,12 +2462,13 @@ async function abrirValidar(id){
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label>Ajuste al pago (+ o −)</label><input type="number" id="m-ap" value="0" step="0.01"></div><div><label>Ajuste al cobro (+ o −)</label><input type="number" id="m-ac" value="0" step="0.01"></div></div>
     <label>Nota (opcional)</label><textarea id="m-nota" rows="2"></textarea>
     <div id="m-prev" style="margin-top:12px"></div>
-    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button class="btn ghost" id="m-calc">Calcular</button><button class="btn" id="m-ok" disabled>Validar y generar pago</button><button class="btn ghost" id="m-x">Cancelar</button></div></div>`;
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button class="btn ghost" id="m-calc">Calcular</button><button class="btn" id="m-ok" disabled>Validar y generar pago</button><button class="btn ghost" id="m-rechazar">Rechazar</button><button class="btn ghost" id="m-x">Cancelar</button></div></div>`;
   pintar();
   $("m-todas").onchange=pintar;
   $("m-zona").onchange=pintar;
   ["m-tar","m-ex","m-ap","m-ac","m-peak-desc"].forEach(i=>$(i).addEventListener("input",()=>{syncPeak();reset()}));
   $("m-x").onclick=()=>m.classList.add("hide");
+  $("m-rechazar").onclick=()=>rechazarValidacionRuta(id,m,$("m-rechazar"));
   const args=()=>({p_ruta_id:id,p_tarifa_id:+$("m-tar").value,p_registro:p?.tipo_registro||"",p_excepcion:$("m-ex").checked,p_ajuste_pago:+$("m-ap").value||0,p_ajuste_cobro:+$("m-ac").value||0});
   const extra=()=>({p_proveedor_id:p?.id||null,p_actualizar_driver:false});
   $("m-calc").onclick=async()=>{

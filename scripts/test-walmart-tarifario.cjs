@@ -119,7 +119,7 @@ test("retention-release preview is hidden and never treats the deadline as autho
     reclamaciones_verificadas:false,liberacion_validada:false
   },error:null};
   const context=vm.createContext({
-    WALMART_VALIDACION_ENABLED:true,ROL:"ih",PRV:[{id:10,nombre:"Proveedor"}],
+    WALMART_VALIDACION_ENABLED:true,ROL:"ih",PRV:[{id:10,nombre:"Proveedor"}],RECHAZOS_RUTA:[],RECHAZOS_RUTA_ERR:"",
     $:el,esc:s=>String(s??""),fm:n=>"$"+n,toast:s=>messages.push(s),
     porValidar:()=>[],sb:{rpc:async(name,args)=>{calls.push({name,args});return response}}
   });
